@@ -762,16 +762,19 @@ def _keyed_vmd_name_collisions(armature, action):
     }
 
 
-def _curve_covers_every_frame(curve, frame_start, frame_end):
-    keyed = {
-        int(round(float(point.co.x)))
-        for point in curve.keyframe_points
-        if abs(float(point.co.x) - round(float(point.co.x))) < 0.001
-    }
-    return all(frame in keyed for frame in range(int(frame_start), int(frame_end) + 1))
+def _curve_covers_frame_range(curve, frame_start, frame_end):
+    """Check that an F-curve can be evaluated throughout the motion range.
+
+    MikuMikuRig's Bake may compress a dense result to a few Bezier keys.  A
+    key on every frame is not needed for a valid VMD export: every required
+    channel only needs keys on both sides of the requested frame range.
+    """
+
+    frames = [float(point.co.x) for point in curve.keyframe_points]
+    return bool(frames) and min(frames) <= float(frame_start) + 0.001 and max(frames) >= float(frame_end) - 0.001
 
 
-def _bone_has_dense_visual_bake(action, pose_bone, frame_start, frame_end):
+def _bone_has_complete_arm_animation(action, pose_bone, frame_start, frame_end):
     bone_name = pose_bone.name
     prefix = f'pose.bones["{bone_name}"]'
 
@@ -783,7 +786,7 @@ def _bone_has_dense_visual_bake(action, pose_bone, frame_start, frame_end):
         }
         return all(
             index in curves
-            and _curve_covers_every_frame(curves[index], frame_start, frame_end)
+            and _curve_covers_frame_range(curves[index], frame_start, frame_end)
             for index in indices
         )
 
@@ -824,15 +827,15 @@ def _maximum_matrix_sample_error(before, after):
     return maximum
 
 
-def _require_dense_arm_fk_bake(action, armature, frame_start, frame_end):
-    """Require a full visual bake on the six physical arm bones."""
+def _require_complete_arm_fk_animation(action, armature, frame_start, frame_end):
+    """Require complete transform channels across the six physical arm bones."""
 
     missing = []
     for bone_name in MMD_ARM_FK_BONES:
         pose_bone = armature.pose.bones.get(bone_name)
         if pose_bone is None:
             missing.append(f"{bone_name}（骨骼不存在）")
-        elif not _bone_has_dense_visual_bake(action, pose_bone, frame_start, frame_end):
+        elif not _bone_has_complete_arm_animation(action, pose_bone, frame_start, frame_end):
             missing.append(bone_name)
     if missing:
         raise RuntimeError("上肢 Bake 不完整，不能导出 VMD：" + ", ".join(missing))
@@ -858,7 +861,7 @@ def _visual_bake_teto_arm_fk(scene, armature, action, frame_start, frame_end):
         )
     if "FINISHED" not in result:
         raise RuntimeError("上肢 FK Visual Bake 没有成功完成")
-    _require_dense_arm_fk_bake(action, armature, frame_start, frame_end)
+    _require_complete_arm_fk_animation(action, armature, frame_start, frame_end)
     return {"bones": list(MMD_ARM_FK_BONES), "frame_range": [int(frame_start), int(frame_end)]}
 
 
@@ -947,7 +950,7 @@ def _prepare_teto_mmr_hand_export_cleanup(
 
     # MMD Bake already creates the physical arm keys. Re-baking here can
     # overwrite a valid manual Bake under MMR's altered elbow hierarchy.
-    _require_dense_arm_fk_bake(action, armature, frame_start, frame_end)
+    _require_complete_arm_fk_animation(action, armature, frame_start, frame_end)
     arm_bake = {
         "operation": "validated_existing_arm_fk_bake",
         "bones": list(MMD_ARM_FK_BONES),
