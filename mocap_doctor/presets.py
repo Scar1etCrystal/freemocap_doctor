@@ -53,8 +53,10 @@ MMD_LEG_FK_BONES = ["足.L", "ひざ.L", "足首.L", "足.R", "ひざ.R", "足�
 MMD_ARM_FK_BONES = ["腕.L", "ひじ.L", "手首.L", "腕.R", "ひじ.R", "手首.R"]
 MMD_WRIST_BONES = {"L": "手首.L", "R": "手首.R"}
 MMD_HAND_IK_BONES = {"L": "手IK.L", "R": "手IK.R"}
-# Blender-only helper names, safely below VMD's 15-byte name limit.
-MMD_HAND_IK_EXPORT_NAMES = {"L": "MCD_L_HAND_IK", "R": "MCD_R_HAND_IK"}
+# MikuMikuRig temporarily reparents the elbow directly under the upper arm.
+# A normal Teto MMD hierarchy keeps it below the upper-arm twist bone.
+MMD_ELBOW_BONES = {"L": "ひじ.L", "R": "ひじ.R"}
+MMD_ARM_TWIST_BONES = {"L": "腕捩.L", "R": "腕捩.R"}
 MMD_WRIST_NAME_CANDIDATES = {
     "L": ["手首.L", "手首L", "左手首"],
     "R": ["手首.R", "手首R", "右手首"],

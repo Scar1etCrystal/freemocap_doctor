@@ -21,7 +21,8 @@ from .presets import (
     EXPECTED_FPS,
     MMD_ARM_FK_BONES,
     MMD_CENTER_BONE,
-    MMD_HAND_IK_EXPORT_NAMES,
+    MMD_ARM_TWIST_BONES,
+    MMD_ELBOW_BONES,
     MMD_LEG_FK_BONES,
     MMD_ROOT_BONE,
     MMR_COPY_CONSTRAINT_NAME,
@@ -725,24 +726,6 @@ def remove_bone_fcurves(action, bone_names):
     return removed
 
 
-def remove_bone_transform_fcurves(action, bone_names):
-    """Remove pose location/rotation curves but preserve MMD IK-toggle keys."""
-
-    prefixes = tuple(f'pose.bones["{name}"]' for name in bone_names)
-    transform_suffixes = (
-        ".location",
-        ".rotation_euler",
-        ".rotation_quaternion",
-        ".rotation_axis_angle",
-    )
-    removed = []
-    for fcurve in list(action.fcurves):
-        if fcurve.data_path.startswith(prefixes) and fcurve.data_path.endswith(transform_suffixes):
-            removed.append((fcurve.data_path, fcurve.array_index))
-            action.fcurves.remove(fcurve)
-    return removed
-
-
 def action_has_any_bone_curve(action, candidates):
     prefixes = tuple(f'pose.bones["{name}"]' for name in candidates)
     return any(fcurve.data_path.startswith(prefixes) for fcurve in action.fcurves)
@@ -879,111 +862,112 @@ def _visual_bake_teto_arm_fk(scene, armature, action, frame_start, frame_end):
     return {"bones": list(MMD_ARM_FK_BONES), "frame_range": [int(frame_start), int(frame_end)]}
 
 
-def _remove_pose_bone_property_curves(action, bone_name, property_name):
-    data_path = f'pose.bones["{bone_name}"].{property_name}'
-    removed = 0
-    for curve in list(action.fcurves):
-        if curve.data_path == data_path:
-            action.fcurves.remove(curve)
-            removed += 1
-    return removed
+def _resolve_teto_hand_ik_helpers(armature):
+    """Return Blender-only MMR hand helpers, keeping real wrists mandatory."""
 
-
-def _disable_teto_hand_ik_constraints(armature, action, frame_start, frame_end):
-    """Disable only IK constraints whose target is one of the hand helpers."""
-
-    helper_names = {
-        helper.name
-        for side in ("L", "R")
-        for _wrist, helper in [resolve_mmd_hand_bones(armature, side)]
-        if helper is not None
-    }
-    muted = []
-    toggle_keyed = []
-    removed_toggle_curves = 0
-    for helper_name in helper_names:
-        helper = armature.pose.bones.get(helper_name)
-        if helper is None:
-            continue
-        removed_toggle_curves += _remove_pose_bone_property_curves(action, helper_name, "mmd_ik_toggle")
-        if hasattr(helper, "mmd_ik_toggle"):
-            helper.mmd_ik_toggle = False
-            helper.keyframe_insert(data_path="mmd_ik_toggle", frame=int(frame_start))
-            helper.keyframe_insert(data_path="mmd_ik_toggle", frame=int(frame_end))
-            toggle_keyed.append(helper_name)
-    for pose_bone in armature.pose.bones:
-        for constraint in pose_bone.constraints:
-            if constraint.type == "IK" and getattr(constraint, "subtarget", "") in helper_names and not constraint.mute:
-                constraint.mute = True
-                muted.append(f"{pose_bone.name}:{constraint.name}")
-    bpy.context.view_layer.update()
-    return {
-        "muted_constraints": muted,
-        "toggle_keyed_bones": toggle_keyed,
-        "removed_toggle_fcurves": removed_toggle_curves,
-    }
-
-
-def _make_teto_hand_ik_vmd_names_unique(armature):
-    """Remove the work-copy-only duplicate PMX mapper names on hand IK."""
-
-    changed = []
-    absent_helpers = []
+    helpers = {}
+    absent_sides = []
     for side in ("L", "R"):
         wrist, helper = resolve_mmd_hand_bones(armature, side)
         if wrist is None:
             raise RuntimeError(f"固定 Teto 缺少 {side} 侧真实手首骨骼")
-        # Some manually baked Teto work files no longer retain the Blender
-        # hand-IK helper.  That is safe: there is no helper transform to
-        # remove, and the later keyed-name collision check remains the guard
-        # against any differently named duplicate.
         if helper is None:
-            absent_helpers.append(side)
-            continue
-        metadata = getattr(helper, "mmd_bone", None)
-        if metadata is None:
-            raise RuntimeError(f"{helper.name} 没有 mmd_tools 骨骼信息，不能安全修复回导映射")
-        if _pose_bone_vmd_name(wrist) == _pose_bone_vmd_name(helper):
-            previous = str(getattr(metadata, "name_j", "") or helper.name)
-            metadata.name_j = MMD_HAND_IK_EXPORT_NAMES[side]
-            changed.append({
-                "bone": helper.name,
-                "previous_vmd_name": previous,
-                "new_vmd_name": MMD_HAND_IK_EXPORT_NAMES[side],
-            })
-        if _pose_bone_vmd_name(wrist) == _pose_bone_vmd_name(helper):
-            raise RuntimeError(f"{helper.name} 的 VMD 映射仍与真实手首重复")
-    return changed, absent_helpers
+            absent_sides.append(side)
+        else:
+            helpers[side] = helper.name
+    return helpers, absent_sides
 
 
-def _prepare_teto_hand_ik_vmd_compatibility(
+def _remove_mmr_hand_helper_constraints(armature, helper_names):
+    """Remove constraints that would point at a helper being deleted."""
+
+    removed = []
+    helper_names = set(helper_names)
+    for pose_bone in armature.pose.bones:
+        for constraint in list(pose_bone.constraints):
+            if getattr(constraint, "subtarget", "") not in helper_names:
+                continue
+            label = f"{pose_bone.name}:{constraint.name}"
+            pose_bone.constraints.remove(constraint)
+            removed.append(label)
+    return removed
+
+
+def _restore_teto_elbow_parents_and_remove_helpers(armature, helper_names):
+    """Restore Teto's arm hierarchy, then delete MMR's temporary hand bones."""
+
+    restored_parents = []
+    deleted_helpers = []
+    with _active_armature(bpy.context, armature, pose=False):
+        bpy.ops.object.mode_set(mode="EDIT")
+        edit_bones = armature.data.edit_bones
+        for side in ("L", "R"):
+            elbow_name = MMD_ELBOW_BONES[side]
+            twist_name = MMD_ARM_TWIST_BONES[side]
+            upper_arm_name = f"腕.{side}"
+            elbow = edit_bones.get(elbow_name)
+            twist = edit_bones.get(twist_name)
+            if elbow is None or twist is None:
+                raise RuntimeError(f"固定 Teto 缺少 {side} 侧肘部或腕捩骨骼")
+            parent = elbow.parent
+            if parent == twist:
+                continue
+            if parent is None or parent.name != upper_arm_name:
+                found = parent.name if parent else "无父级"
+                raise RuntimeError(
+                    f"{elbow_name} 的父级是 {found}，不是固定 Teto 的 {upper_arm_name} 或 {twist_name}；"
+                    "为避免猜测性改骨，已停止导出"
+                )
+            elbow.parent = twist
+            restored_parents.append({"bone": elbow_name, "from": upper_arm_name, "to": twist_name})
+        for helper_name in helper_names:
+            helper = edit_bones.get(helper_name)
+            if helper is None:
+                raise RuntimeError(f"准备删除的手 IK 辅助骨不存在：{helper_name}")
+            children = [bone.name for bone in edit_bones if bone.parent == helper]
+            if children:
+                raise RuntimeError(
+                    f"{helper_name} 仍有子骨骼（{', '.join(children)}），不能安全删除"
+                )
+            edit_bones.remove(helper)
+            deleted_helpers.append(helper_name)
+    return restored_parents, deleted_helpers
+
+
+def _prepare_teto_mmr_hand_export_cleanup(
     scene,
     armature,
     action,
     frame_start,
     frame_end,
     *,
-    matrix_tolerance=1.0e-5,
+    matrix_tolerance=1.0e-4,
 ):
-    """Bake hand IK visually to FK, then prove the arm pose is unchanged."""
+    """Convert MMR's temporary hand controls back into a portable Teto arm."""
 
-    arm_bake = _visual_bake_teto_arm_fk(scene, armature, action, frame_start, frame_end)
+    # MMD Bake already creates the physical arm keys. Re-baking here can
+    # overwrite a valid manual Bake under MMR's altered elbow hierarchy.
+    _require_dense_arm_fk_bake(action, armature, frame_start, frame_end)
+    arm_bake = {
+        "operation": "validated_existing_arm_fk_bake",
+        "bones": list(MMD_ARM_FK_BONES),
+        "frame_range": [int(frame_start), int(frame_end)],
+    }
     arm_names = list(MMD_ARM_FK_BONES)
     original_frame = int(scene.frame_current)
     try:
         before = _sample_pose_bone_matrices(scene, armature, arm_names, frame_start, frame_end)
-        renamed, absent_helpers = _make_teto_hand_ik_vmd_names_unique(armature)
-        disabled = _disable_teto_hand_ik_constraints(armature, action, frame_start, frame_end)
-        helper_names = {
-            helper.name
-            for side in ("L", "R")
-            for _wrist, helper in [resolve_mmd_hand_bones(armature, side)]
-            if helper is not None
-        }
-        removed = {
-            helper_name: len(remove_bone_transform_fcurves(action, [helper_name]))
+        helpers, absent_helpers = _resolve_teto_hand_ik_helpers(armature)
+        helper_names = list(helpers.values())
+        removed_constraints = _remove_mmr_hand_helper_constraints(armature, helper_names)
+        removed_curves = {
+            helper_name: len(remove_bone_fcurves(action, [helper_name]))
             for helper_name in helper_names
         }
+        restored_parents, deleted_helpers = _restore_teto_elbow_parents_and_remove_helpers(
+            armature, helper_names
+        )
+        bpy.context.view_layer.update()
         after = _sample_pose_bone_matrices(scene, armature, arm_names, frame_start, frame_end)
         maximum_error = _maximum_matrix_sample_error(before, after)
     finally:
@@ -996,13 +980,14 @@ def _prepare_teto_hand_ik_vmd_compatibility(
             f"最大矩阵误差 {maximum_error:.6g}"
         )
     return {
-        "operation": "prepare_teto_hand_ik_vmd_compatibility",
+        "operation": "prepare_teto_mmr_hand_export_cleanup",
         "arm_fk_bake": arm_bake,
-        "renamed_hand_ik_mappings": renamed,
+        "restored_elbow_parents": restored_parents,
+        "deleted_hand_ik_helpers": deleted_helpers,
         "hand_ik_helper_not_present": absent_helpers,
-        "disabled_hand_ik": disabled,
-        "removed_by_bone": removed,
-        "removed_fcurve_count": sum(removed.values()),
+        "removed_hand_helper_constraints": removed_constraints,
+        "removed_helper_fcurves_by_bone": removed_curves,
+        "removed_helper_fcurve_count": sum(removed_curves.values()),
         "maximum_arm_matrix_error": maximum_error,
     }
 
@@ -1344,7 +1329,7 @@ def _run_foot_lock(context, settings):
 def _run_export_prep(context, settings):
     scene = context.scene
     if not bool(scene.get("mcd_hand_ik_export_confirmed", False)):
-        raise RuntimeError("请先确认手 IK 回导修复提醒，再生成 VMD 导出预览")
+        raise RuntimeError("请先确认 MMR 手部导出清理提醒，再生成 VMD 导出预览")
     _require_restore_before_rerun(scene, "export_prep")
     model_root, armature, rig, foot_ik = _validate_mmd_identity(settings)
     correction = _require_object(
@@ -1377,7 +1362,7 @@ def _run_export_prep(context, settings):
     cleaned = core_export.remove_teto_leg_fk_curves(
         action, bone_names=MMD_LEG_FK_BONES
     )
-    hand_ik_compatibility = _prepare_teto_hand_ik_vmd_compatibility(
+    hand_export_cleanup = _prepare_teto_mmr_hand_export_cleanup(
         scene,
         armature,
         action,
@@ -1405,7 +1390,7 @@ def _run_export_prep(context, settings):
         "operation": "prepare_teto_vmd_export",
         "global_correction_bake": baked,
         "leg_fk_cleanup": cleaned,
-        "hand_ik_vmd_compatibility": hand_ik_compatibility,
+        "mmr_hand_export_cleanup": hand_export_cleanup,
         "floor_offset": offset,
         "validated_foot_ik": foot_ik,
     }
@@ -1419,7 +1404,7 @@ def _run_export_prep(context, settings):
     )
     return (
         f"导出预览已生成，删除 {cleaned['removed_fcurve_count']} 条腿 FK 曲线、"
-        f"{hand_ik_compatibility['removed_fcurve_count']} 条手 IK 曲线"
+        f"{hand_export_cleanup['removed_helper_fcurve_count']} 条手 IK 辅助曲线"
     )
 
 
@@ -1447,9 +1432,9 @@ class MD_OT_PrepareVMDExport(Operator):
 
     def draw(self, context):
         layout = self.layout
-        layout.label(text="将修复此工作文件中的手 IK 回导映射。", icon="INFO")
-        layout.label(text="手肘当前由手 IK 目标带动；插件会先把可见动作烘到")
-        layout.label(text="普通的“腕 / 肘 / 手首”骨骼，再关闭 Blender 专用手 IK。")
+        layout.label(text="将清理此工作文件中 MMR 创建的手部编辑控制。", icon="INFO")
+        layout.label(text="会先确认上肢已烘到普通的“腕 / 肘 / 手首”骨骼，")
+        layout.label(text="再恢复肘部层级，并删除只供 Blender 编辑使用的手 IK 骨。")
         layout.separator()
         layout.label(text="不会修改 PMX，也不会修改原始 Teto 模板。", icon="CHECKMARK")
         layout.label(text="会先创建检查点；丢弃预览即可完整恢复。", icon="LOOP_BACK")

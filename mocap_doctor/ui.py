@@ -274,13 +274,15 @@ class MD_PT_Main(Panel):
         elif step_id == "export_prep":
             layout.prop(settings, "vmd_floor_offset", text="VMD 地面 Z 偏移")
             reminder = layout.box()
-            reminder.label(text="手肘回导兼容修复", icon="ARMATURE_DATA")
-            reminder.label(text="会先将可见上肢烘到“腕 / 肘 / 手首”。")
+            reminder.label(text="MMR 手部导出清理", icon="ARMATURE_DATA")
+            reminder.label(text="确认上肢已烘到“腕 / 肘 / 手首”后再清理。")
+            reminder.label(text="再恢复肘部层级，删除 Blender 编辑用手 IK。")
             reminder.label(text="只修改这份工作文件；确认后会创建恢复检查点。")
             layout.operator("mocap_doctor.prepare_vmd_export", text="确认并生成 VMD 导出预览", icon="MODIFIER")
 
         elif step_id == "export":
             layout.label(text="确认 MMR 约束已禁用，隐藏 RIG 后动作仍正常")
+            layout.label(text="回导 VMD 请使用从未建立 MMR 的干净 Teto 模板", icon="INFO")
             layout.prop(settings, "vmd_export_path", text="VMD 文件")
             layout.operator("mocap_doctor.export_vmd", text="导出 VMD", icon="EXPORT")
 
