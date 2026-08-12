@@ -55,6 +55,14 @@ MMD_WRIST_BONES = {"L": "手首.L", "R": "手首.R"}
 MMD_HAND_IK_BONES = {"L": "手IK.L", "R": "手IK.R"}
 # Blender-only helper names, safely below VMD's 15-byte name limit.
 MMD_HAND_IK_EXPORT_NAMES = {"L": "MCD_L_HAND_IK", "R": "MCD_R_HAND_IK"}
+MMD_WRIST_NAME_CANDIDATES = {
+    "L": ["手首.L", "手首L", "左手首"],
+    "R": ["手首.R", "手首R", "右手首"],
+}
+MMD_HAND_IK_NAME_CANDIDATES = {
+    "L": ["手IK.L", "手ＩＫ.L", "手IKL", "手ＩＫL", "左手IK", "左手ＩＫ"],
+    "R": ["手IK.R", "手ＩＫ.R", "手IKR", "手ＩＫR", "右手IK", "右手ＩＫ"],
+}
 MMD_FOOT_IK_JAPANESE_NAMES = {"L": "左足ＩＫ", "R": "右足ＩＫ"}
 MMD_FOOT_IK_NAME_CANDIDATES = {
     "L": ["足ＩＫ.L", "足IK.L", "左足ＩＫ", "左足IK"],
@@ -133,3 +141,57 @@ def resolve_mmd_foot_ik(armature, side):
         if candidate in armature.pose.bones:
             return candidate
     return None
+
+
+def _mmd_japanese_name(pose_bone):
+    metadata = getattr(pose_bone, "mmd_bone", None)
+    return str(getattr(metadata, "name_j", "") or "") if metadata else ""
+
+
+def _resolve_hand_bone(armature, side, *, helper):
+    """Resolve one fixed Teto hand bone without accepting ambiguous guesses.
+
+    Blender bone names can acquire suffixes or differ in full-width ``ＩＫ``
+    spelling after import.  mmd_tools' ``name_j`` is the authoritative MMD
+    label, so use it as a fallback while requiring exactly one candidate.
+    """
+
+    candidates = (
+        MMD_HAND_IK_NAME_CANDIDATES if helper else MMD_WRIST_NAME_CANDIDATES
+    )[side]
+    by_blender = []
+    for bone in armature.pose.bones:
+        if any(
+            re.fullmatch(rf"{re.escape(candidate)}(?:\.\d{{3}})?", bone.name)
+            for candidate in candidates
+        ):
+            by_blender.append(bone)
+    if len(by_blender) == 1:
+        return by_blender[0]
+    if len(by_blender) > 1:
+        raise RuntimeError(
+            f"固定 Teto {side} 侧存在多个候选{'手 IK' if helper else '手首'}骨骼："
+            + ", ".join(bone.name for bone in by_blender)
+        )
+
+    by_mmd = [
+        bone
+        for bone in armature.pose.bones
+        if _mmd_japanese_name(bone) in candidates
+    ]
+    if len(by_mmd) == 1:
+        return by_mmd[0]
+    if len(by_mmd) > 1:
+        raise RuntimeError(
+            f"固定 Teto {side} 侧 mmd_tools 手部映射不唯一："
+            + ", ".join(bone.name for bone in by_mmd)
+        )
+    return None
+
+
+def resolve_mmd_hand_bones(armature, side):
+    """Return ``(wrist, hand_ik)`` pose bones for one side of fixed Teto."""
+
+    wrist = _resolve_hand_bone(armature, side, helper=False)
+    helper = _resolve_hand_bone(armature, side, helper=True)
+    return wrist, helper

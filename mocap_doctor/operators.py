@@ -33,6 +33,7 @@ from .presets import (
     TARGET_FOOT_IK,
     fixed_object_name_matches,
     resolve_mmd_foot_ik,
+    resolve_mmd_hand_bones,
 )
 from .workflow import STEPS, STEP_INDEX, clamp_step, step_at
 
@@ -893,7 +894,12 @@ def _remove_pose_bone_property_curves(action, bone_name, property_name):
 def _disable_teto_hand_ik_constraints(armature, action, frame_start, frame_end):
     """Disable only IK constraints whose target is one of the hand helpers."""
 
-    helper_names = set(MMD_HAND_IK_BONES.values())
+    helper_names = {
+        helper.name
+        for side in ("L", "R")
+        for _wrist, helper in [resolve_mmd_hand_bones(armature, side)]
+        if helper is not None
+    }
     muted = []
     toggle_keyed = []
     removed_toggle_curves = 0
@@ -925,8 +931,7 @@ def _make_teto_hand_ik_vmd_names_unique(armature):
 
     changed = []
     for side in ("L", "R"):
-        wrist = armature.pose.bones.get(MMD_WRIST_BONES[side])
-        helper = armature.pose.bones.get(MMD_HAND_IK_BONES[side])
+        wrist, helper = resolve_mmd_hand_bones(armature, side)
         if wrist is None or helper is None:
             raise RuntimeError(f"固定 Teto 缺少 {side} 侧手首或手 IK 骨骼")
         metadata = getattr(helper, "mmd_bone", None)
@@ -963,9 +968,15 @@ def _prepare_teto_hand_ik_vmd_compatibility(
         before = _sample_pose_bone_matrices(scene, armature, arm_names, frame_start, frame_end)
         renamed = _make_teto_hand_ik_vmd_names_unique(armature)
         disabled = _disable_teto_hand_ik_constraints(armature, action, frame_start, frame_end)
+        helper_names = {
+            helper.name
+            for side in ("L", "R")
+            for _wrist, helper in [resolve_mmd_hand_bones(armature, side)]
+            if helper is not None
+        }
         removed = {
             helper_name: len(remove_bone_transform_fcurves(action, [helper_name]))
-            for helper_name in MMD_HAND_IK_BONES.values()
+            for helper_name in helper_names
         }
         after = _sample_pose_bone_matrices(scene, armature, arm_names, frame_start, frame_end)
         maximum_error = _maximum_matrix_sample_error(before, after)
