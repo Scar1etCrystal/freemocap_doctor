@@ -86,6 +86,17 @@ class HandBoneResolutionTests(unittest.TestCase):
         self.assertEqual(wrist.name, "手首.L")
         self.assertEqual(helper.name, "Teto_Left_Hand_Target")
 
+    def test_leg_ik_target_is_not_considered_a_hand_helper(self):
+        armature = _Armature(
+            _Bone("手首.L", "左手首"),
+            _Bone("ひじ.L", constraints=[_Constraint("Teto_Left_Hand_Target")]),
+            _Bone("ひざ.L", constraints=[_Constraint("足IK.L")]),
+            _Bone("Teto_Left_Hand_Target", "左手首"),
+            _Bone("足IK.L", "左足ＩＫ"),
+        )
+        _wrist, helper = resolve_mmd_hand_bones(armature, "L")
+        self.assertEqual(helper.name, "Teto_Left_Hand_Target")
+
 
 if __name__ == "__main__":
     unittest.main()

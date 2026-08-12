@@ -205,17 +205,19 @@ def _resolve_hand_ik_from_constraints(armature, side):
     suffix.  It deliberately accepts only one side-matching target.
     """
 
+    # This fallback runs after the fixed physical arm chain was validated and
+    # baked, so the exact elbow name is known.  Looking at every IK constraint
+    # would also find the leg IK target, which must never be treated as a hand.
+    elbow = armature.pose.bones.get(f"ひじ.{side}")
+    if elbow is None:
+        return None
     candidates = {}
-    for owner in armature.pose.bones:
-        for constraint in getattr(owner, "constraints", ()):
-            if getattr(constraint, "type", "") != "IK":
-                continue
-            subtarget = str(getattr(constraint, "subtarget", "") or "")
-            helper = armature.pose.bones.get(subtarget) if subtarget else None
-            if helper is None:
-                continue
-            if not (_side_matches_name(owner.name, side) or _side_matches_name(helper.name, side)):
-                continue
+    for constraint in getattr(elbow, "constraints", ()):
+        if getattr(constraint, "type", "") != "IK":
+            continue
+        subtarget = str(getattr(constraint, "subtarget", "") or "")
+        helper = armature.pose.bones.get(subtarget) if subtarget else None
+        if helper is not None:
             candidates[helper.name] = helper
     values = list(candidates.values())
     if len(values) == 1:
