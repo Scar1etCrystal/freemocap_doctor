@@ -189,9 +189,50 @@ def _resolve_hand_bone(armature, side, *, helper):
     return None
 
 
+def _side_matches_name(name, side):
+    value = str(name)
+    if side == "L":
+        return ".L" in value or "左" in value
+    return ".R" in value or "右" in value
+
+
+def _resolve_hand_ik_from_constraints(armature, side):
+    """Find a non-standard hand IK helper from the fixed Teto elbow IK rig.
+
+    The helper is not a normal VMD bone: it is the ``subtarget`` used by the
+    elbow's IK constraint.  This is a structural fallback for imported Teto
+    files where the helper's Blender name changed beyond a simple ``.001``
+    suffix.  It deliberately accepts only one side-matching target.
+    """
+
+    candidates = {}
+    for owner in armature.pose.bones:
+        for constraint in getattr(owner, "constraints", ()):
+            if getattr(constraint, "type", "") != "IK":
+                continue
+            subtarget = str(getattr(constraint, "subtarget", "") or "")
+            helper = armature.pose.bones.get(subtarget) if subtarget else None
+            if helper is None:
+                continue
+            if not (_side_matches_name(owner.name, side) or _side_matches_name(helper.name, side)):
+                continue
+            candidates[helper.name] = helper
+    values = list(candidates.values())
+    if len(values) == 1:
+        return values[0]
+    if len(values) > 1:
+        raise RuntimeError(
+            f"固定 Teto {side} 侧 IK 约束指向多个候选手 IK 骨骼："
+            + ", ".join(sorted(bone.name for bone in values))
+        )
+    return None
+
+
 def resolve_mmd_hand_bones(armature, side):
     """Return ``(wrist, hand_ik)`` pose bones for one side of fixed Teto."""
 
     wrist = _resolve_hand_bone(armature, side, helper=False)
     helper = _resolve_hand_bone(armature, side, helper=True)
+    if helper is None:
+        helper = _resolve_hand_ik_from_constraints(armature, side)
     return wrist, helper
