@@ -928,10 +928,18 @@ def _make_teto_hand_ik_vmd_names_unique(armature):
     """Remove the work-copy-only duplicate PMX mapper names on hand IK."""
 
     changed = []
+    absent_helpers = []
     for side in ("L", "R"):
         wrist, helper = resolve_mmd_hand_bones(armature, side)
-        if wrist is None or helper is None:
-            raise RuntimeError(f"固定 Teto 缺少 {side} 侧手首或手 IK 骨骼")
+        if wrist is None:
+            raise RuntimeError(f"固定 Teto 缺少 {side} 侧真实手首骨骼")
+        # Some manually baked Teto work files no longer retain the Blender
+        # hand-IK helper.  That is safe: there is no helper transform to
+        # remove, and the later keyed-name collision check remains the guard
+        # against any differently named duplicate.
+        if helper is None:
+            absent_helpers.append(side)
+            continue
         metadata = getattr(helper, "mmd_bone", None)
         if metadata is None:
             raise RuntimeError(f"{helper.name} 没有 mmd_tools 骨骼信息，不能安全修复回导映射")
@@ -945,7 +953,7 @@ def _make_teto_hand_ik_vmd_names_unique(armature):
             })
         if _pose_bone_vmd_name(wrist) == _pose_bone_vmd_name(helper):
             raise RuntimeError(f"{helper.name} 的 VMD 映射仍与真实手首重复")
-    return changed
+    return changed, absent_helpers
 
 
 def _prepare_teto_hand_ik_vmd_compatibility(
@@ -964,7 +972,7 @@ def _prepare_teto_hand_ik_vmd_compatibility(
     original_frame = int(scene.frame_current)
     try:
         before = _sample_pose_bone_matrices(scene, armature, arm_names, frame_start, frame_end)
-        renamed = _make_teto_hand_ik_vmd_names_unique(armature)
+        renamed, absent_helpers = _make_teto_hand_ik_vmd_names_unique(armature)
         disabled = _disable_teto_hand_ik_constraints(armature, action, frame_start, frame_end)
         helper_names = {
             helper.name
@@ -991,6 +999,7 @@ def _prepare_teto_hand_ik_vmd_compatibility(
         "operation": "prepare_teto_hand_ik_vmd_compatibility",
         "arm_fk_bake": arm_bake,
         "renamed_hand_ik_mappings": renamed,
+        "hand_ik_helper_not_present": absent_helpers,
         "disabled_hand_ik": disabled,
         "removed_by_bone": removed,
         "removed_fcurve_count": sum(removed.values()),

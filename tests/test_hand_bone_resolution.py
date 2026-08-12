@@ -97,6 +97,12 @@ class HandBoneResolutionTests(unittest.TestCase):
         _wrist, helper = resolve_mmd_hand_bones(armature, "L")
         self.assertEqual(helper.name, "Teto_Left_Hand_Target")
 
+    def test_missing_helper_is_an_explicit_non_error_result(self):
+        armature = _Armature(_Bone("手首.L", "左手首"))
+        wrist, helper = resolve_mmd_hand_bones(armature, "L")
+        self.assertEqual(wrist.name, "手首.L")
+        self.assertIsNone(helper)
+
 
 if __name__ == "__main__":
     unittest.main()
