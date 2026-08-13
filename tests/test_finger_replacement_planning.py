@@ -76,5 +76,44 @@ class CurlFactorTests(unittest.TestCase):
         self.assertLessEqual(fingers.MAX_CURL_RAD, 1.6)  # a bit under 90 degrees
 
 
+class MMRMappingTests(unittest.TestCase):
+    """The MMR template maps every non-tip finger bone to one rig ORG bone."""
+
+    def test_mapping_covers_15_bones_per_side(self):
+        # 15 driven bones per side = 3 thumb + 3*4 finger chains.  Tips (先)
+        # are not driven; they follow their parents.
+        driven = [bone for bone in fingers.MMR_FINGER_ORG]
+        self.assertEqual(len(driven), 15)
+        for stem, org in fingers.MMR_FINGER_ORG.items():
+            self.assertNotIn("先", stem)
+            self.assertTrue(org.startswith("ORG-"))
+
+    def test_finger_org_subtarget_joins_side_parent(self):
+        self.assertEqual(
+            fingers.finger_org_subtarget("人指１.L"), "ORG-f_index.01.L_parent"
+        )
+        self.assertEqual(
+            fingers.finger_org_subtarget("親指０.R"), "ORG-thumb.01.R_parent"
+        )
+        self.assertEqual(
+            fingers.finger_org_subtarget("小指３.L"), "ORG-f_pinky.03.L_parent"
+        )
+
+    def test_finger_org_subtarget_rejects_tips_and_non_fingers(self):
+        self.assertIsNone(fingers.finger_org_subtarget("人指先.L"))
+        self.assertIsNone(fingers.finger_org_subtarget("手首.L"))
+        self.assertIsNone(fingers.finger_org_subtarget("人指１"))  # no side suffix
+
+    def test_is_finger_controller_bone(self):
+        self.assertTrue(fingers.is_finger_controller_bone("f_index.01.L"))
+        self.assertTrue(fingers.is_finger_controller_bone("f_index.01_master.R"))
+        self.assertTrue(fingers.is_finger_controller_bone("thumb.03.L"))
+        self.assertFalse(fingers.is_finger_controller_bone("f_index.01.L.001"))
+        self.assertFalse(fingers.is_finger_controller_bone("f_index.01_master.L.001"))
+        self.assertFalse(fingers.is_finger_controller_bone("hand_fk.L"))
+        self.assertFalse(fingers.is_finger_controller_bone("ORG-f_index.01.L"))
+        self.assertFalse(fingers.is_finger_controller_bone("MCH-f_index.01.L"))
+
+
 if __name__ == "__main__":
     unittest.main()

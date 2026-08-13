@@ -2056,10 +2056,118 @@ def _finger_bone_names(armature, side=""):
     return names
 
 
+FINGER_DRIVE_TRACK_KEY = "mcd_finger_drive_temp"
+
+
+def _active_non_finger_mmr_constraints(armature, rig):
+    """Active MMR→MMD constraints on bones other than the fingers.
+
+    The fingers step manages the finger constraints itself (unmute/rebuild
+    while posing, mute/remove again on copy); everything else must stay
+    muted as mmd_bake left it.
+    """
+    finger_names = set(_finger_bone_names(armature))
+    return [
+        constraint
+        for bone in armature.pose.bones
+        if bone.name not in finger_names
+        for constraint in bone.constraints
+        if getattr(constraint, "target", None) == rig
+        and not constraint.mute
+        and float(constraint.influence) > 0.0
+    ]
+
+
+def _finger_drive_constraint(pose_bone, rig, subtarget):
+    """The MMR finger copy constraint on ``pose_bone``, or None."""
+    for constraint in pose_bone.constraints:
+        if (
+            constraint.type == "COPY_TRANSFORMS"
+            and getattr(constraint, "target", None) == rig
+            and getattr(constraint, "subtarget", "") == subtarget
+        ):
+            return constraint
+    return None
+
+
+def _activate_finger_drive(armature, rig, names):
+    """Make the MMR rig drive the given MMD finger bones again.
+
+    Unmutes the copy constraints left by the plugin's bake; rebuilds the ones
+    MMR's own manual bake deleted, exactly as the Teto MMR template defines
+    them (COPY_TRANSFORMS, WORLD→WORLD, REPLACE, influence 1).  Rebuilt
+    constraints are tracked in ``scene[FINGER_DRIVE_TRACK_KEY]`` so
+    ``_deactivate_finger_drive`` can remove them again.
+
+    Returns ``(unmuted, created)`` lists of MMD bone names.
+    """
+    scene = bpy.context.scene
+    tracked = set(scene.get(FINGER_DRIVE_TRACK_KEY, ()))
+    unmuted, created = [], []
+    for name in names:
+        subtarget = core_fingers.finger_org_subtarget(name)
+        if subtarget is None:
+            continue
+        if subtarget not in rig.pose.bones:
+            raise RuntimeError(f"MMR Rig 缺少手指驱动骨 {subtarget}；摆手指需要 Teto MMR 模板结构")
+        pose_bone = armature.pose.bones[name]
+        constraint = _finger_drive_constraint(pose_bone, rig, subtarget)
+        if constraint is None:
+            constraint = pose_bone.constraints.new("COPY_TRANSFORMS")
+            constraint.name = core_fingers.MMR_FINGER_CONSTRAINT_NAME
+            constraint.target = rig
+            constraint.subtarget = subtarget
+            constraint.owner_space = "WORLD"
+            constraint.target_space = "WORLD"
+            constraint.mix_mode = "REPLACE"
+            constraint.influence = 1.0
+            created.append(name)
+            tracked.add(f"{name}|{subtarget}")
+        elif constraint.mute:
+            constraint.mute = False
+            unmuted.append(name)
+    scene[FINGER_DRIVE_TRACK_KEY] = sorted(tracked)
+    return unmuted, created
+
+
+def _deactivate_finger_drive(armature, rig, names):
+    """Reverse ``_activate_finger_drive``: remove rebuilt constraints, re-mute
+    the originals.  Returns ``(removed, muted)`` lists of MMD bone names."""
+    scene = bpy.context.scene
+    tracked = set(scene.get(FINGER_DRIVE_TRACK_KEY, ()))
+    removed, muted = [], []
+    for name in names:
+        subtarget = core_fingers.finger_org_subtarget(name)
+        if subtarget is None:
+            continue
+        pose_bone = armature.pose.bones[name]
+        constraint = _finger_drive_constraint(pose_bone, rig, subtarget)
+        if constraint is None:
+            continue
+        if f"{name}|{subtarget}" in tracked:
+            pose_bone.constraints.remove(constraint)
+            removed.append(name)
+        elif not constraint.mute:
+            constraint.mute = True
+            muted.append(name)
+    scene[FINGER_DRIVE_TRACK_KEY] = []
+    return removed, muted
+
+
+def _finger_controller_names(rig, side):
+    """Finger controller bones of one side on the MMR rig, in name order."""
+    return [
+        bone.name
+        for bone in rig.data.bones
+        if core_fingers.is_finger_controller_bone(bone.name)
+        and bone.name.rsplit(".", 1)[-1] == side
+    ]
+
+
 class MD_OT_PoseFingers(Operator):
     bl_idname = "mocap_doctor.pose_fingers"
     bl_label = "摆手指姿势"
-    bl_description = "进入姿态模式并选中该手全部手指骨；按 R、连按两下 X、拖动鼠标摆出手型"
+    bl_description = "接通 MMR 手指控制器并选中它们；像平时一样旋转控制器摆出手型"
 
     side: StringProperty(default="L")
 
@@ -2071,30 +2179,27 @@ class MD_OT_PoseFingers(Operator):
                 settings, "mmd_armature", "ARMATURE", OBJECT_NAMES["mmd_armature"]
             )
             rig = _require_object(settings, "mmr_rig", "ARMATURE", OBJECT_NAMES["mmr_rig"])
-            if _active_mmr_constraints(armature, rig):
-                raise RuntimeError("MMR 约束仍处于活动状态；请先完成并接受 MMD Bake 再摆手指")
+            if _active_non_finger_mmr_constraints(armature, rig):
+                raise RuntimeError("MMR 身体约束仍处于活动状态；请先完成并接受 MMD Bake 再摆手指")
             names = _finger_bone_names(armature, self.side)
             if not names:
                 raise RuntimeError("未找到该侧的手指骨骼")
-            # Only reset to a straight hand on first entry; re-clicking to
-            # reselect must not destroy the pose that is already in progress.
-            was_pose = armature.mode == "POSE"
-            bpy.context.view_layer.objects.active = armature
-            armature.select_set(True)
+            # Make the rig drive this hand again (unmute or rebuild the finger
+            # constraints); the pose the user sees is what copy freezes.
+            unmuted, created = _activate_finger_drive(armature, rig, names)
+            controllers = _finger_controller_names(rig, self.side)
+            bpy.context.view_layer.objects.active = rig
+            rig.select_set(True)
             bpy.ops.object.mode_set(mode="POSE")
             context.scene.tool_settings.transform_pivot_point = "INDIVIDUAL_ORIGINS"
-            selected = set(names)
-            for bone in armature.data.bones:
-                bone.select = bone.name in selected
-            if not was_pose:
-                for name in names:
-                    pose_bone = armature.pose.bones[name]
-                    pose_bone.rotation_mode = "QUATERNION"
-                    pose_bone.rotation_quaternion = mathutils.Quaternion((1.0, 0.0, 0.0, 0.0))
-                    pose_bone.location = (0.0, 0.0, 0.0)
-                    pose_bone.scale = (1.0, 1.0, 1.0)
+            for bone in rig.data.bones:
+                bone.select = bone.name in controllers
             side_label = "左" if self.side == "L" else "右"
-            settings.status_message = f"已选中{side_label}手手指骨骼：按 R、连按两下 X、拖动鼠标调整手型"
+            rebuilt = f"，重建 {len(created)} 条手指约束" if created else ""
+            settings.status_message = (
+                f"已选中{side_label}手 MMR 手指控制器（{len(controllers)} 个）："
+                f"像平时一样旋转控制器摆姿势{rebuilt}"
+            )
             return {"FINISHED"}
         except Exception as exc:
             settings.status_message = str(exc)
@@ -2117,8 +2222,8 @@ class MD_OT_CopyFingerPose(Operator):
                 settings, "mmd_armature", "ARMATURE", OBJECT_NAMES["mmd_armature"]
             )
             rig = _require_object(settings, "mmr_rig", "ARMATURE", OBJECT_NAMES["mmr_rig"])
-            if _active_mmr_constraints(armature, rig):
-                raise RuntimeError("MMR 约束仍处于活动状态；请先完成并接受 MMD Bake 再复制手型")
+            if _active_non_finger_mmr_constraints(armature, rig):
+                raise RuntimeError("MMR 身体约束仍处于活动状态；请先完成并接受 MMD Bake 再复制手型")
             action = _require_action(armature, "原生 MMD Armature")
             if not _action_has_range_keys(
                 action, settings.mocap_frame_start, settings.mocap_frame_end
@@ -2127,11 +2232,17 @@ class MD_OT_CopyFingerPose(Operator):
             names = _finger_bone_names(armature)
             if not names:
                 raise RuntimeError("未找到手指骨骼")
-            # Capture the hand pose the user sees right now; removing the old
-            # curves below must not change what gets frozen.
-            pose_snapshot = {
-                name: armature.pose.bones[name].rotation_quaternion.copy() for name in names
-            }
+            # Capture the evaluated pose the user sees right now (finger
+            # constraints may be active); deactivating them below must not
+            # change what gets frozen.
+            bpy.context.view_layer.update()
+            pose_snapshot = {}
+            for name in names:
+                pose_bone = armature.pose.bones[name]
+                matrix = pose_bone.matrix
+                if pose_bone.parent is not None:
+                    matrix = pose_bone.parent.matrix.inverted() @ matrix
+                pose_snapshot[name] = matrix.to_quaternion().normalized()
             before = _begin_structure_preview(context.scene, "fingers")
             settings.busy = True
             settings.status_message = "正在复制手指姿势"
@@ -2143,14 +2254,23 @@ class MD_OT_CopyFingerPose(Operator):
                 pose_bone.rotation_mode = "QUATERNION"
                 pose_bone.rotation_quaternion = pose_snapshot[name]
                 pose_bone.keyframe_insert(data_path="rotation_quaternion", frame=key_frame)
+            drive_removed, drive_muted = _deactivate_finger_drive(armature, rig, names)
+            drive_note = []
+            if drive_removed:
+                drive_note.append(f"移除 {len(drive_removed)} 条临时手指约束")
+            if drive_muted:
+                drive_note.append(f"重新静音 {len(drive_muted)} 条手指约束")
+            drive_text = "，".join(drive_note) or "手指约束状态不变"
             project.record_step(
                 context.scene,
                 "fingers",
                 "PREVIEW",
-                f"复制 {len(names)} 根手指骨的当前手型到全部帧，删除 {len(removed)} 条旧曲线",
+                f"复制 {len(names)} 根手指骨的当前手型到全部帧，删除 {len(removed)} 条旧曲线；{drive_text}",
                 str(before),
             )
-            settings.status_message = f"手指姿势已复制：{len(names)} 根手指骨，删除 {len(removed)} 条曲线"
+            settings.status_message = (
+                f"手指姿势已复制：{len(names)} 根手指骨，删除 {len(removed)} 条曲线；{drive_text}"
+            )
             return {"FINISHED"}
         except Exception as exc:
             settings.status_message = str(exc)

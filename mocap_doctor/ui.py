@@ -285,7 +285,10 @@ class MD_PT_Main(Panel):
             row = layout.row(align=True)
             row.operator("mocap_doctor.pose_fingers", text="摆左手手指", icon="HAND").side = "L"
             row.operator("mocap_doctor.pose_fingers", text="摆右手手指", icon="HAND").side = "R"
-            layout.label(text="按 R、连按两下 X、拖动鼠标旋转；想单独调某根手指先点选它。", icon="HELP")
+            layout.label(
+                text="点击后 MMR 手指控制器已选中：像平时一样旋转它们摆好手型。",
+                icon="HELP",
+            )
             layout.operator("mocap_doctor.copy_finger_pose", icon="PASTEDOWN")
 
         elif step_id == "export_prep":
