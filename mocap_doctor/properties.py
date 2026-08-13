@@ -42,7 +42,6 @@ PARAMETER_DESCRIPTIONS = {
     "model_root": "当前场景中 Teto 模型最外层的 mmd_tools Root 空物体，不是 MMR Rig 或骨架。",
     "mmr_rig": "接收重定向动作的 MikuMikuRig 控制骨架。",
     "mmd_armature": "最终 Bake 并导出 VMD 的 Teto 原生 MMD 骨架。",
-    "finger_curl": "手指卷曲强度：0 接近伸直，1 接近握拳。只替换手指骨骼，手掌和手腕动画保持不变。",
     "target_mesh": "用于检查模型最低点与穿地的 Teto 网格对象。",
     "correction_empty": "插件创建的整体扶正和抬升控制对象，通常无需手动选择。",
     "source_diagnostic_contact_height": "脚低于该离地高度时视为接近地面；调大将产生更多候选。",
@@ -137,7 +136,6 @@ FACTOR_PROPERTY_NAMES = frozenset(
         "source_floor_strength",
         "tilt_strength",
         "target_floor_strength",
-        "finger_curl",
     }
 )
 ANGLE_PROPERTY_NAMES = frozenset({"global_rot_x", "global_rot_y", "global_rot_z"})
@@ -161,10 +159,6 @@ class MD_PG_ProjectSettings(PropertyGroup):
     data_directory: StringProperty(subtype="DIR_PATH")
     target_template_path: StringProperty(subtype="FILE_PATH", description=PARAMETER_DESCRIPTIONS["target_template_path"])
     current_step: IntProperty(default=0, min=0)
-    finger_curl: FloatProperty(
-        default=0.4, min=0.0, max=1.0, subtype="FACTOR",
-        description=PARAMETER_DESCRIPTIONS["finger_curl"],
-    )
     schema_version: IntProperty(default=0, options={"HIDDEN"})
     expected_fps: IntProperty(default=EXPECTED_FPS, options={"HIDDEN"})
     mocap_frame_start: IntProperty(default=1, update=_update_mocap_start, description=PARAMETER_DESCRIPTIONS["mocap_frame_start"])

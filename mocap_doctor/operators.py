@@ -2045,84 +2045,67 @@ class MD_OT_MMDBake(Operator):
             settings.busy = False
 
 
-def _finger_curl_plan(armature, action, strength):
-    """Choose a static curl quaternion per finger bone from the rest geometry.
+def _finger_bone_names(armature, side=""):
+    """Names of all finger bones present on the armature, optionally one side."""
+    present = {bone.name for bone in armature.data.bones}
+    names = []
+    for name, _factor, _end in core_fingers.finger_plan(present):
+        if side and name.rsplit(".", 1)[-1] != side:
+            continue
+        names.append(name)
+    return names
 
-    The curl axis and sign are decided once per finger chain, using the most
-    proximal present bone: its lever arm to the chain tip is long, so its
-    score is decisive.  Joints near the tip have a nearly degenerate
-    tip-to-palm distance, and picking their axis independently reproduces
-    noise (observed on the Teto fixture: distal joints curled outward), so
-    every bone of a chain curls around the same local axis and sign.
-    Returns one dict per finger bone with "bone", "curl_rad" and "axis"
-    ("skipped" explains a missing curl).
-    """
-    data = armature.data
-    present = {bone.name for bone in data.bones}
-    palms = {}
-    for side in core_fingers.SIDES:
-        wrist = data.bones.get(f"手首.{side}")
-        if wrist is not None:
-            palms[side] = wrist.matrix_local @ wrist.tail_local
-    axes = (
-        mathutils.Vector((1.0, 0.0, 0.0)),
-        mathutils.Vector((0.0, 1.0, 0.0)),
-        mathutils.Vector((0.0, 0.0, 1.0)),
-    )
-    # Group bones by chain: finger_plan() lists chains contiguously and every
-    # bone of a chain shares its chain_end name.
-    groups = {}
-    for name, factor, chain_end in core_fingers.finger_plan(present):
-        groups.setdefault(chain_end, []).append((name, factor))
-    plan = []
-    for chain_end, members in groups.items():
-        first_name, first_factor = members[0]
-        first_bone = data.bones[first_name]
-        rest = first_bone.matrix_local
-        head = rest @ first_bone.head_local
-        chain = data.bones[chain_end]
-        tip = chain.matrix_local @ chain.tail_local
-        delta = tip - head
-        palm = palms.get(first_name.rsplit(".", 1)[-1])
-        if palm is None or delta.length_squared < 1.0e-12:
-            for name, _factor in members:
-                plan.append({"bone": name, "curl_rad": 0.0, "skipped": "缺少手首参考"})
-            continue
-        angle = strength * core_fingers.MAX_CURL_RAD * first_factor
-        if angle <= 0.0:
-            for name, _factor in members:
-                plan.append({"bone": name, "curl_rad": 0.0, "skipped": "卷曲强度为 0"})
-            continue
-        base_distance = (tip - palm).length
-        best = None
-        for axis in axes:
-            world_axis = (rest.to_3x3() @ axis).normalized()
-            for sign in (1.0, -1.0):
-                rotation = mathutils.Quaternion(world_axis, sign * angle).normalized()
-                moved_tip = head + rotation @ delta
-                score = base_distance - (moved_tip - palm).length
-                if best is None or score > best[0]:
-                    best = (score, axis, sign)
-        score, axis, sign = best
-        if score <= 1.0e-6:
-            for name, _factor in members:
-                plan.append({"bone": name, "curl_rad": 0.0, "skipped": "没有找到朝掌心弯曲的轴"})
-            continue
-        for name, factor in members:
-            plan.append(
-                {
-                    "bone": name,
-                    "curl_rad": sign * strength * core_fingers.MAX_CURL_RAD * factor,
-                    "axis": list(axis),
-                }
+
+class MD_OT_PoseFingers(Operator):
+    bl_idname = "mocap_doctor.pose_fingers"
+    bl_label = "摆手指姿势"
+    bl_description = "进入姿态模式并选中该手全部手指骨；按 R、连按两下 X、拖动鼠标摆出手型"
+
+    side: StringProperty(default="L")
+
+    def execute(self, context):
+        settings = _settings(context)
+        try:
+            _require_project(context)
+            armature = _require_object(
+                settings, "mmd_armature", "ARMATURE", OBJECT_NAMES["mmd_armature"]
             )
-    return plan
+            rig = _require_object(settings, "mmr_rig", "ARMATURE", OBJECT_NAMES["mmr_rig"])
+            if _active_mmr_constraints(armature, rig):
+                raise RuntimeError("MMR 约束仍处于活动状态；请先完成并接受 MMD Bake 再摆手指")
+            names = _finger_bone_names(armature, self.side)
+            if not names:
+                raise RuntimeError("未找到该侧的手指骨骼")
+            # Only reset to a straight hand on first entry; re-clicking to
+            # reselect must not destroy the pose that is already in progress.
+            was_pose = armature.mode == "POSE"
+            bpy.context.view_layer.objects.active = armature
+            armature.select_set(True)
+            bpy.ops.object.mode_set(mode="POSE")
+            context.scene.tool_settings.transform_pivot_point = "INDIVIDUAL_ORIGINS"
+            selected = set(names)
+            for bone in armature.data.bones:
+                bone.select = bone.name in selected
+            if not was_pose:
+                for name in names:
+                    pose_bone = armature.pose.bones[name]
+                    pose_bone.rotation_mode = "QUATERNION"
+                    pose_bone.rotation_quaternion = mathutils.Quaternion((1.0, 0.0, 0.0, 0.0))
+                    pose_bone.location = (0.0, 0.0, 0.0)
+                    pose_bone.scale = (1.0, 1.0, 1.0)
+            side_label = "左" if self.side == "L" else "右"
+            settings.status_message = f"已选中{side_label}手手指骨骼：按 R、连按两下 X、拖动鼠标调整手型"
+            return {"FINISHED"}
+        except Exception as exc:
+            settings.status_message = str(exc)
+            self.report({"ERROR"}, str(exc))
+            return {"CANCELLED"}
 
 
-class MD_OT_ReplaceFingers(Operator):
-    bl_idname = "mocap_doctor.replace_fingers"
-    bl_label = "替换手指动作"
-    bl_description = "删除全部手指骨关键帧并写入固定的放松手型；手掌和手腕动画保持不变"
+class MD_OT_CopyFingerPose(Operator):
+    bl_idname = "mocap_doctor.copy_finger_pose"
+    bl_label = "复制手指姿势到全部帧"
+    bl_description = "删除全部手指关键帧，把当前摆好的手型写为整个动捕范围的固定姿势"
 
     def execute(self, context):
         settings = _settings(context)
@@ -2135,39 +2118,39 @@ class MD_OT_ReplaceFingers(Operator):
             )
             rig = _require_object(settings, "mmr_rig", "ARMATURE", OBJECT_NAMES["mmr_rig"])
             if _active_mmr_constraints(armature, rig):
-                raise RuntimeError("MMR 约束仍处于活动状态；请先完成并接受 MMD Bake 再替换手指")
+                raise RuntimeError("MMR 约束仍处于活动状态；请先完成并接受 MMD Bake 再复制手型")
             action = _require_action(armature, "原生 MMD Armature")
             if not _action_has_range_keys(
                 action, settings.mocap_frame_start, settings.mocap_frame_end
             ):
                 raise RuntimeError("MMD Armature 的 Action 没有覆盖完整动捕范围")
+            names = _finger_bone_names(armature)
+            if not names:
+                raise RuntimeError("未找到手指骨骼")
+            # Capture the hand pose the user sees right now; removing the old
+            # curves below must not change what gets frozen.
+            pose_snapshot = {
+                name: armature.pose.bones[name].rotation_quaternion.copy() for name in names
+            }
             before = _begin_structure_preview(context.scene, "fingers")
             settings.busy = True
-            settings.status_message = "正在替换手指动作"
-            plan = _finger_curl_plan(armature, action, float(settings.finger_curl))
+            settings.status_message = "正在复制手指姿势"
             key_frame = int(action.frame_range[0])
             removed = []
-            applied = 0
-            for item in plan:
-                name = item["bone"]
-                removed.extend(remove_bone_fcurves(action, [name]))
-                if item["curl_rad"] == 0.0:
-                    continue
+            for name in names:
                 pose_bone = armature.pose.bones[name]
+                removed.extend(remove_bone_fcurves(action, [name]))
                 pose_bone.rotation_mode = "QUATERNION"
-                pose_bone.rotation_quaternion = mathutils.Quaternion(
-                    item["axis"], item["curl_rad"]
-                ).normalized()
+                pose_bone.rotation_quaternion = pose_snapshot[name]
                 pose_bone.keyframe_insert(data_path="rotation_quaternion", frame=key_frame)
-                applied += 1
             project.record_step(
                 context.scene,
                 "fingers",
                 "PREVIEW",
-                f"写入 {applied} 根手指骨的固定手型，删除 {len(removed)} 条旧手指曲线",
+                f"复制 {len(names)} 根手指骨的当前手型到全部帧，删除 {len(removed)} 条旧曲线",
                 str(before),
             )
-            settings.status_message = f"手指动作已替换：{applied} 根手指骨，删除 {len(removed)} 条曲线"
+            settings.status_message = f"手指姿势已复制：{len(names)} 根手指骨，删除 {len(removed)} 条曲线"
             return {"FINISHED"}
         except Exception as exc:
             settings.status_message = str(exc)
@@ -2599,7 +2582,8 @@ CLASSES = (
     MD_OT_ExitAnnotationMode,
     MD_OT_ResetEffectiveContacts,
     MD_OT_MMDBake,
-    MD_OT_ReplaceFingers,
+    MD_OT_PoseFingers,
+    MD_OT_CopyFingerPose,
     MD_OT_ValidateManualMMDBake,
     MD_OT_CleanupLegFK,
     MD_OT_AcceptPreview,

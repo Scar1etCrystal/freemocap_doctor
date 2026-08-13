@@ -25,7 +25,7 @@ STEPS = (
     WorkflowStep("target_floor", "Teto Mesh 穿地修复", "目标模型", True, "扫描最低点并轻微抬升"),
     WorkflowStep("foot_lock", "脚滑分析与 XY Lock", "目标模型", True, "按最终 planted 锁 XY"),
     WorkflowStep("mmd_bake", "MMD Visual Bake", "导出", True, "安全检测后自动 Bake"),
-    WorkflowStep("fingers", "手指动作替换", "导出", True, "删除手指坏数据并写入放松手型"),
+    WorkflowStep("fingers", "手指动作替换", "导出", True, "手动摆一次手型并复制到全部帧"),
     WorkflowStep("export_prep", "VMD 导出准备", "导出", True, "烘根补偿、删腿 FK、加地面偏移"),
     WorkflowStep("export", "导出 VMD", "导出", False, "调用 mmd_tools 导出"),
 )
