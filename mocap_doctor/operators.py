@@ -14,6 +14,7 @@ from . import annotation
 from . import planted_indicators
 from .core import contacts as core_contacts
 from .core import export as core_export
+from .core import receiver as core_receiver
 from .core import source as core_source
 from .core import target as core_target
 from .core.ranges import diff_ranges
@@ -2308,6 +2309,141 @@ class MD_OT_ExportVMD(Operator):
             return {"CANCELLED"}
 
 
+class MD_OT_PrepareReceiverTemplate(Operator):
+    bl_idname = "mocap_doctor.prepare_receiver_template"
+    bl_label = "准备 VMD 接收模板"
+    bl_description = (
+        "删除 MMR 手臂控制绑定（控制骨架、手 IK 辅助骨骼与驱动约束），恢复ひじ父级为腕捩，"
+        "关闭手臂 IK，并清理旧的 VMD 动作；之后导入 VMD 时手腕与手肘才能按导出姿态正确旋转"
+    )
+    bl_options = {"REGISTER", "UNDO"}
+
+    @staticmethod
+    def _find_mmd_root(context):
+        obj = context.view_layer.objects.active
+        while obj is not None:
+            if getattr(obj, "mmd_type", "") == "ROOT":
+                return obj
+            obj = obj.parent
+        for obj in bpy.data.objects:
+            if getattr(obj, "mmd_type", "") == "ROOT":
+                return obj
+        return None
+
+    @staticmethod
+    def _find_mmd_armature(root):
+        for child in root.children:
+            if child.type == "ARMATURE" and not child.name.startswith("RIG-"):
+                return child
+        return None
+
+    def execute(self, context):
+        root = self._find_mmd_root(context)
+        if root is None:
+            self.report({"ERROR"}, "未找到 MMD 根对象（mmd_type == ROOT）；请打开含 Teto 模型的接收模板")
+            return {"CANCELLED"}
+        armature = self._find_mmd_armature(root)
+        if armature is None:
+            self.report({"ERROR"}, "MMD 根对象下没有原生 Armature，无法准备模板")
+            return {"CANCELLED"}
+
+        # ---- build plan data from the live scene ----
+        bones = {}
+        for pb in armature.pose.bones:
+            mmd_bone = getattr(pb, "mmd_bone", None)
+            name_j = str(getattr(mmd_bone, "name_j", "") or "") if mmd_bone else ""
+            bones[pb.name] = {
+                "name": pb.name,
+                "name_j": name_j,
+                "parent": pb.parent.name if pb.parent else None,
+                "has_ik_toggle": hasattr(pb, "mmd_ik_toggle"),
+                "ik_toggle": bool(getattr(pb, "mmd_ik_toggle", False)),
+                "has_children": any(
+                    bone.parent is not None and bone.parent.name == pb.name
+                    for bone in armature.data.bones
+                ),
+                "constraints": [
+                    {"type": constraint.type, "subtarget": getattr(constraint, "subtarget", "")}
+                    for constraint in pb.constraints
+                ],
+            }
+        constraint_plan = core_receiver.plan_constraints(bones.values())
+        toggle_off = core_receiver.plan_arm_ik_toggle_off(bones)
+        helper_plan = core_receiver.plan_helper_bone_deletion(bones.values())
+        reparent = core_receiver.plan_elbow_reparent(bones)
+        rig_plan = core_receiver.plan_rig_deletion(
+            [(obj.name, obj.type) for obj in bpy.data.objects if obj is not armature],
+            [text.name for text in bpy.data.texts],
+        )
+        stale_actions = core_receiver.plan_stale_actions(
+            [
+                {
+                    "name": action.name,
+                    "has_pose_bone_fcurves": any(
+                        fc.data_path.startswith('pose.bones["') for fc in action.fcurves
+                    ),
+                }
+                for action in bpy.data.actions
+            ]
+        )
+
+        # ---- apply ----
+        remove_keys = {
+            (item["bone"], item["type"], item["subtarget"])
+            for item in constraint_plan["remove"]
+        }
+        for pb in armature.pose.bones:
+            if pb.name in toggle_off and hasattr(pb, "mmd_ik_toggle"):
+                pb.mmd_ik_toggle = False
+            for constraint in list(pb.constraints):
+                key = (pb.name, constraint.type, getattr(constraint, "subtarget", ""))
+                if key in remove_keys:
+                    pb.constraints.remove(constraint)
+
+        for name in rig_plan["rig_objects"]:
+            obj = bpy.data.objects.get(name)
+            if obj is not None:
+                bpy.data.objects.remove(obj, do_unlink=True)
+        for name in rig_plan["rig_texts"]:
+            text = bpy.data.texts.get(name)
+            if text is not None:
+                bpy.data.texts.remove(text)
+        for name in stale_actions:
+            action = bpy.data.actions.get(name)
+            if action is not None:
+                bpy.data.actions.remove(action)
+        if armature.animation_data:
+            armature.animation_data.action = None
+
+        with _active_armature(context, armature, pose=False):
+            bpy.ops.object.mode_set(mode="EDIT")
+            edit_bones = armature.data.edit_bones
+            for bone_name, new_parent in reparent:
+                bone = edit_bones.get(bone_name)
+                parent = edit_bones.get(new_parent)
+                if bone is not None and parent is not None:
+                    bone.parent = parent
+            for name in helper_plan["delete"]:
+                bone = edit_bones.get(name)
+                if bone is not None:
+                    edit_bones.remove(bone)
+            bpy.ops.object.mode_set(mode="OBJECT")
+
+        report = (
+            f"模板已准备：删除约束 {len(constraint_plan['remove'])} 个，"
+            f"保留原生 IK {len(constraint_plan['keep'])} 个；"
+            f"删除辅助骨骼 {helper_plan['delete']}；"
+            f"恢复父级 {reparent}；"
+            f"关闭手臂 IK {toggle_off}；"
+            f"删除控制骨架 {rig_plan['rig_objects']}；"
+            f"清理旧动作 {stale_actions}。请保存模板后再导入 VMD。"
+        )
+        if helper_plan["skipped"]:
+            report += f" 注意：有子级的辅助骨骼已跳过 {helper_plan['skipped']}。"
+        self.report({"INFO"}, report)
+        return {"FINISHED"}
+
+
 CLASSES = (
     MD_OT_PrepareVMDExport,
     MD_OT_RunStep,
@@ -2331,6 +2467,7 @@ CLASSES = (
     MD_OT_AcceptPreview,
     MD_OT_DiscardPreview,
     MD_OT_ExportVMD,
+    MD_OT_PrepareReceiverTemplate,
 )
 
 

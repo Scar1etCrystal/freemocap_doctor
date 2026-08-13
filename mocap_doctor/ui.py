@@ -38,6 +38,13 @@ class MD_PT_Main(Panel):
         if not settings.initialized:
             layout.label(text="打开 FreeMoCap 源文件后创建工作副本", icon="FILE_BLEND")
             layout.operator("mocap_doctor.create_project", icon="DUPLICATE")
+            receiver_box = layout.box()
+            receiver_box.label(text="VMD 接收模板（MMR 模板专用）", icon="TOOL_SETTINGS")
+            receiver_box.operator(
+                "mocap_doctor.prepare_receiver_template",
+                text="准备接收模板（导入 VMD 前先执行一次）",
+                icon="GHOST_DISABLED",
+            )
             return
 
         step = step_at(settings.current_step)
