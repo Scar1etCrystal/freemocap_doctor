@@ -278,6 +278,13 @@ class MD_PT_Main(Panel):
             layout.operator("mocap_doctor.validate_manual_mmd_bake", icon="CHECKMARK")
             layout.operator("mocap_doctor.cleanup_leg_fk", icon="BONE_DATA")
 
+        elif step_id == "fingers":
+            layout.prop(settings, "finger_curl", text="卷曲强度")
+            reminder = layout.box()
+            reminder.label(text="光学动捕的手指数据不可靠，此步骤会删除全部手指关键帧", icon="INFO")
+            reminder.label(text="并写入固定的放松手型；手掌和手腕动画保持不变。")
+            layout.operator("mocap_doctor.replace_fingers", icon="HAND")
+
         elif step_id == "export_prep":
             layout.prop(settings, "vmd_floor_offset", text="VMD 地面 Z 偏移")
             reminder = layout.box()

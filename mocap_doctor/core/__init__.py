@@ -17,9 +17,12 @@ from .ranges import (
     union_ranges,
 )
 
+from . import fingers
+
 __all__ = [
     "clip_ranges",
     "diff_ranges",
+    "fingers",
     "frames_to_ranges",
     "intersect_ranges",
     "normalize_range",

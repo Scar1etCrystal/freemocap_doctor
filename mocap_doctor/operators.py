@@ -3,6 +3,8 @@ import json
 import math
 from pathlib import Path
 
+import mathutils
+
 import bpy
 from bpy.app.handlers import persistent
 from bpy.props import IntProperty, StringProperty
@@ -13,6 +15,7 @@ from . import project
 from . import annotation
 from . import planted_indicators
 from .core import contacts as core_contacts
+from .core import fingers as core_fingers
 from .core import export as core_export
 from .core import receiver as core_receiver
 from .core import source as core_source
@@ -2042,6 +2045,140 @@ class MD_OT_MMDBake(Operator):
             settings.busy = False
 
 
+def _finger_curl_plan(armature, action, strength):
+    """Choose a static curl quaternion per finger bone from the rest geometry.
+
+    The curl axis and sign are decided once per finger chain, using the most
+    proximal present bone: its lever arm to the chain tip is long, so its
+    score is decisive.  Joints near the tip have a nearly degenerate
+    tip-to-palm distance, and picking their axis independently reproduces
+    noise (observed on the Teto fixture: distal joints curled outward), so
+    every bone of a chain curls around the same local axis and sign.
+    Returns one dict per finger bone with "bone", "curl_rad" and "axis"
+    ("skipped" explains a missing curl).
+    """
+    data = armature.data
+    present = {bone.name for bone in data.bones}
+    palms = {}
+    for side in core_fingers.SIDES:
+        wrist = data.bones.get(f"手首.{side}")
+        if wrist is not None:
+            palms[side] = wrist.matrix_local @ wrist.tail_local
+    axes = (
+        mathutils.Vector((1.0, 0.0, 0.0)),
+        mathutils.Vector((0.0, 1.0, 0.0)),
+        mathutils.Vector((0.0, 0.0, 1.0)),
+    )
+    # Group bones by chain: finger_plan() lists chains contiguously and every
+    # bone of a chain shares its chain_end name.
+    groups = {}
+    for name, factor, chain_end in core_fingers.finger_plan(present):
+        groups.setdefault(chain_end, []).append((name, factor))
+    plan = []
+    for chain_end, members in groups.items():
+        first_name, first_factor = members[0]
+        first_bone = data.bones[first_name]
+        rest = first_bone.matrix_local
+        head = rest @ first_bone.head_local
+        chain = data.bones[chain_end]
+        tip = chain.matrix_local @ chain.tail_local
+        delta = tip - head
+        palm = palms.get(first_name.rsplit(".", 1)[-1])
+        if palm is None or delta.length_squared < 1.0e-12:
+            for name, _factor in members:
+                plan.append({"bone": name, "curl_rad": 0.0, "skipped": "缺少手首参考"})
+            continue
+        angle = strength * core_fingers.MAX_CURL_RAD * first_factor
+        if angle <= 0.0:
+            for name, _factor in members:
+                plan.append({"bone": name, "curl_rad": 0.0, "skipped": "卷曲强度为 0"})
+            continue
+        base_distance = (tip - palm).length
+        best = None
+        for axis in axes:
+            world_axis = (rest.to_3x3() @ axis).normalized()
+            for sign in (1.0, -1.0):
+                rotation = mathutils.Quaternion(world_axis, sign * angle).normalized()
+                moved_tip = head + rotation @ delta
+                score = base_distance - (moved_tip - palm).length
+                if best is None or score > best[0]:
+                    best = (score, axis, sign)
+        score, axis, sign = best
+        if score <= 1.0e-6:
+            for name, _factor in members:
+                plan.append({"bone": name, "curl_rad": 0.0, "skipped": "没有找到朝掌心弯曲的轴"})
+            continue
+        for name, factor in members:
+            plan.append(
+                {
+                    "bone": name,
+                    "curl_rad": sign * strength * core_fingers.MAX_CURL_RAD * factor,
+                    "axis": list(axis),
+                }
+            )
+    return plan
+
+
+class MD_OT_ReplaceFingers(Operator):
+    bl_idname = "mocap_doctor.replace_fingers"
+    bl_label = "替换手指动作"
+    bl_description = "删除全部手指骨关键帧并写入固定的放松手型；手掌和手腕动画保持不变"
+
+    def execute(self, context):
+        settings = _settings(context)
+        try:
+            _require_project(context)
+            _require_restore_before_rerun(context.scene, "fingers")
+            _ensure_no_pending_preview(settings, "fingers")
+            armature = _require_object(
+                settings, "mmd_armature", "ARMATURE", OBJECT_NAMES["mmd_armature"]
+            )
+            rig = _require_object(settings, "mmr_rig", "ARMATURE", OBJECT_NAMES["mmr_rig"])
+            if _active_mmr_constraints(armature, rig):
+                raise RuntimeError("MMR 约束仍处于活动状态；请先完成并接受 MMD Bake 再替换手指")
+            action = _require_action(armature, "原生 MMD Armature")
+            if not _action_has_range_keys(
+                action, settings.mocap_frame_start, settings.mocap_frame_end
+            ):
+                raise RuntimeError("MMD Armature 的 Action 没有覆盖完整动捕范围")
+            before = _begin_structure_preview(context.scene, "fingers")
+            settings.busy = True
+            settings.status_message = "正在替换手指动作"
+            plan = _finger_curl_plan(armature, action, float(settings.finger_curl))
+            key_frame = int(action.frame_range[0])
+            removed = []
+            applied = 0
+            for item in plan:
+                name = item["bone"]
+                removed.extend(remove_bone_fcurves(action, [name]))
+                if item["curl_rad"] == 0.0:
+                    continue
+                pose_bone = armature.pose.bones[name]
+                pose_bone.rotation_mode = "QUATERNION"
+                pose_bone.rotation_quaternion = mathutils.Quaternion(
+                    item["axis"], item["curl_rad"]
+                ).normalized()
+                pose_bone.keyframe_insert(data_path="rotation_quaternion", frame=key_frame)
+                applied += 1
+            project.record_step(
+                context.scene,
+                "fingers",
+                "PREVIEW",
+                f"写入 {applied} 根手指骨的固定手型，删除 {len(removed)} 条旧手指曲线",
+                str(before),
+            )
+            settings.status_message = f"手指动作已替换：{applied} 根手指骨，删除 {len(removed)} 条曲线"
+            return {"FINISHED"}
+        except Exception as exc:
+            settings.status_message = str(exc)
+            if settings.preview_step_id == "fingers":
+                project.record_step(context.scene, "fingers", "FAILED", str(exc))
+            self.report({"ERROR"}, str(exc))
+            return {"CANCELLED"}
+        finally:
+            settings.busy = False
+
+
 class MD_OT_ValidateManualMMDBake(Operator):
     bl_idname = "mocap_doctor.validate_manual_mmd_bake"
     bl_label = "检查手工 Bake 并清理 FK"
@@ -2462,6 +2599,7 @@ CLASSES = (
     MD_OT_ExitAnnotationMode,
     MD_OT_ResetEffectiveContacts,
     MD_OT_MMDBake,
+    MD_OT_ReplaceFingers,
     MD_OT_ValidateManualMMDBake,
     MD_OT_CleanupLegFK,
     MD_OT_AcceptPreview,

@@ -1,7 +1,7 @@
 schema_version = "1.0.0"
 
 id = "mocap_doctor"
-version = "0.1.16"
+version = "0.1.17"
 name = "MoCap Doctor"
 tagline = "Guided FreeMoCap cleanup for arue Teto and MMD VMD export"
 maintainer = "MoCap Doctor contributors"

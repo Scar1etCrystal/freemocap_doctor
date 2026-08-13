@@ -19,6 +19,34 @@ _RESTORE_RESUME_STEP_ID = ""
 _RESTORE_RESET_STEP_ID = ""
 _RESTORE_MESSAGE = ""
 
+# Bump when saved projects need their workflow state adjusted on load; add a
+# migration branch in _migrate_project_schema for each previous version.
+SCHEMA_VERSION = 1
+
+
+@persistent
+def _migrate_project_schema(_dummy):
+    try:
+        scene = bpy.context.scene
+        if not hasattr(scene, "mocap_doctor"):
+            return
+        settings = scene.mocap_doctor
+        if not settings.initialized or settings.schema_version >= SCHEMA_VERSION:
+            return
+        # 0 -> 1: the "fingers" step was inserted between mmd_bake and
+        # export_prep, so files saved past that point need current_step + 1.
+        fingers_index = STEP_INDEX.get("fingers", 14)
+        if settings.schema_version < 1 and settings.current_step >= fingers_index:
+            settings.current_step += 1
+        settings.schema_version = SCHEMA_VERSION
+    except Exception as exc:
+        print(f"[MoCap Doctor] schema migration failed: {exc}")
+
+
+def register_handlers():
+    if _migrate_project_schema not in bpy.app.handlers.load_post:
+        bpy.app.handlers.load_post.append(_migrate_project_schema)
+
 
 def _utc_now():
     return datetime.now(timezone.utc).isoformat()
@@ -286,6 +314,7 @@ def initialize_project(scene, work_filepath, target_template_path=""):
     settings.data_directory = str(project_data_dir(work))
     settings.target_template_path = target_template_path
     settings.current_step = 1
+    settings.schema_version = SCHEMA_VERSION
     sync_scene_range(scene, settings)
     ensure_fps(scene)
     if settings.tilt_reference_frame == 0:
@@ -535,6 +564,8 @@ def unregister_handlers():
     global _RESTORE_WORK_PATH, _RESTORE_RESUME_STEP_ID, _RESTORE_RESET_STEP_ID, _RESTORE_MESSAGE
     if _finish_restore in bpy.app.handlers.load_post:
         bpy.app.handlers.load_post.remove(_finish_restore)
+    if _migrate_project_schema in bpy.app.handlers.load_post:
+        bpy.app.handlers.load_post.remove(_migrate_project_schema)
     _RESTORE_WORK_PATH = None
     _RESTORE_RESUME_STEP_ID = ""
     _RESTORE_RESET_STEP_ID = ""

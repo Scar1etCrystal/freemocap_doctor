@@ -133,6 +133,8 @@ def register():
     try:
         properties.register_properties()
         undo.append(properties.unregister_properties)
+        project.register_handlers()
+        undo.append(project.unregister_handlers)
         _register_classes(annotation.CLASSES)
         undo.append(lambda: _unregister_classes(annotation.CLASSES))
         annotation.register_properties()
