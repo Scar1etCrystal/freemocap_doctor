@@ -1,15 +1,15 @@
 schema_version = "1.0.0"
 
 id = "mocap_doctor"
-version = "0.1.19"
+version = "0.1.21"
 name = "MoCap Doctor"
-tagline = "Guided FreeMoCap cleanup for arue Teto and MMD VMD export"
+tagline = "Guided mocap cleanup for arue Teto and MMD VMD export"
 maintainer = "MoCap Doctor contributors"
 type = "add-on"
 
 tags = ["Animation", "Rigging"]
 blender_version_min = "4.3.0"
-blender_version_max = "4.4.0"
+blender_version_max = "4.6.0"
 
 license = ["SPDX:GPL-3.0-or-later"]
 

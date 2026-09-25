@@ -1,10 +1,25 @@
 # MoCap Doctor
 
-面向 Blender 创作者的 FreeMoCap 动作清理向导。当前版本只支持 Blender 4.3、固定的 FreeMoCap Bake 结构，以及 arue Teto 2.01 和其 MikuMikuRig 控制器。
+面向 Blender 创作者的动捕动作清理向导。当前版本支持 Blender 4.3–4.5、固定的 arue Teto 2.01 和其 MikuMikuRig 控制器。**动捕前端正在从 FreeMoCap 迁移到 GVHMR**（见下方"GVHMR 前端"；迁移期间插件内部的源数据步骤仍按 FreeMoCap 结构编写，后端步骤两者通用）。
+
+## GVHMR 前端（迁移中）
+
+动捕数据源改用 GVHMR（单目视频 → 重力对齐世界系 SMPL 动作），由 PoseCapture_Pack
+完成捕捉与重定向，本插件负责重定向之后的后处理与 VMD 导出。完整操作规程与映射文件
+见 [presets/bmap/README.md](presets/bmap/README.md)，要点：
+
+1. PoseCapture 面板导入 pkl → 目标骨架选 `RIG-..._arm`（Teto 的 MMR 控制骨架）
+2. 控制器类型 = **自定义映射**，映射文件 = `presets/bmap/gvhmr_mmd_fix_A_foot_ik.bmap`
+3. 「预处理控制器」→ 把 `thigh_parent.L/R` 的 `IK_FK` 改成 **0**（全 IK）
+4. 「重定向到 ARP」，人眼验收脚部与膝盖
+
+修正版映射是必需的：PoseCapture 内置的 MMD 预设把 IK 标志挂在 `foot_spin_ik` 而非
+真正的 `foot_ik.L/R` 上，在 arue 式 Teto 上会产生约 68° 的恒定脚部俯仰（实测）。
+该映射对模型绑定敏感，换 MMD 模型必须重新验证脚部。
 
 ## 安装
 
-1. 在 Blender 4.3 打开 `Edit > Preferences > Get Extensions`。
+1. 在 Blender 4.3–4.5 打开 `Edit > Preferences > Get Extensions`。
 2. 从右上角菜单选择 `Install from Disk`，选择发布的 ZIP。
 3. 启用 `MoCap Doctor`。面板位于 3D Viewport 右侧栏的 `MoCap Doctor` 页签。
 4. 确认工作环境中的 `mmd_tools`、MikuMikuRig 和用于重定向的工具可正常使用。
