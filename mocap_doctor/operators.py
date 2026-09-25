@@ -977,9 +977,10 @@ def _run_source_check(context, settings):
 
     scene = context.scene
     _require_restore_before_rerun(scene, "source_check")
-    armature = _require_object(
-        settings, "source_armature", "ARMATURE", OBJECT_NAMES["source_armature"]
-    )
+    # The source rig is identified by its bones (see _source_maps), not by a
+    # fixed object name: GVHMR imports it as "Armature", FreeMoCap used
+    # "import_synchronized_videos_rig".
+    armature = _require_object(settings, "source_armature", "ARMATURE")
     action = _require_action(armature, "源骨架")
     maps = _source_maps(settings, armature)
 
@@ -1034,9 +1035,10 @@ def _run_source_check(context, settings):
 def _run_source_analyze(context, settings):
     scene = context.scene
     _require_restore_before_rerun(scene, "source_analyze")
-    armature = _require_object(
-        settings, "source_armature", "ARMATURE", OBJECT_NAMES["source_armature"]
-    )
+    # The source rig is identified by its bones (see _source_maps), not by a
+    # fixed object name: GVHMR imports it as "Armature", FreeMoCap used
+    # "import_synchronized_videos_rig".
+    armature = _require_object(settings, "source_armature", "ARMATURE")
     maps = _source_maps(settings, armature)
     thresholds = {
         "foot_contact_height_m": settings.source_diagnostic_contact_height,
