@@ -12,7 +12,7 @@ import math
 import bpy
 from bpy.app.handlers import persistent
 
-from .presets import SOURCE_BONES
+from .presets import SOURCE_BONES, resolve_source_profile
 
 
 COLLECTION_PREFIX = ".MCD_Planted_Indicators_"
@@ -103,18 +103,38 @@ def _contacts_mode_active(scene: bpy.types.Scene) -> bool:
     )
 
 
+def source_foot_bones(source: bpy.types.Object) -> dict[str, str]:
+    """Resolve the L/R foot bones for whichever frontend produced the rig.
+
+    CONFIG keeps the channel/label/colour metadata; the bone names depend on the
+    source profile, so refresh them here before anything reads CONFIG.
+    """
+
+    settings = getattr(bpy.context.scene, "mocap_doctor", None)
+    requested = getattr(settings, "source_profile", "AUTO") if settings else "AUTO"
+    maps = resolve_source_profile(source, requested)
+    if maps is None:
+        raise RuntimeError("无法识别源骨架，无法显示 planted 脚部标志")
+    bones = maps["bones"]
+    resolved = {"L": bones["left_foot"], "R": bones["right_foot"]}
+    for side, name in resolved.items():
+        CONFIG[side]["bone"] = name
+    return resolved
+
+
 def require_source(scene: bpy.types.Scene) -> bpy.types.Object:
-    """Return the configured FreeMoCap source after fixed-bone validation."""
+    """Return the configured source armature after foot-bone validation."""
 
     settings = getattr(scene, "mocap_doctor", None)
     source = getattr(settings, "source_armature", None) if settings else None
     if source is None:
-        raise RuntimeError("缺少 FreeMoCap 源骨架，无法显示 planted 脚部标志")
+        raise RuntimeError("缺少源骨架，无法显示 planted 脚部标志")
     if source.type != "ARMATURE":
         raise RuntimeError(f"{source.name} 不是 Armature，无法显示 planted 脚部标志")
-    missing = [item["bone"] for item in CONFIG.values() if item["bone"] not in source.pose.bones]
+    resolved = source_foot_bones(source)
+    missing = [name for name in resolved.values() if name not in source.pose.bones]
     if missing:
-        raise RuntimeError("FreeMoCap 源骨架缺少脚部骨骼：" + "、".join(missing))
+        raise RuntimeError("源骨架缺少脚部骨骼：" + "、".join(missing))
     return source
 
 

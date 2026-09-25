@@ -43,6 +43,139 @@ ARM_CHAINS = {
     "R": ["shoulder.R", "upper_arm.R", "forearm.R", "hand.R"],
 }
 
+# --- 源骨架配置档 ----------------------------------------------------------
+# 前端决定源骨架的骨骼命名：FreeMoCap 用 pelvis / hand.L / heel.02.L，
+# GVHMR 经 PoseCapture 导入的是 SMPL 骨架（f_avg_ / m_avg_ 前缀）。
+# 算法层只认"角色"（骨盆/手/脚……），命名差异全部在这里吸收。
+SOURCE_PROFILE_FREEMOCAP = "FREEMOCAP"
+SOURCE_PROFILE_GVHMR = "GVHMR"
+SOURCE_PROFILE_AUTO = "AUTO"
+
+GVHMR_PREFIX_CANDIDATES = ("f_avg", "m_avg")
+
+# SMPL 没有独立的脚跟骨：用 Ankle（踝→前掌）与 Foot（前掌→脚尖）两个关节近似
+# FreeMoCap 的 foot / heel 两个接触点。
+GVHMR_BONE_SUFFIXES = {
+    "hips": "Pelvis",
+    "left_foot": "L_Ankle",
+    "right_foot": "R_Ankle",
+    "left_heel": "L_Foot",
+    "right_heel": "R_Foot",
+    "left_hand": "L_Wrist",
+    "right_hand": "R_Wrist",
+}
+
+GVHMR_ARM_CHAIN_SUFFIXES = {
+    "hand.L": ("L_Collar", "L_Shoulder", "L_Elbow", "L_Wrist"),
+    "hand.R": ("R_Collar", "R_Shoulder", "R_Elbow", "R_Wrist"),
+}
+
+GVHMR_SMOOTH_SUFFIXES = (
+    "Pelvis", "Spine1", "Spine2", "Spine3", "Neck",
+    "L_Collar", "L_Shoulder", "L_Elbow", "L_Wrist",
+    "R_Collar", "R_Shoulder", "R_Elbow", "R_Wrist",
+    "L_Hip", "L_Knee", "L_Ankle",
+    "R_Hip", "R_Knee", "R_Ankle",
+)
+
+
+def gvhmr_source_prefix(armature):
+    """Return the SMPL bone prefix (``f_avg`` / ``m_avg``) present on the rig."""
+
+    if armature is None or getattr(armature, "type", "") != "ARMATURE":
+        return None
+    names = {bone.name for bone in armature.data.bones}
+    for prefix in GVHMR_PREFIX_CANDIDATES:
+        if f"{prefix}_Pelvis" in names:
+            return prefix
+    return None
+
+
+def _gvhmr_maps(prefix):
+    bones = {role: f"{prefix}_{suffix}" for role, suffix in GVHMR_BONE_SUFFIXES.items()}
+    arm_chains = {
+        key: tuple(f"{prefix}_{suffix}" for suffix in suffixes)
+        for key, suffixes in GVHMR_ARM_CHAIN_SUFFIXES.items()
+    }
+    smooth_bones = tuple(f"{prefix}_{suffix}" for suffix in GVHMR_SMOOTH_SUFFIXES)
+    contact_points = (
+        (f"{prefix}_L_Ankle", "head"),
+        (f"{prefix}_L_Ankle", "tail"),
+        (f"{prefix}_L_Foot", "tail"),
+        (f"{prefix}_R_Ankle", "head"),
+        (f"{prefix}_R_Ankle", "tail"),
+        (f"{prefix}_R_Foot", "tail"),
+    )
+    foot_points = {
+        "L": (
+            (f"{prefix}_L_Ankle", "head"),
+            (f"{prefix}_L_Ankle", "tail"),
+            (f"{prefix}_L_Foot", "tail"),
+        ),
+        "R": (
+            (f"{prefix}_R_Ankle", "head"),
+            (f"{prefix}_R_Ankle", "tail"),
+            (f"{prefix}_R_Foot", "tail"),
+        ),
+    }
+    return {
+        "profile": SOURCE_PROFILE_GVHMR,
+        "prefix": prefix,
+        "bones": bones,
+        "arm_chains": arm_chains,
+        "smooth_bones": smooth_bones,
+        "contact_points": contact_points,
+        "foot_points": foot_points,
+    }
+
+
+def _freemocap_maps(armature):
+    """FreeMoCap source maps (the legacy frontend)."""
+
+    return {
+        "profile": SOURCE_PROFILE_FREEMOCAP,
+        "prefix": "",
+        "bones": dict(SOURCE_BONES),
+        "arm_chains": {
+            SOURCE_BONES["left_hand"]: tuple(ARM_CHAINS["L"]),
+            SOURCE_BONES["right_hand"]: tuple(ARM_CHAINS["R"]),
+        },
+        "smooth_bones": None,  # 算法模块自带的 FreeMoCap 默认值
+        "contact_points": None,
+        "foot_points": None,
+    }
+
+
+def resolve_source_profile(armature, requested=SOURCE_PROFILE_AUTO):
+    """Pick the source profile and return its bone maps.
+
+    ``requested`` is the project setting; ``AUTO`` detects from the rig's own
+    bone names so a mis-set project cannot silently analyse the wrong skeleton.
+    Returns ``None`` when the rig matches neither profile.
+    """
+
+    requested = (requested or SOURCE_PROFILE_AUTO).upper()
+    prefix = gvhmr_source_prefix(armature)
+
+    if requested == SOURCE_PROFILE_GVHMR:
+        return _gvhmr_maps(prefix) if prefix else None
+    if requested == SOURCE_PROFILE_FREEMOCAP:
+        return _freemocap_maps(armature)
+    if prefix:
+        return _gvhmr_maps(prefix)
+    return _freemocap_maps(armature)
+
+
+def profile_is_available(maps, armature):
+    """Which of the profile's bones are missing on this rig."""
+
+    if maps is None or armature is None:
+        return ["<未识别源骨架>"]
+    needed = list(dict.fromkeys(maps["bones"].values()))
+    for chain in maps["arm_chains"].values():
+        needed.extend(chain)
+    return [name for name in needed if armature.pose.bones.get(name) is None]
+
 TARGET_FOOT_IK = {"L": "foot_ik.L", "R": "foot_ik.R"}
 
 MMD_ROOT_BONE = "全ての親"

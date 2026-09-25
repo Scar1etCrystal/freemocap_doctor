@@ -143,10 +143,11 @@ class MD_PT_Main(Panel):
             layout.label(text="工作副本与基线检查点已建立", icon="CHECKMARK")
             layout.operator("mocap_doctor.discover_objects", icon="VIEWZOOM")
 
-        elif step_id == "source_bake":
+        elif step_id == "source_check":
             layout.prop(settings, "source_armature", text="源骨架")
+            layout.prop(settings, "source_profile", text="源数据来源")
             layout.label(text="仅处理上方有效动捕范围")
-            layout.operator("mocap_doctor.source_bake", icon="ACTION")
+            _draw_run(layout, step_id, "校验源数据", "CHECKMARK")
 
         elif step_id == "source_analyze":
             layout.prop(settings, "source_diagnostic_contact_height", text="脚接近地面高度")

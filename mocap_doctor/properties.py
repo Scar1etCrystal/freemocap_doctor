@@ -37,7 +37,8 @@ STEP_STATUS_ITEMS = (
 PARAMETER_DESCRIPTIONS = {
     "mocap_frame_start": "真正动作的第一帧；更早的标定板动作会保留，但不会参与处理。",
     "mocap_frame_end": "真正动作的最后一帧；更晚的内容不会参与处理。",
-    "source_armature": "FreeMoCap 源骨架，通常由插件自动识别。",
+    "source_armature": "动捕源骨架（GVHMR 导入的 SMPL 骨架，或旧版 FreeMoCap 骨架），通常由插件自动识别。",
+    "source_profile": "源数据的骨骼命名体系。自动识别会按骨架上的骨骼名判断，识别失败或识别错误时再手动指定。",
     "target_template_path": "只记录你用于重定向的干净 Teto/MMR 模板文件路径；插件不会自动从这里导入模型。",
     "model_root": "当前场景中 Teto 模型最外层的 mmd_tools Root 空物体，不是 MMR Rig 或骨架。",
     "mmr_rig": "接收重定向动作的 MikuMikuRig 控制骨架。",
@@ -174,6 +175,15 @@ class MD_PG_ProjectSettings(PropertyGroup):
     annotation_step_id: StringProperty()
 
     source_armature: PointerProperty(type=bpy.types.Object, description=PARAMETER_DESCRIPTIONS["source_armature"])
+    source_profile: EnumProperty(
+        items=(
+            ("AUTO", "自动识别", "按骨架上的骨骼名自动判断来源（推荐）"),
+            ("GVHMR", "GVHMR / SMPL", "PoseCapture 导入的 SMPL 骨架（f_avg_ / m_avg_ 前缀）"),
+            ("FREEMOCAP", "FreeMoCap", "旧前端：pelvis / hand.L / heel.02.L 命名"),
+        ),
+        default="AUTO",
+        description=PARAMETER_DESCRIPTIONS["source_profile"],
+    )
     model_root: PointerProperty(type=bpy.types.Object, description=PARAMETER_DESCRIPTIONS["model_root"])
     mmr_rig: PointerProperty(type=bpy.types.Object, description=PARAMETER_DESCRIPTIONS["mmr_rig"])
     mmd_armature: PointerProperty(type=bpy.types.Object, description=PARAMETER_DESCRIPTIONS["mmd_armature"])

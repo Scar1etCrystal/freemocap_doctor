@@ -21,7 +21,7 @@ _RESTORE_MESSAGE = ""
 
 # Bump when saved projects need their workflow state adjusted on load; add a
 # migration branch in _migrate_project_schema for each previous version.
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 
 @persistent
@@ -38,6 +38,13 @@ def _migrate_project_schema(_dummy):
         fingers_index = STEP_INDEX.get("fingers", 14)
         if settings.schema_version < 1 and settings.current_step >= fingers_index:
             settings.current_step += 1
+        # 1 -> 2: the FreeMoCap "source_bake" step became the frontend-agnostic
+        # "source_check". The step keeps its index, so only the orphaned record
+        # id needs renaming; a fresh record would otherwise be created next to it.
+        if settings.schema_version < 2:
+            for record in getattr(settings, "steps", ()):
+                if record.step_id == "source_bake":
+                    record.step_id = "source_check"
         settings.schema_version = SCHEMA_VERSION
     except Exception as exc:
         print(f"[MoCap Doctor] schema migration failed: {exc}")

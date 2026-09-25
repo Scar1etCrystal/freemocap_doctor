@@ -12,7 +12,7 @@ class WorkflowStep:
 
 STEPS = (
     WorkflowStep("project", "创建项目", "项目", True, "建立工作副本、30fps 和基线检查点"),
-    WorkflowStep("source_bake", "源骨架 Bake", "源数据", True, "烘焙有效动捕范围"),
+    WorkflowStep("source_check", "源数据校验", "源数据", False, "校验导入的源骨架与动作覆盖范围"),
     WorkflowStep("source_analyze", "源动作诊断", "源数据", False, "生成手部异常提示"),
     WorkflowStep("hand_ranges", "手部坏区间", "源数据", False, "NLA 标注左右手坏段"),
     WorkflowStep("hand_repair", "手部区间修复", "源数据", True, "整条手臂链区间插值"),

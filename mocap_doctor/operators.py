@@ -32,11 +32,13 @@ from .presets import (
     MMR_COPY_CONSTRAINT_NAME,
     MMR_LEG_CONSTRAINTS,
     OBJECT_NAMES,
-    SOURCE_BONES,
+    SOURCE_PROFILE_AUTO,
     TARGET_FOOT_IK,
     fixed_object_name_matches,
+    profile_is_available,
     resolve_mmd_foot_ik,
     resolve_mmd_hand_bones,
+    resolve_source_profile,
 )
 from .workflow import STEPS, STEP_INDEX, clamp_step, step_at
 
@@ -305,67 +307,6 @@ def _require_no_nla(owner, label):
     animation_data = getattr(owner, "animation_data", None)
     if animation_data and len(animation_data.nla_tracks) > 0:
         raise RuntimeError(f"{label} 存在 NLA Track；请先合并或移除，避免与活动 Action 叠加")
-
-
-def _source_constraint_empty_targets(armature):
-    """Return exact Empty objects used by source pose constraints."""
-
-    targets = {}
-    for pose_bone in armature.pose.bones:
-        for constraint in pose_bone.constraints:
-            target = getattr(constraint, "target", None)
-            if target is not None and getattr(target, "type", None) == "EMPTY":
-                targets[target.name] = target
-    return list(targets.values())
-
-
-def _object_is_ancestor(candidate, descendant):
-    parent = getattr(descendant, "parent", None)
-    while parent is not None:
-        if parent == candidate:
-            return True
-        parent = parent.parent
-    return False
-
-
-def _remove_source_constraint_empties(armature, targets):
-    """Remove baked source drivers without deleting unrelated scene objects."""
-
-    target_names = {target.name for target in targets if target is not None}
-    protected_names = set(OBJECT_NAMES.values())
-    removable = []
-    skipped = []
-    for target in targets:
-        if target is None or target.name not in bpy.data.objects:
-            continue
-        reason = ""
-        if target.name in protected_names or bool(target.get("mcd_annotation_helper")):
-            reason = "protected_object"
-        elif getattr(target, "library", None) is not None:
-            reason = "linked_library_object"
-        elif _object_is_ancestor(target, armature):
-            reason = "armature_ancestor"
-        elif any(child.name not in target_names for child in target.children):
-            reason = "has_unrelated_children"
-        if reason:
-            skipped.append({"name": target.name, "reason": reason})
-        else:
-            removable.append(target)
-
-    def hierarchy_depth(obj):
-        depth = 0
-        parent = obj.parent
-        while parent is not None:
-            depth += 1
-            parent = parent.parent
-        return depth
-
-    removed = []
-    for target in sorted(removable, key=hierarchy_depth, reverse=True):
-        name = target.name
-        bpy.data.objects.remove(target, do_unlink=True)
-        removed.append(name)
-    return {"removed": removed, "skipped": skipped}
 
 
 def _validate_correction_transform(correction):
@@ -1010,12 +951,93 @@ def _require_no_keyed_vmd_name_collisions(armature, action):
     return collisions
 
 
+def _source_maps(settings, armature):
+    """Source bone maps for the frontend that produced this armature."""
+
+    maps = resolve_source_profile(
+        armature, getattr(settings, "source_profile", SOURCE_PROFILE_AUTO)
+    )
+    if maps is None:
+        raise RuntimeError(
+            "无法识别源骨架：既不是 FreeMoCap 骨架，也没有 GVHMR 的 f_avg/m_avg 骨骼。"
+            "请在上一步确认源骨架对象，或在项目设置中选择源数据来源。"
+        )
+    missing = profile_is_available(maps, armature)
+    if missing:
+        preview = "、".join(missing[:6])
+        raise RuntimeError(
+            f"源骨架缺少 {maps['profile']} 结构所需的骨骼：{preview}"
+            + ("等" if len(missing) > 6 else "")
+        )
+    return maps
+
+
+def _run_source_check(context, settings):
+    """Validate the imported source animation; replaces the FreeMoCap bake step."""
+
+    scene = context.scene
+    _require_restore_before_rerun(scene, "source_check")
+    armature = _require_object(
+        settings, "source_armature", "ARMATURE", OBJECT_NAMES["source_armature"]
+    )
+    action = _require_action(armature, "源骨架")
+    maps = _source_maps(settings, armature)
+
+    fps = int(scene.render.fps)
+    if fps != EXPECTED_FPS:
+        raise RuntimeError(f"项目要求 {EXPECTED_FPS} fps，当前场景为 {fps} fps")
+
+    frame_start, frame_end = int(settings.mocap_frame_start), int(settings.mocap_frame_end)
+    if frame_end <= frame_start:
+        raise RuntimeError("动捕范围无效：结束帧必须大于开始帧")
+    start, end = (float(action.frame_range[0]), float(action.frame_range[1]))
+    if start > frame_start or end < frame_end:
+        raise RuntimeError(
+            f"源动作只覆盖 {int(start)}-{int(end)} 帧，动捕范围 {frame_start}-{frame_end} "
+            "超出该区间；请调整范围或重新导入"
+        )
+
+    bones = list(dict.fromkeys(maps["bones"].values()))
+    missing_channels = [
+        name for name in bones if not _bone_has_range_keys(action, name, frame_start, frame_end)
+    ]
+    if missing_channels:
+        raise RuntimeError(
+            "源动作缺少覆盖动捕范围的骨骼曲线：" + "、".join(missing_channels[:6])
+        )
+
+    report = {
+        "operation": "validate_source_import",
+        "profile": maps["profile"],
+        "prefix": maps.get("prefix", ""),
+        "armature": armature.name,
+        "action": action.name,
+        "action_range": [int(start), int(end)],
+        "mocap_range": [frame_start, frame_end],
+        "fps": fps,
+        "checked_bones": bones,
+    }
+    path = _record_report(
+        scene,
+        "source_check",
+        report,
+        "ACCEPTED",
+        f"源数据校验通过（{maps['profile']}，{frame_start}-{frame_end} 帧）",
+        {"source_profile": maps["profile"]},
+    )
+    settings.current_step = STEP_INDEX["source_analyze"]
+    settings.status_message = "源数据校验通过"
+    project.create_accepted_checkpoint(scene, "source_check", "源数据校验通过")
+    return f"源数据校验通过：{path.name}"
+
+
 def _run_source_analyze(context, settings):
     scene = context.scene
     _require_restore_before_rerun(scene, "source_analyze")
     armature = _require_object(
         settings, "source_armature", "ARMATURE", OBJECT_NAMES["source_armature"]
     )
+    maps = _source_maps(settings, armature)
     thresholds = {
         "foot_contact_height_m": settings.source_diagnostic_contact_height,
         "foot_slide_speed_m_per_frame": settings.source_foot_slide_speed,
@@ -1026,6 +1048,7 @@ def _run_source_analyze(context, settings):
     report = core_source.analyze_source_motion(
         scene,
         armature,
+        bones=maps["bones"],
         thresholds=thresholds,
         frame_start=settings.mocap_frame_start,
         frame_end=settings.mocap_frame_end,
@@ -1034,9 +1057,9 @@ def _run_source_analyze(context, settings):
     for issue in report.get("issues", ()):
         if issue.get("type") != "hand_jump":
             continue
-        if issue.get("bone") == SOURCE_BONES["left_hand"]:
+        if issue.get("bone") == maps["bones"]["left_hand"]:
             hints["L"].extend(issue.get("frames", ()))
-        elif issue.get("bone") == SOURCE_BONES["right_hand"]:
+        elif issue.get("bone") == maps["bones"]["right_hand"]:
             hints["R"].extend(issue.get("frames", ()))
     scene["mcd_hand_l_manual_initialized"] = False
     scene["mcd_hand_r_manual_initialized"] = False
@@ -1074,12 +1097,13 @@ def _run_hand_repair(context, settings):
     if scene.mcd_annotation_mode and settings.annotation_step_id == "hand_ranges":
         annotation.commit_track_reassignments(scene, rebuild=False)
     armature = _require_object(settings, "source_armature", "ARMATURE")
-    _require_action(armature, "FreeMoCap 源骨架")
+    _require_action(armature, "源骨架")
+    maps = _source_maps(settings, armature)
     ranges = {
-        SOURCE_BONES["left_hand"]: annotation.get_channel_ranges(
+        maps["bones"]["left_hand"]: annotation.get_channel_ranges(
             scene, annotation.CHANNEL_HAND_L_MANUAL
         ),
-        SOURCE_BONES["right_hand"]: annotation.get_channel_ranges(
+        maps["bones"]["right_hand"]: annotation.get_channel_ranges(
             scene, annotation.CHANNEL_HAND_R_MANUAL
         ),
     }
@@ -1092,6 +1116,7 @@ def _run_hand_repair(context, settings):
         armature,
         action,
         ranges,
+        arm_chains=_source_maps(settings, armature)["arm_chains"],
         frame_start=settings.mocap_frame_start,
         frame_end=settings.mocap_frame_end,
     )
@@ -1105,14 +1130,21 @@ def _run_smooth(context, settings):
     scene = context.scene
     _require_restore_before_rerun(scene, "smooth")
     armature = _require_object(settings, "source_armature", "ARMATURE")
-    _require_action(armature, "FreeMoCap 源骨架")
+    _require_action(armature, "源骨架")
     _ensure_no_pending_preview(settings, "smooth")
     action = project.begin_action_preview(scene, armature, "smooth")
+    maps = _source_maps(settings, armature)
     params = {
         "radius": settings.smooth_radius,
         "strength": settings.smooth_strength,
         "include_hands": settings.smooth_include_hands,
     }
+    smooth_kwargs = {}
+    if maps["smooth_bones"] is not None:
+        smooth_kwargs["bone_names"] = maps["smooth_bones"]
+        smooth_kwargs["hand_bones"] = tuple(
+            name for chain in maps["arm_chains"].values() for name in chain[1:]
+        )
     result = core_source.mild_rotation_smooth(
         scene,
         armature,
@@ -1120,6 +1152,7 @@ def _run_smooth(context, settings):
         frame_start=settings.mocap_frame_start,
         frame_end=settings.mocap_frame_end,
         **params,
+        **smooth_kwargs,
     )
     _record_report(scene, "smooth", result, "PREVIEW", "旋转平滑预览等待检查", params)
     return f"已平滑 {result.get('changed_bone_count', len(result.get('changed_bones', ())))} 根骨骼"
@@ -1129,7 +1162,7 @@ def _run_source_floor(context, settings):
     scene = context.scene
     _require_restore_before_rerun(scene, "source_floor")
     armature = _require_object(settings, "source_armature", "ARMATURE")
-    _require_action(armature, "FreeMoCap 源骨架")
+    _require_action(armature, "源骨架")
     _ensure_no_pending_preview(settings, "source_floor")
     action = project.begin_action_preview(scene, armature, "source_floor")
     params = {
@@ -1141,6 +1174,10 @@ def _run_source_floor(context, settings):
         "smooth_radius": settings.source_floor_smooth_radius,
         "max_correction_delta_per_frame": settings.source_floor_max_delta,
     }
+    floor_kwargs = {}
+    contact_points = _source_maps(settings, armature)["contact_points"]
+    if contact_points is not None:
+        floor_kwargs["contact_points"] = contact_points
     result = core_source.repair_source_pelvis_floor_v2(
         scene,
         armature,
@@ -1148,6 +1185,7 @@ def _run_source_floor(context, settings):
         frame_start=settings.mocap_frame_start,
         frame_end=settings.mocap_frame_end,
         **params,
+        **floor_kwargs,
     )
     _record_report(scene, "source_floor", result, "PREVIEW", "源骨架穿地修复等待检查", params)
     return f"源地面修复影响 {result.get('changed_frames', 0)} 帧"
@@ -1169,12 +1207,17 @@ def _run_contacts(context, settings):
         "max_anchor_drift": settings.contact_anchor_drift,
         "penetration_tolerance": settings.contact_penetration_tolerance,
     }
+    contacts_kwargs = {}
+    foot_points = _source_maps(settings, armature)["foot_points"]
+    if foot_points is not None:
+        contacts_kwargs["foot_points"] = foot_points
     report = core_contacts.detect_contacts_v2(
         scene,
         armature,
         frame_start=settings.mocap_frame_start,
         frame_end=settings.mocap_frame_end,
         **params,
+        **contacts_kwargs,
     )
     for side in ("L", "R"):
         raw = report["feet"][side]["raw"]["planted_segments"]
@@ -1416,6 +1459,7 @@ def _run_export_prep(context, settings):
 
 
 RUN_STEP_HANDLERS = {
+    "source_check": _run_source_check,
     "source_analyze": _run_source_analyze,
     "hand_repair": _run_hand_repair,
     "smooth": _run_smooth,
@@ -1767,95 +1811,6 @@ class MD_OT_RestoreLastCheckpoint(Operator):
         except Exception as exc:
             self.report({"ERROR"}, str(exc))
             return {"CANCELLED"}
-
-
-class MD_OT_SourceBake(Operator):
-    bl_idname = "mocap_doctor.source_bake"
-    bl_label = "运行源骨架 Bake 预览"
-    bl_description = "按固定安全参数将 FreeMoCap 约束烘到源骨架"
-
-    def execute(self, context):
-        settings = _settings(context)
-        try:
-            _require_project(context)
-            _ensure_no_pending_preview(settings, "source_bake")
-            armature = _require_object(
-                settings, "source_armature", "ARMATURE", OBJECT_NAMES["source_armature"]
-            )
-            required_bones = set(SOURCE_BONES.values()) | {
-                "shoulder.L",
-                "upper_arm.L",
-                "forearm.L",
-                "shoulder.R",
-                "upper_arm.R",
-                "forearm.R",
-            }
-            missing = sorted(name for name in required_bones if name not in armature.pose.bones)
-            if missing:
-                raise RuntimeError("FreeMoCap 源骨架结构不匹配：" + ", ".join(missing))
-            constraint_count = sum(len(bone.constraints) for bone in armature.pose.bones)
-            if constraint_count == 0:
-                raise RuntimeError("源骨架没有可 Bake 的 Pose 约束；若已 Bake 请进入下一步")
-            source_driver_empties = _source_constraint_empty_targets(armature)
-            before = _begin_structure_preview(context.scene, "source_bake")
-            settings.busy = True
-            settings.status_message = "正在 Bake；Blender 可能暂时无响应"
-            with _active_armature(context, armature, pose=True):
-                result = bpy.ops.nla.bake(
-                    frame_start=settings.mocap_frame_start,
-                    frame_end=settings.mocap_frame_end,
-                    step=1,
-                    only_selected=False,
-                    visual_keying=True,
-                    clear_constraints=True,
-                    clear_parents=False,
-                    use_current_action=True,
-                    clean_curves=False,
-                    bake_types={"POSE"},
-                )
-            if "FINISHED" not in result:
-                raise RuntimeError("Blender Bake 没有成功完成")
-            if not armature.animation_data or not armature.animation_data.action:
-                raise RuntimeError("Bake 后源骨架仍没有 Action")
-            baked_action = armature.animation_data.action
-            missing_curves = [
-                name
-                for name in (SOURCE_BONES["pelvis"], SOURCE_BONES["left_hand"], SOURCE_BONES["right_hand"])
-                if not _bone_has_range_keys(
-                    baked_action,
-                    name,
-                    settings.mocap_frame_start,
-                    settings.mocap_frame_end,
-                )
-            ]
-            if missing_curves:
-                raise RuntimeError("源 Bake 输出缺少覆盖起止帧的骨骼曲线：" + ", ".join(missing_curves))
-            remaining_constraints = [
-                f"{bone.name}:{constraint.name}"
-                for bone in armature.pose.bones
-                for constraint in bone.constraints
-            ]
-            if remaining_constraints:
-                preview = "、".join(remaining_constraints[:8])
-                raise RuntimeError("源 Bake 后仍有 Pose 约束，已拒绝清理牵引物体：" + preview)
-
-            cleanup = _remove_source_constraint_empties(armature, source_driver_empties)
-            removed_count = len(cleanup["removed"])
-            skipped_count = len(cleanup["skipped"])
-            message = f"Bake 完成并删除 {removed_count} 个牵引 Empty"
-            if skipped_count:
-                message += f"；{skipped_count} 个因安全检查保留"
-            project.record_step(context.scene, "source_bake", "PREVIEW", message + "；请播放检查", str(before))
-            settings.status_message = message + "，等待检查"
-            return {"FINISHED"}
-        except Exception as exc:
-            settings.status_message = str(exc)
-            if settings.preview_step_id == "source_bake":
-                project.record_step(context.scene, "source_bake", "FAILED", str(exc))
-            self.report({"ERROR"}, str(exc))
-            return {"CANCELLED"}
-        finally:
-            settings.busy = False
 
 
 class MD_OT_EnterAnnotationMode(Operator):
@@ -2697,7 +2652,6 @@ CLASSES = (
     MD_OT_ReviseHandRanges,
     MD_OT_CreateCheckpoint,
     MD_OT_RestoreLastCheckpoint,
-    MD_OT_SourceBake,
     MD_OT_EnterAnnotationMode,
     MD_OT_ExitAnnotationMode,
     MD_OT_ResetEffectiveContacts,
