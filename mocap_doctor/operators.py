@@ -309,6 +309,37 @@ def _require_no_nla(owner, label):
         raise RuntimeError(f"{label} 存在 NLA Track；请先合并或移除，避免与活动 Action 叠加")
 
 
+def _resolve_correction_empty(settings):
+    """The outer correction Empty, or ``None`` when 全局扶正 was never run.
+
+    The Empty is created by the "Teto 全局扶正" step and carries its hand tuned
+    tilt.  A gravity aligned source (the GVHMR front end) needs no such tilt, so
+    skipping that step is a legitimate route: nothing then owns a world level
+    transform, and export_prep has nothing to bake into 全ての親.
+    """
+
+    correction = getattr(settings, "correction_empty", None)
+    if correction is not None:
+        return correction
+    return bpy.data.objects.get(OBJECT_NAMES["correction_empty"])
+
+
+def _ensure_correction_empty(settings, model_root, rig):
+    """Find the correction Empty, creating and adopting it when absent."""
+
+    correction = _resolve_correction_empty(settings)
+    if correction is not None:
+        return correction, False
+    correction = core_target.ensure_global_correction_empty(
+        OBJECT_NAMES["correction_empty"], collection=bpy.context.scene.collection
+    )
+    settings.correction_empty = correction
+    core_target.apply_global_correction(
+        model_root, rig, correction, rotation_degrees=(0.0, 0.0, 0.0)
+    )
+    return correction, True
+
+
 def _validate_correction_transform(correction):
     if correction.parent is not None:
         raise RuntimeError("全局校正 Empty 必须是顶层对象")
@@ -1330,11 +1361,12 @@ def _run_target_floor(context, settings):
     model_root = _require_object(
         settings, "model_root", "EMPTY", OBJECT_NAMES["model_root"]
     )
-    correction = _require_object(
-        settings, "correction_empty", "EMPTY", OBJECT_NAMES["correction_empty"]
+    rig = _require_object(settings, "mmr_rig", "ARMATURE", OBJECT_NAMES["mmr_rig"])
+    _ensure_no_pending_preview(settings, "target_floor")
+    correction, created_correction = _ensure_correction_empty(
+        settings, model_root, rig
     )
     _validate_correction_transform(correction)
-    _ensure_no_pending_preview(settings, "target_floor")
     action = project.begin_action_preview(scene, correction, "target_floor")
     params = {
         "floor_z": settings.target_floor_z,
@@ -1357,8 +1389,12 @@ def _run_target_floor(context, settings):
         frame_end=settings.mocap_frame_end,
         **params,
     )
+    result["created_correction_empty"] = created_correction
     _record_report(scene, "target_floor", result, "PREVIEW", "Teto Mesh 穿地修复等待检查", params)
-    return f"Mesh 地面修复影响 {result.get('changed_frames', 0)} 帧"
+    message = f"Mesh 地面修复影响 {result.get('changed_frames', 0)} 帧"
+    if created_correction:
+        message += "；已补建全局校正 Empty（未扶正）"
+    return message
 
 
 def _run_foot_lock(context, settings):
@@ -1412,12 +1448,11 @@ def _run_export_prep(context, settings):
         raise RuntimeError("请先确认 MMR 手部导出清理提醒，再生成 VMD 导出预览")
     _require_restore_before_rerun(scene, "export_prep")
     model_root, armature, rig, foot_ik = _validate_mmd_identity(settings)
-    correction = _require_object(
-        settings, "correction_empty", "EMPTY", OBJECT_NAMES["correction_empty"]
-    )
-    if model_root.parent != correction or rig.parent != correction:
-        raise RuntimeError("Teto MMD Root 与 MMR Rig 必须共同位于全局校正 Empty 下")
-    _validate_correction_transform(correction)
+    correction = _resolve_correction_empty(settings)
+    if correction is not None:
+        if model_root.parent != correction or rig.parent != correction:
+            raise RuntimeError("Teto MMD Root 与 MMR Rig 必须共同位于全局校正 Empty 下")
+        _validate_correction_transform(correction)
     if _active_mmr_constraints(armature, rig):
         raise RuntimeError("仍有活动的 MMR 到 MMD 约束；请先完成并接受 MMD Bake")
     action = _require_action(armature, "原生 MMD Armature")
@@ -1429,16 +1464,27 @@ def _run_export_prep(context, settings):
         settings.mocap_frame_end,
     )
     _begin_structure_preview(scene, "export_prep")
-    baked = core_export.bake_global_correction_to_all_parent(
-        scene,
-        armature,
-        correction,
-        action=action,
-        bone_name=MMD_ROOT_BONE,
-        frame_start=settings.mocap_frame_start,
-        frame_end=settings.mocap_frame_end,
-        reset_correction=True,
-    )
+    if correction is None:
+        # 全局扶正没执行（GVHMR 源本身已对齐重力）：没有外层世界变换要搬到根骨骼，
+        # 直接跳过根补偿烘焙。
+        baked = {
+            "operation": "bake_global_correction_to_all_parent",
+            "skipped": True,
+            "reason": "没有全局校正 Empty（“Teto 全局扶正”未执行）",
+            "frames_keyed": 0,
+            "values_written": 0,
+        }
+    else:
+        baked = core_export.bake_global_correction_to_all_parent(
+            scene,
+            armature,
+            correction,
+            action=action,
+            bone_name=MMD_ROOT_BONE,
+            frame_start=settings.mocap_frame_start,
+            frame_end=settings.mocap_frame_end,
+            reset_correction=True,
+        )
     delete_leg_fk, leg_reason = _leg_fk_cleanup_plan(armature, foot_ik)
     if delete_leg_fk:
         cleaned = core_export.remove_teto_leg_fk_curves(
@@ -1473,7 +1519,7 @@ def _run_export_prep(context, settings):
         foot_ik,
         settings.mocap_frame_start,
         settings.mocap_frame_end,
-        require_clean_fk=True,
+        require_clean_fk=delete_leg_fk,
     )
     report = {
         "operation": "prepare_teto_vmd_export",
@@ -1491,10 +1537,13 @@ def _run_export_prep(context, settings):
         "VMD 导出准备等待隐藏 MMR 检查",
         {"vmd_floor_offset": settings.vmd_floor_offset},
     )
-    return (
+    message = (
         f"导出预览已生成，删除 {cleaned['removed_fcurve_count']} 条腿 FK 曲线、"
         f"{hand_export_cleanup['removed_helper_fcurve_count']} 条手 IK 辅助曲线"
     )
+    if correction is None:
+        message += "；未执行全局扶正，已跳过根补偿烘焙"
+    return message
 
 
 RUN_STEP_HANDLERS = {
@@ -2502,12 +2551,13 @@ class MD_OT_ExportVMD(Operator):
                 raise RuntimeError("仍有活动的 MMR 到 MMD 约束，不能导出")
             action = _require_action(armature, "原生 MMD Armature")
             _require_no_nla(armature, "原生 MMD Armature")
+            delete_leg_fk, _leg_reason = _leg_fk_cleanup_plan(armature, foot_ik)
             _validate_mmd_action(
                 action,
                 foot_ik,
                 settings.mocap_frame_start,
                 settings.mocap_frame_end,
-                require_clean_fk=True,
+                require_clean_fk=delete_leg_fk,
             )
             _require_no_keyed_vmd_name_collisions(armature, action)
             raw_path = str(settings.vmd_export_path or "").strip()
