@@ -511,6 +511,34 @@ def _validate_mmd_action(
     return remaining_fk
 
 
+def _leg_fk_cleanup_plan(armature, foot_ik):
+    """Should the six leg FK curves be deleted, and why?
+
+    Only when MMD's own leg IK actually drives the legs - the classic MMD
+    workflow, where the FK curves are redundant and would double-solve against
+    the IK.  PoseCapture's retarget instead binds the legs with
+    COPY_TRANSFORMS onto the FK bones and leaves the native IK at influence 0
+    (the IK/FK slider sits near FK), so there the FK curves ARE the animation:
+    deleting them freezes the legs at rest.
+    """
+
+    for side in ("L", "R"):
+        knee = armature.pose.bones.get(f"ひざ.{side}")
+        if knee is None:
+            return True, "缺少ひざ骨骼，按传统 IK 路径处理"
+        active = any(
+            constraint.type == 'IK'
+            and getattr(constraint, "subtarget", "") == foot_ik[side]
+            and not constraint.mute
+            and float(constraint.influence) > 0.0
+            for constraint in knee.constraints
+        )
+        if not active:
+            return False, f"ひざ.{side} 的 MMD 原生 IK 未启用（腿由 FK 曲线驱动）"
+    return True, "MMD 原生腿 IK 驱动中"
+
+
+
 def _active_mmr_constraints(armature, rig):
     return [
         constraint
@@ -1411,9 +1439,18 @@ def _run_export_prep(context, settings):
         frame_end=settings.mocap_frame_end,
         reset_correction=True,
     )
-    cleaned = core_export.remove_teto_leg_fk_curves(
-        action, bone_names=MMD_LEG_FK_BONES
-    )
+    delete_leg_fk, leg_reason = _leg_fk_cleanup_plan(armature, foot_ik)
+    if delete_leg_fk:
+        cleaned = core_export.remove_teto_leg_fk_curves(
+            action, bone_names=MMD_LEG_FK_BONES
+        )
+    else:
+        cleaned = {
+            "operation": "remove_teto_leg_fk_curves",
+            "skipped": True,
+            "reason": leg_reason,
+            "removed_fcurve_count": 0,
+        }
     hand_export_cleanup = _prepare_teto_mmr_hand_export_cleanup(
         scene,
         armature,
@@ -1971,14 +2008,15 @@ class MD_OT_MMDBake(Operator):
                 settings.mocap_frame_end,
                 expected_bones=set(selected_names) | set(MMD_ARM_FK_BONES),
             )
-            removed = remove_bone_fcurves(action, MMD_LEG_FK_BONES)
+            delete_leg_fk, leg_reason = _leg_fk_cleanup_plan(armature, foot_ik)
+            removed = remove_bone_fcurves(action, MMD_LEG_FK_BONES) if delete_leg_fk else []
             _validate_mmd_action(
                 action,
                 foot_ik,
                 settings.mocap_frame_start,
                 settings.mocap_frame_end,
                 expected_bones=(set(selected_names) - set(MMD_LEG_FK_BONES)) | set(MMD_ARM_FK_BONES),
-                require_clean_fk=True,
+                require_clean_fk=delete_leg_fk,
             )
             muted_count = _mute_mmr_constraints(armature, rig)
             if muted_count == 0:
@@ -1987,10 +2025,10 @@ class MD_OT_MMDBake(Operator):
                 context.scene,
                 "mmd_bake",
                 "PREVIEW",
-                f"Bake 完成、禁用 {muted_count} 个 MMR 约束并删除 {len(removed)} 条腿 FK 曲线",
+                f"Bake 完成、禁用 {muted_count} 个 MMR 约束；{leg_reason}；删除 {len(removed)} 条腿 FK 曲线",
                 str(before),
             )
-            settings.status_message = f"MMD Bake 预览完成，已删 {len(removed)} 条腿 FK 曲线"
+            settings.status_message = f"MMD Bake 预览完成；{leg_reason}；已删 {len(removed)} 条腿 FK 曲线"
             return {"FINISHED"}
         except Exception as exc:
             settings.status_message = str(exc)
@@ -2275,7 +2313,8 @@ class MD_OT_ValidateManualMMDBake(Operator):
             _ensure_no_pending_preview(settings, "mmd_bake")
             _begin_structure_preview(context.scene, "mmd_bake")
             action = source_action
-            removed = remove_bone_fcurves(action, MMD_LEG_FK_BONES)
+            delete_leg_fk, leg_reason = _leg_fk_cleanup_plan(armature, foot_ik)
+            removed = remove_bone_fcurves(action, MMD_LEG_FK_BONES) if delete_leg_fk else []
             muted_count = _mute_mmr_constraints(armature, rig)
             _validate_mmd_action(
                 action,
@@ -2283,13 +2322,14 @@ class MD_OT_ValidateManualMMDBake(Operator):
                 settings.mocap_frame_start,
                 settings.mocap_frame_end,
                 expected_bones=(set(driven_bones) - set(MMD_LEG_FK_BONES)) | set(MMD_ARM_FK_BONES),
-                require_clean_fk=True,
+                require_clean_fk=delete_leg_fk,
             )
             report = {
                 "operation": "validate_manual_mmd_bake",
                 "action": action.name,
                 "validated_bones": [MMD_ROOT_BONE, foot_ik["L"], foot_ik["R"], *MMD_ARM_FK_BONES],
                 "removed_leg_fk_fcurves": len(removed),
+                "leg_drive": leg_reason,
                 "muted_mmr_constraints": muted_count,
                 "constraint_mapping_present": bool(_mmr_driven_bone_names(armature, rig)),
             }
@@ -2298,7 +2338,8 @@ class MD_OT_ValidateManualMMDBake(Operator):
                 "mmd_bake",
                 report,
                 "PREVIEW",
-                "手工 Bake 已验证并清理腿 FK，MMR→MMD 约束已禁用；请隐藏 MMR Rig 检查",
+                f"手工 Bake 已验证（{leg_reason}）；删除 {len(removed)} 条腿 FK 曲线，"
+                "MMR→MMD 约束已禁用；请隐藏 MMR Rig 检查",
             )
             settings.status_message = "手工 MMD Bake 验证通过；MMR→MMD 约束已禁用，等待检查"
             return {"FINISHED"}
@@ -2332,6 +2373,9 @@ class MD_OT_CleanupLegFK(Operator):
             _ensure_no_pending_preview(settings, "mmd_bake")
             _begin_structure_preview(context.scene, "mmd_bake")
             action = source_action
+            delete_leg_fk, leg_reason = _leg_fk_cleanup_plan(armature, foot_ik)
+            if not delete_leg_fk:
+                raise RuntimeError("不能删除腿 FK 曲线：" + leg_reason + "；删除会让腿失去动画")
             removed = remove_bone_fcurves(action, MMD_LEG_FK_BONES)
             _mute_mmr_constraints(armature, rig)
             _validate_mmd_action(
