@@ -2641,7 +2641,15 @@ class MD_OT_ExportVMD(Operator):
             if not raw_path:
                 raise RuntimeError("请先指定 VMD 文件保存位置")
             filepath = Path(bpy.path.abspath(raw_path))
-            if filepath.suffix.lower() != ".vmd":
+            if filepath.is_dir():
+                # The field takes a file name, but picking a folder is the
+                # natural mistake; name the file after the work file instead
+                # of failing or writing "<folder>.vmd" next to it.
+                stem = Path(bpy.data.filepath).stem if bpy.data.filepath else "mocap"
+                filepath = filepath / f"{stem}.vmd"
+            elif not filepath.name:
+                raise RuntimeError(f"请在保存位置里写上文件名（例如 {raw_path}我的动作.vmd）")
+            elif filepath.suffix.lower() != ".vmd":
                 filepath = filepath.with_suffix(".vmd")
             if not filepath.parent.is_dir():
                 raise RuntimeError(f"VMD 保存目录不存在：{filepath.parent}")
