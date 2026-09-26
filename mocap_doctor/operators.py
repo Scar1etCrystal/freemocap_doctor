@@ -39,6 +39,7 @@ from .presets import (
     profile_is_available,
     resolve_mmd_foot_ik,
     resolve_mmd_hand_bones,
+    resolve_mmd_toe_ik,
     resolve_source_profile,
 )
 from .workflow import STEPS, STEP_INDEX, clamp_step, step_at
@@ -308,6 +309,15 @@ def _require_no_nla(owner, label):
     animation_data = getattr(owner, "animation_data", None)
     if animation_data and len(animation_data.nla_tracks) > 0:
         raise RuntimeError(f"{label} 存在 NLA Track；请先合并或移除，避免与活动 Action 叠加")
+
+
+def _leg_ik_toggle_targets(armature, foot_ik):
+    """The native MMD leg IK bones an FK driven leg needs switched off."""
+
+    names = [foot_ik.get("L"), foot_ik.get("R")]
+    for side in ("L", "R"):
+        names.append(resolve_mmd_toe_ik(armature, side))
+    return [name for name in names if name]
 
 
 def _resolve_correction_empty(settings):
@@ -1567,6 +1577,11 @@ def _run_export_prep(context, settings):
         cleaned = core_export.remove_teto_leg_fk_curves(
             action, bone_names=MMD_LEG_FK_BONES
         )
+        leg_ik = {
+            "operation": "key_ik_toggle_state",
+            "skipped": True,
+            "reason": "腿由 MMD 原生 IK 驱动，VMD 必须保持足ＩＫ开启",
+        }
     else:
         cleaned = {
             "operation": "remove_teto_leg_fk_curves",
@@ -1574,6 +1589,17 @@ def _run_export_prep(context, settings):
             "reason": leg_reason,
             "removed_fcurve_count": 0,
         }
+        # The legs travel on FK curves, so the receiving model has to leave its
+        # own 足ＩＫ / つま先ＩＫ alone; say so inside the VMD instead of asking
+        # the user to find the toggle in every player.
+        leg_ik = core_export.key_ik_toggle_state(
+            armature,
+            action,
+            _leg_ik_toggle_targets(armature, foot_ik),
+            enabled=False,
+            frame_start=settings.mocap_frame_start,
+            frame_end=settings.mocap_frame_end,
+        )
     hand_export_cleanup = _prepare_teto_mmr_hand_export_cleanup(
         scene,
         armature,
@@ -1602,6 +1628,7 @@ def _run_export_prep(context, settings):
         "operation": "prepare_teto_vmd_export",
         "global_correction_bake": baked,
         "leg_fk_cleanup": cleaned,
+        "leg_ik_toggle": leg_ik,
         "mmr_hand_export_cleanup": hand_export_cleanup,
         "floor_offset": offset,
         "validated_foot_ik": foot_ik,
@@ -1620,6 +1647,8 @@ def _run_export_prep(context, settings):
     )
     if correction is None:
         message += "；未执行全局扶正，已跳过根补偿烘焙"
+    if leg_ik.get("bones"):
+        message += "；已在 VMD 里关闭足ＩＫ / つま先ＩＫ"
     return message
 
 

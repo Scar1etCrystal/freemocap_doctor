@@ -203,6 +203,11 @@ MMD_FOOT_IK_NAME_CANDIDATES = {
     "L": ["足ＩＫ.L", "足IK.L", "左足ＩＫ", "左足IK"],
     "R": ["足ＩＫ.R", "足IK.R", "右足ＩＫ", "右足IK"],
 }
+MMD_TOE_IK_JAPANESE_NAMES = {"L": "左つま先ＩＫ", "R": "右つま先ＩＫ"}
+MMD_TOE_IK_NAME_CANDIDATES = {
+    "L": ["つま先ＩＫ.L", "つま先IK.L", "左つま先ＩＫ", "左つま先IK"],
+    "R": ["つま先ＩＫ.R", "つま先IK.R", "右つま先ＩＫ", "右つま先IK"],
+}
 
 MMR_COPY_CONSTRAINT_NAME = "MMR_复制变换"
 MMR_LEG_CONSTRAINTS = {
@@ -273,6 +278,18 @@ def resolve_mmd_foot_ik(armature, side):
     if name:
         return name
     for candidate in MMD_FOOT_IK_NAME_CANDIDATES[side]:
+        if candidate in armature.pose.bones:
+            return candidate
+    return None
+
+
+def resolve_mmd_toe_ik(armature, side):
+    """Resolve the つま先ＩＫ bone the same way as the foot IK target."""
+
+    name = find_mmd_bone_by_japanese_name(armature, MMD_TOE_IK_JAPANESE_NAMES[side])
+    if name:
+        return name
+    for candidate in MMD_TOE_IK_NAME_CANDIDATES[side]:
         if candidate in armature.pose.bones:
             return candidate
     return None

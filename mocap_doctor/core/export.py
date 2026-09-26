@@ -219,6 +219,43 @@ def summarize_bone_curves(
     }
 
 
+def key_ik_toggle_state(
+    armature: Any,
+    action: Any,
+    bone_names: Sequence[str],
+    *,
+    enabled: bool,
+    frame_start: int,
+    frame_end: int,
+) -> dict[str, Any]:
+    """Key ``mmd_ik_toggle`` so the exported VMD carries an IK ON/OFF state.
+
+    MMD and mmd_tools' own VMD importer both replay this section, so an FK
+    driven leg can switch the receiving model's native 足ＩＫ / つま先ＩＫ off
+    without anyone toggling the panel by hand.  The state is constant, so two
+    keys cover the window.
+    """
+
+    start, end = int(frame_start), int(frame_end)
+    keyed: dict[str, bool] = {}
+    for name in bone_names:
+        pose_bone = armature.pose.bones.get(name)
+        if pose_bone is None or not hasattr(pose_bone, "mmd_ik_toggle"):
+            continue
+        pose_bone.mmd_ik_toggle = bool(enabled)
+        for frame in (start, end):
+            pose_bone.keyframe_insert("mmd_ik_toggle", frame=frame, group=name)
+        keyed[str(name)] = bool(enabled)
+    if keyed:
+        update_action(action)
+    return {
+        "operation": "key_ik_toggle_state",
+        "enabled": bool(enabled),
+        "bones": keyed,
+        "frame_range": [start, end],
+    }
+
+
 def apply_vmd_floor_z_offset(
     scene: Any,
     armature: Any,
