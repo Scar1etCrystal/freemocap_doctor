@@ -14,6 +14,7 @@ from bpy_extras.io_utils import ExportHelper
 from . import project
 from . import annotation
 from . import planted_indicators
+from .core import animation as core_animation
 from .core import contacts as core_contacts
 from .core import fingers as core_fingers
 from .core import export as core_export
@@ -900,11 +901,73 @@ def _remove_mmr_hand_helper_constraints(armature, helper_names):
     return removed
 
 
-def _restore_teto_elbow_parents_and_remove_helpers(armature, helper_names):
-    """Restore Teto's arm hierarchy, then delete MMR's temporary hand bones."""
+_BONE_TRANSFORM_CHANNELS = {
+    "QUATERNION": ("location", "rotation_quaternion", "scale"),
+    "AXIS_ANGLE": ("location", "rotation_axis_angle", "scale"),
+}
+
+
+def _rekey_bone_world_pose(scene, armature, action, poses, frame_start, frame_end):
+    """Rewrite a bone's channels so its world pose survives a parent swap.
+
+    A pose bone stores a basis that is interpreted against its current parent,
+    so re-parenting re-interprets the whole bake.  Reassigning
+    ``pose_bone.matrix`` asks Blender for the basis that reproduces a given
+    armature-space pose under the *new* parent, which is exactly the value MMD
+    will need once it walks its own hierarchy.
+    """
+
+    view_layer = bpy.context.view_layer
+    view_layer.objects.active = armature
+    written = {}
+    for name, matrices in poses.items():
+        pose_bone = armature.pose.bones.get(name)
+        if pose_bone is None:
+            raise RuntimeError(f"准备重设关键帧的骨骼不存在：{name}")
+        channels = _BONE_TRANSFORM_CHANNELS.get(
+            pose_bone.rotation_mode, ("location", "rotation_euler", "scale")
+        )
+        for frame in range(int(frame_start), int(frame_end) + 1):
+            scene.frame_set(frame)
+            view_layer.update()
+            pose_bone.matrix = matrices[frame]
+            view_layer.update()
+            for channel in channels:
+                pose_bone.keyframe_insert(channel, frame=frame, group=name)
+        written[name] = int(frame_end) - int(frame_start) + 1
+    core_animation.update_action(action)
+    return written
+
+
+def _restore_teto_elbow_parents_and_remove_helpers(
+    scene, armature, action, helper_names, frame_start, frame_end
+):
+    """Restore Teto's arm hierarchy, then delete MMR's temporary hand bones.
+
+    MMR hangs ``ひじ`` directly off ``腕``; Teto itself routes it through the
+    ``腕捩`` twist bone.  ``腕捩`` carries a real pose of its own, so the swap
+    alone would swing the whole forearm - record the evaluated elbows first and
+    re-key them against the restored hierarchy afterwards.
+    """
 
     restored_parents = []
     deleted_helpers = []
+    poses = {}
+    elbow_names = list(MMD_ELBOW_BONES.values())
+    already_routed = all(
+        armature.pose.bones[name].parent is not None
+        and armature.pose.bones[name].parent.name == MMD_ARM_TWIST_BONES[side]
+        for side, name in MMD_ELBOW_BONES.items()
+        if name in armature.pose.bones
+    )
+    if not already_routed:
+        poses = _sample_pose_bone_matrices(
+            scene, armature, elbow_names, frame_start, frame_end
+        )
+        poses = {
+            name: {frame: bones[name] for frame, bones in poses.items()}
+            for name in elbow_names
+        }
     with _active_armature(bpy.context, armature, pose=False):
         bpy.ops.object.mode_set(mode="EDIT")
         edit_bones = armature.data.edit_bones
@@ -938,7 +1001,18 @@ def _restore_teto_elbow_parents_and_remove_helpers(armature, helper_names):
                 )
             edit_bones.remove(helper)
             deleted_helpers.append(helper_name)
-    return restored_parents, deleted_helpers
+    rekeyed = {}
+    if restored_parents and poses:
+        bpy.context.view_layer.update()
+        rekeyed = _rekey_bone_world_pose(
+            scene,
+            armature,
+            action,
+            poses,
+            frame_start,
+            frame_end,
+        )
+    return restored_parents, deleted_helpers, rekeyed
 
 
 def _prepare_teto_mmr_hand_export_cleanup(
@@ -971,8 +1045,10 @@ def _prepare_teto_mmr_hand_export_cleanup(
             helper_name: len(remove_bone_fcurves(action, [helper_name]))
             for helper_name in helper_names
         }
-        restored_parents, deleted_helpers = _restore_teto_elbow_parents_and_remove_helpers(
-            armature, helper_names
+        restored_parents, deleted_helpers, rekeyed = (
+            _restore_teto_elbow_parents_and_remove_helpers(
+                scene, armature, action, helper_names, frame_start, frame_end
+            )
         )
         bpy.context.view_layer.update()
         after = _sample_pose_bone_matrices(scene, armature, arm_names, frame_start, frame_end)
@@ -990,6 +1066,7 @@ def _prepare_teto_mmr_hand_export_cleanup(
         "operation": "prepare_teto_mmr_hand_export_cleanup",
         "arm_fk_bake": arm_bake,
         "restored_elbow_parents": restored_parents,
+        "rekeyed_elbow_frames": rekeyed,
         "deleted_hand_ik_helpers": deleted_helpers,
         "hand_ik_helper_not_present": absent_helpers,
         "removed_hand_helper_constraints": removed_constraints,
