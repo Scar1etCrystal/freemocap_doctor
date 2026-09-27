@@ -48,6 +48,108 @@ def _distance_xy(a: Sequence[float], b: Sequence[float]) -> float:
     return math.hypot(float(a[0]) - float(b[0]), float(a[1]) - float(b[1]))
 
 
+def _progress_reporter(total):
+    """Blender's own busy bar, when there is a UI to draw it in.
+
+    The sampling loop calls ``scene.frame_set`` once per frame, and in a UI
+    session that also redraws: on a heavy scene the step takes long enough to
+    look frozen even though it is only a few seconds of arithmetic.  Showing
+    progress is what actually fixes that, not shaving the arithmetic.
+    """
+
+    try:
+        import bpy
+
+        window_manager = getattr(bpy.context, "window_manager", None)
+        in_background = bool(getattr(bpy.app, "background", False))
+    except Exception:  # noqa: BLE001 - core modules stay importable outside Blender
+        window_manager, in_background = None, True
+    if window_manager is None or in_background:
+        return lambda done: None
+
+    window_manager.progress_begin(0, max(1, int(total)))
+
+    def report(done):
+        if done is None:
+            window_manager.progress_end()
+        else:
+            window_manager.progress_update(min(int(done), int(total)))
+
+    return report
+
+
+def _sample_points(armature, points):
+    """Lowest point, its source, and the average center for one side."""
+
+    locations: list[list[float]] = []
+    sources: list[str] = []
+    for bone_name, point in points:
+        location = pose_bone_point_world(armature, bone_name, point)
+        if location is None:
+            continue
+        locations.append([float(location.x), float(location.y), float(location.z)])
+        sources.append(f"{bone_name}:{point}")
+    if not locations:
+        return None
+    lowest_index = min(range(len(locations)), key=lambda index: locations[index][2])
+    count = len(locations)
+    return {
+        "lowest_z": locations[lowest_index][2],
+        "lowest_source": sources[lowest_index],
+        "avg_center": [
+            sum(item[axis] for item in locations) / count for axis in range(3)
+        ],
+        "point_count": count,
+    }
+
+
+def sample_feet(
+    scene: Any,
+    armature: Any,
+    *,
+    foot_points: Mapping[str, Sequence[tuple[str, str]]] = DEFAULT_FOOT_POINTS,
+    sides: Sequence[str] = ("L", "R"),
+    frame_start: int | None = None,
+    frame_end: int | None = None,
+) -> dict[str, dict[int, dict[str, Any] | None]]:
+    """Sample every requested side in ONE pass over the frame range.
+
+    ``set_scene_frame`` re-evaluates the whole scene (and redraws it in a UI
+    session), so sampling the second foot in a second pass doubles the wait for
+    nothing.
+    """
+
+    start, end = resolve_frame_range(scene, frame_start, frame_end)
+    prepared: dict[str, list[tuple[str, str]]] = {}
+    for side in sides:
+        if side not in ("L", "R"):
+            raise ValueError(f"unsupported foot side: {side!r}")
+        points = [
+            (bone_name, point)
+            for bone_name, point in foot_points[side]
+            if armature.pose.bones.get(bone_name) is not None
+        ]
+        if not points:
+            raise RuntimeError(f"no usable source foot points for side {side}")
+        prepared[side] = points
+
+    samples: dict[str, dict[int, dict[str, Any] | None]] = {
+        side: {} for side in prepared
+    }
+    view_layer = current_view_layer()
+    report = _progress_reporter(end - start + 1)
+    try:
+        with preserve_scene_frame(scene, view_layer):
+            for index, frame in enumerate(range(start, end + 1)):
+                set_scene_frame(scene, frame, view_layer)
+                for side, points in prepared.items():
+                    samples[side][frame] = _sample_points(armature, points)
+                report(index + 1)
+    finally:
+        report(None)
+    return samples
+
+
 def sample_foot_side(
     scene: Any,
     armature: Any,
@@ -59,49 +161,14 @@ def sample_foot_side(
 ) -> dict[int, dict[str, Any] | None]:
     """Sample the lowest point and average foot center for one side."""
 
-    if side not in ("L", "R"):
-        raise ValueError(f"unsupported foot side: {side!r}")
-    start, end = resolve_frame_range(scene, frame_start, frame_end)
-    points = [
-        (bone_name, point)
-        for bone_name, point in foot_points[side]
-        if armature.pose.bones.get(bone_name) is not None
-    ]
-    if not points:
-        raise RuntimeError(f"no usable source foot points for side {side}")
-
-    samples: dict[int, dict[str, Any] | None] = {}
-    view_layer = current_view_layer()
-    with preserve_scene_frame(scene, view_layer):
-        for frame in range(start, end + 1):
-            set_scene_frame(scene, frame, view_layer)
-            locations: list[list[float]] = []
-            sources: list[str] = []
-            for bone_name, point in points:
-                location = pose_bone_point_world(armature, bone_name, point)
-                if location is None:
-                    continue
-                locations.append(
-                    [float(location.x), float(location.y), float(location.z)]
-                )
-                sources.append(f"{bone_name}:{point}")
-            if not locations:
-                samples[frame] = None
-                continue
-            lowest_index = min(
-                range(len(locations)), key=lambda index: locations[index][2]
-            )
-            count = len(locations)
-            samples[frame] = {
-                "lowest_z": locations[lowest_index][2],
-                "lowest_source": sources[lowest_index],
-                "avg_center": [
-                    sum(item[axis] for item in locations) / count
-                    for axis in range(3)
-                ],
-                "point_count": count,
-            }
-    return samples
+    return sample_feet(
+        scene,
+        armature,
+        foot_points=foot_points,
+        sides=(side,),
+        frame_start=frame_start,
+        frame_end=frame_end,
+    )[side]
 
 
 def split_planted_by_anchor_drift(
@@ -394,15 +461,16 @@ def detect_contacts_v2(
 
     start, end = resolve_frame_range(scene, frame_start, frame_end)
     feet: dict[str, dict[str, Any]] = {}
+    # One pass for both feet: the frame loop is the whole cost.
+    sampled = sample_feet(
+        scene,
+        armature,
+        foot_points=foot_points,
+        frame_start=start,
+        frame_end=end,
+    )
     for side in ("L", "R"):
-        samples = sample_foot_side(
-            scene,
-            armature,
-            side,
-            foot_points=foot_points,
-            frame_start=start,
-            frame_end=end,
-        )
+        samples = sampled[side]
         raw = analyze_contact_samples(
             samples,
             start,
