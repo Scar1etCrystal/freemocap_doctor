@@ -2820,6 +2820,15 @@ class MD_OT_PrepareReceiverTemplate(Operator):
         if armature.animation_data:
             armature.animation_data.action = None
 
+        # mmd_tools' VMD importer starts the motion at the CURRENT frame
+        # (core/vmd/importer.py: frame = vmd_frame + scene.frame_current), so a
+        # template parked at frame 145 silently pushes the whole take there and
+        # holds a frozen pose over everything before it.  Park it at the start.
+        scene = context.scene
+        rewound = int(scene.frame_current) != 1 or int(scene.frame_start) != 1
+        scene.frame_start = 1
+        scene.frame_current = 1
+
         with _active_armature(context, armature, pose=False):
             bpy.ops.object.mode_set(mode="EDIT")
             edit_bones = armature.data.edit_bones
@@ -2843,6 +2852,8 @@ class MD_OT_PrepareReceiverTemplate(Operator):
             f"删除控制骨架 {rig_plan['rig_objects']}；"
             f"清理旧动作 {stale_actions}。请保存模板后再导入 VMD。"
         )
+        if rewound:
+            report += " 当前帧已归到 1（mmd_tools 从当前帧起放置导入的动作）。"
         if helper_plan["skipped"]:
             report += f" 注意：有子级的辅助骨骼已跳过 {helper_plan['skipped']}。"
         self.report({"INFO"}, report)
