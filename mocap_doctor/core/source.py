@@ -349,7 +349,39 @@ def mild_rotation_smooth(
     }
 
 
-def repair_source_pelvis_floor_v2(
+FLOOR_PERCENTILE = 0.05
+
+
+def _rolling_low_percentile(values, start, end, window, percentile=FLOOR_PERCENTILE):
+    """Low percentile of the nearby samples: the ground, not the current step.
+
+    A jump puts both feet up for a moment; the low percentile of a window wide
+    enough to contain it still reports the ground the dancer will land on.
+    """
+
+    flat = {frame: value for frame, value in values.items() if value is not None}
+    out: dict[int, float | None] = {}
+    for frame in range(start, end + 1):
+        nearby = sorted(
+            value for f, value in flat.items() if start <= f <= end and abs(f - frame) <= window
+        )
+        if not nearby:
+            out[frame] = None
+            continue
+        index = min(int(len(nearby) * percentile), len(nearby) - 1)
+        out[frame] = nearby[index]
+    # Frames with no usable sample fall back to the nearest estimate.
+    known = [f for f in range(start, end + 1) if out[f] is not None]
+    if not known:
+        return out
+    for frame in range(start, end + 1):
+        if out[frame] is None:
+            nearest = min(known, key=lambda f: abs(f - frame))
+            out[frame] = out[nearest]
+    return out
+
+
+def level_source_ground(
     scene: Any,
     armature: Any,
     action: Any,
@@ -361,18 +393,37 @@ def repair_source_pelvis_floor_v2(
     floor_z: float = 0.02,
     tolerance: float = 0.012,
     target_clearance: float = 0.004,
-    max_lift_per_frame: float = 0.08,
-    strength: float = 0.75,
+    max_lift_per_frame: float = 0.6,
+    strength: float = 1.0,
+    window: int = 30,
     smooth_radius: int = 2,
     max_correction_delta_per_frame: float = 0.018,
     worst_sample_limit: int = 100,
 ) -> dict[str, Any]:
-    """Raise source pelvis Z using foot head/tail lowest-point sampling."""
+    """Flatten the source's ground plane and put the feet back on it.
+
+    GVHMR's global trajectory drifts vertically.  On take 0001-1499 the pelvis
+    and the feet both climb about 0.4 m across the clip, so a fixed ``floor_z``
+    is only right at one end: past roughly frame 500 the feet float 4-17 cm up
+    and no frame can satisfy the contact height any more, which is why planted
+    detection silently stopped at frame 566 of 1499.
+
+    The ground is estimated from the feet themselves - a rolling low percentile
+    of the lowest contact point - and the whole body is moved so that estimate
+    lands on ``floor_z + target_clearance``.  The correction is signed, so it
+    lowers a floating body as well as raising a sunken one.
+    """
 
     start, end = resolve_frame_range(scene, frame_start, frame_end)
     root_pose_bone = armature.pose.bones.get(root_bone)
     if root_pose_bone is None:
         raise RuntimeError(f"source root bone not found: {root_bone}")
+    # Move the armature OBJECT, the way PoseCapture's anti-slide fix moves its
+    # root empty: a top level object's ``location`` is plain world metres, so
+    # there is no unit conversion and no connected-bone trap.  Writing the
+    # pelvis bone instead does nothing at all - the SMPL pelvis is connected to
+    # ``f_avg_root`` and Blender ignores the location channel of a connected
+    # bone, and the rig is imported at 0.01 scale besides.
 
     valid_points = [
         (bone_name, point)
@@ -390,11 +441,11 @@ def repair_source_pelvis_floor_v2(
     view_layer = current_view_layer()
     min_z_by_frame: dict[int, float | None] = {}
     source_by_frame: dict[int, str | None] = {}
-    root_z_from_pose: dict[int, float] = {}
+    original_location: dict[int, tuple[float, float, float]] = {}
     with preserve_scene_frame(scene, view_layer):
         for frame in range(start, end + 1):
             set_scene_frame(scene, frame, view_layer)
-            root_z_from_pose[frame] = float(root_pose_bone.location.z)
+            original_location[frame] = tuple(float(v) for v in armature.location)
             lowest_z: float | None = None
             lowest_source: str | None = None
             for bone_name, point in valid_points:
@@ -408,31 +459,33 @@ def repair_source_pelvis_floor_v2(
             min_z_by_frame[frame] = lowest_z
             source_by_frame[frame] = lowest_source
 
-    target_z = float(floor_z) + float(target_clearance)
-    raw_lift: dict[int, float] = {}
-    penetration_samples: list[dict[str, Any]] = []
+    floor_by_frame = _rolling_low_percentile(min_z_by_frame, start, end, int(window))
+    target = float(floor_z) + float(target_clearance)
+    raw: dict[int, float] = {}
+    samples: list[dict[str, Any]] = []
     for frame in range(start, end + 1):
-        minimum = min_z_by_frame[frame]
-        if minimum is None:
-            raw_lift[frame] = 0.0
+        ground = floor_by_frame[frame]
+        if ground is None:
+            raw[frame] = 0.0
             continue
-        penetration = target_z - minimum
-        if penetration > float(tolerance):
-            lift = min(penetration, float(max_lift_per_frame)) * float(strength)
-            raw_lift[frame] = lift
-            penetration_samples.append(
+        correction = target - float(ground)
+        if abs(correction) < float(tolerance):
+            correction = 0.0
+        elif abs(correction) > float(max_lift_per_frame):
+            correction = max_lift_per_frame * (1.0 if correction > 0 else -1.0)
+        correction *= float(strength)
+        raw[frame] = correction
+        if abs(correction) > EPSILON:
+            samples.append(
                 {
                     "frame": frame,
-                    "min_z": round(minimum, 6),
-                    "penetration": round(penetration, 6),
-                    "raw_lift": round(lift, 6),
+                    "floor_z": round(float(ground), 6),
+                    "correction": round(correction, 6),
                     "source": source_by_frame[frame],
                 }
             )
-        else:
-            raw_lift[frame] = 0.0
 
-    smoothed = smooth_frame_values(raw_lift, start, end, int(smooth_radius))
+    smoothed = smooth_frame_values(raw, start, end, int(smooth_radius))
     corrected = limit_frame_delta(
         smoothed,
         start,
@@ -440,54 +493,50 @@ def repair_source_pelvis_floor_v2(
         float(max_correction_delta_per_frame),
     )
 
-    data_path = bone_path(root_bone, "location")
-    z_curve = get_fcurve(action, data_path, 2)
-    original_z = (
-        cache_fcurve_values(z_curve, start, end)
-        if z_curve is not None
-        else root_z_from_pose
-    )
-    z_curve = ensure_fcurve(action, data_path, 2, group=root_bone)
-    cache = keyframe_map(z_curve)
+    # A basis location lives in the bone's own space, and the rig may be
+    # scaled: PoseCapture imports the SMPL skeleton at 0.01 with the pelvis
+    # bone's axes off the world axes, so one unit of ``location`` is 4.2 mm
+    # of world Z, not one metre.  Writing metres straight into that channel is
+    # why the old 穿地修复 step never moved anything on a GVHMR file.
+    data_path = "location"
+    curves = [ensure_fcurve(action, data_path, axis) for axis in range(3)]
+    caches = [keyframe_map(curve) for curve in curves]
     changed_frames = 0
-    max_lift = 0.0
+    max_correction = 0.0
     for frame in range(start, end + 1):
-        lift = float(corrected.get(frame, 0.0))
+        correction = float(corrected.get(frame, 0.0))
+        base = original_location[frame]
+        # World Z is the object's own Z: only that one axis moves.
         set_fcurve_value(
-            z_curve,
-            frame,
-            float(original_z[frame]) + lift,
-            cache=cache,
+            curves[2], frame, base[2] + correction, cache=caches[2]
         )
-        if abs(lift) > EPSILON:
+        if abs(correction) > EPSILON:
             changed_frames += 1
-            max_lift = max(max_lift, lift)
-    z_curve.update()
+            max_correction = max(max_correction, abs(correction))
+    for curve in curves:
+        curve.update()
+    update_action(action)
 
-    penetration_samples.sort(key=lambda item: item["penetration"], reverse=True)
+    ground_values = [v for v in floor_by_frame.values() if v is not None]
+    samples.sort(key=lambda item: abs(item["correction"]), reverse=True)
     return {
-        "operation": "repair_source_pelvis_floor_v2",
+        "operation": "level_source_ground",
         "frame_range": [start, end],
         "root_bone": root_bone,
-        "valid_contact_points": [list(item) for item in valid_points],
-        "missing_contact_points": missing_points,
-        "params": {
-            "floor_z": float(floor_z),
-            "tolerance": float(tolerance),
-            "target_clearance": float(target_clearance),
-            "max_lift_per_frame": float(max_lift_per_frame),
-            "strength": float(strength),
-            "smooth_radius": int(smooth_radius),
-            "max_correction_delta_per_frame": float(
-                max_correction_delta_per_frame
-            ),
-        },
+        "floor_z": float(floor_z),
+        "target_clearance": float(target_clearance),
+        "window": int(window),
+        "floor_before": [round(min(ground_values), 6), round(max(ground_values), 6)]
+        if ground_values
+        else None,
+        "floor_span_before": round(max(ground_values) - min(ground_values), 6)
+        if ground_values
+        else None,
         "changed_frames": changed_frames,
-        "max_applied_lift": round(max_lift, 6),
-        "penetration_sample_count": len(penetration_samples),
-        "worst_samples": penetration_samples[: int(worst_sample_limit)],
+        "max_correction": round(max_correction, 6),
+        "worst_samples": samples[: int(worst_sample_limit)],
+        "missing_contact_points": missing_points,
     }
-
 
 def _percentile(values: Sequence[float], percentile: float) -> float | None:
     if not values:

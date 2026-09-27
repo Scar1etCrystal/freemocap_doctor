@@ -64,8 +64,9 @@ PARAMETER_DESCRIPTIONS = {
     "source_floor_z": "源动作使用的世界坐标地面 Z 高度。",
     "source_floor_tolerance": "允许忽略的小幅穿地深度，范围内不会修复。",
     "source_floor_clearance": "修复后脚底希望保留的最小离地间隙。",
-    "source_floor_max_lift": "单帧最多允许抬高骨盆的距离。",
-    "source_floor_strength": "实际应用计算抬升量的比例。",
+    "source_floor_max_lift": "整体升降的安全上限：整平量超过它就会被截断，防止地面估计跑飞。",
+    "source_floor_strength": "实际应用整平量的比例；1 表示把地面完全整平。",
+    "source_floor_window": "估计地面时前后参考的帧数。太小会跟着跳起来，太大跟不上缓慢漂移。",
     "source_floor_smooth_radius": "对骨盆抬升曲线进行平滑时前后参考的帧数。",
     "source_floor_max_delta": "单位：m/帧；相邻帧抬升量允许的最大变化，避免骨盆突然跳动。",
     "contact_height": "脚底距地面不高于该值时才可能判定为 planted。",
@@ -285,6 +286,12 @@ class MD_PG_ProjectSettings(PropertyGroup):
         subtype="FACTOR",
         unit="NONE",
         description=PARAMETER_DESCRIPTIONS["source_floor_strength"],
+    )
+    source_floor_window: IntProperty(
+        default=DEFAULTS["source_floor_window"],
+        min=1,
+        max=300,
+        description=PARAMETER_DESCRIPTIONS["source_floor_window"],
     )
     source_floor_smooth_radius: IntProperty(default=DEFAULTS["source_floor_smooth_radius"], min=0, max=30, description=PARAMETER_DESCRIPTIONS["source_floor_smooth_radius"])
     source_floor_max_delta: FloatProperty(

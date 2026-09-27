@@ -1385,12 +1385,13 @@ def _run_source_floor(context, settings):
         "strength": settings.source_floor_strength,
         "smooth_radius": settings.source_floor_smooth_radius,
         "max_correction_delta_per_frame": settings.source_floor_max_delta,
+        "window": settings.source_floor_window,
     }
     floor_kwargs = {}
     contact_points = _source_maps(settings, armature)["contact_points"]
     if contact_points is not None:
         floor_kwargs["contact_points"] = contact_points
-    result = core_source.repair_source_pelvis_floor_v2(
+    result = core_source.level_source_ground(
         scene,
         armature,
         action,
@@ -1399,8 +1400,10 @@ def _run_source_floor(context, settings):
         **params,
         **floor_kwargs,
     )
-    _record_report(scene, "source_floor", result, "PREVIEW", "源骨架穿地修复等待检查", params)
-    return f"源地面修复影响 {result.get('changed_frames', 0)} 帧"
+    _record_report(scene, "source_floor", result, "PREVIEW", "源骨架地面修复等待检查", params)
+    span = result.get("floor_span_before")
+    detail = f"，整平前地面高低差 {span:.3f} m" if span else ""
+    return f"源地面修复影响 {result.get('changed_frames', 0)} 帧" + detail
 
 
 def _run_contacts(context, settings):

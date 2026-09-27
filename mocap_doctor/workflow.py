@@ -17,7 +17,7 @@ STEPS = (
     WorkflowStep("hand_ranges", "手部坏区间", "源数据", False, "NLA 标注左右手坏段"),
     WorkflowStep("hand_repair", "手部区间修复", "源数据", True, "整条手臂链区间插值"),
     WorkflowStep("smooth", "轻度旋转平滑", "源数据", True, "抑制高频旋转噪声"),
-    WorkflowStep("source_floor", "源骨架穿地修复", "源数据", True, "通过 pelvis Z 修正穿地"),
+    WorkflowStep("source_floor", "源骨架地面修复", "源数据", True, "整平地面并把脚放回地面"),
     WorkflowStep("contacts", "Planted 检测与修订", "源数据", False, "自动检测并编辑最终区间"),
     WorkflowStep("retarget", "ARP/MMR 重定向", "重定向", True, "人工重定向并记录里程碑"),
     WorkflowStep("global_correction", "Teto 全局扶正", "目标模型", True, "创建全局校正 Empty"),

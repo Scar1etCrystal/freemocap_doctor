@@ -203,6 +203,7 @@ class MD_PT_Main(Panel):
         elif step_id == "source_floor":
             layout.prop(settings, "source_floor_z", text="地面 Z")
             layout.prop(settings, "source_floor_strength", text="强度")
+            layout.prop(settings, "source_floor_window", text="地面估计窗口（帧）")
             layout.prop(settings, "source_floor_tolerance", text="容差")
             layout.prop(settings, "source_floor_clearance", text="离地间隙")
             layout.prop(settings, "source_floor_max_lift", text="单帧最大抬升")
