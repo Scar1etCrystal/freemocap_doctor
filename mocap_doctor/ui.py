@@ -150,6 +150,8 @@ class MD_PT_Main(Panel):
             _draw_run(layout, step_id, "校验源数据", "CHECKMARK")
 
         elif step_id == "source_analyze":
+            layout.prop(settings, "gvhmr_take_dir", text="GVHMR 输出目录")
+            layout.prop(settings, "source_pkl_frame_start", text="pkl 首帧对应工作帧")
             layout.prop(settings, "source_diagnostic_contact_height", text="脚接近地面高度")
             layout.prop(settings, "source_foot_slide_speed", text="足部每帧位移（m/帧）")
             layout.prop(settings, "source_heel_slide_speed", text="脚跟每帧位移（m/帧）")
@@ -163,6 +165,20 @@ class MD_PT_Main(Panel):
                 (annotation.CHANNEL_HAND_L_MANUAL, annotation.CHANNEL_HAND_R_MANUAL),
             )
             layout.label(text=f"已标注 {count} 个手部坏区间")
+            for side, label in (("L", "左手"), ("R", "右手")):
+                motion = (scene.get("mcd_hand_hints_motion") or {}).get(side, [])
+                blocked = (scene.get("mcd_hand_hints_occlusion") or {}).get(side, [])
+                layout.label(
+                    text=f"{label}自动提示：动作跳变 {len(motion)} / 被遮挡 {len(blocked)}"
+                )
+            note = str(scene.get("mcd_hand_hints_occlusion_note", ""))
+            if note:
+                _draw_message(layout, f"遮挡检测跳过：{note}", icon="INFO")
+            layout.operator(
+                "mocap_doctor.reload_hand_hints",
+                text="重新载入自动提示到可编辑轨道",
+                icon="FILE_REFRESH",
+            )
             operator = layout.operator(
                 "mocap_doctor.enter_annotation_mode",
                 text="标注坏区间",

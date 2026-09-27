@@ -260,6 +260,7 @@ DEFAULTS = {
     "lock_blend_frames": 2,
     "lock_min_xy_range": 0.006,
     "vmd_floor_offset": -0.0257,
+    "source_pkl_frame_start": 1,
 }
 
 

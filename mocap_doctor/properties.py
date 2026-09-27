@@ -40,6 +40,14 @@ PARAMETER_DESCRIPTIONS = {
     "source_armature": "动捕源骨架（GVHMR 导入的 SMPL 骨架，或旧版 FreeMoCap 骨架），通常由插件自动识别。",
     "source_profile": "源数据的骨骼命名体系。自动识别会按骨架上的骨骼名判断，识别失败或识别错误时再手动指定。",
     "target_template_path": "只记录你用于重定向的干净 Teto/MMR 模板文件路径；插件不会自动从这里导入模型。",
+    "gvhmr_take_dir": (
+        "GVHMR 那条 take 的原始输出目录（里面有 gvhmr/preprocess/vitpose.pt）。"
+        "填写后，源动作诊断会读它的手腕关键点置信度，把手被挡住、数据不可信的帧也列进手部提示区间。"
+    ),
+    "source_pkl_frame_start": (
+        "GVHMR 的 pkl 第 1 帧对应当前工作文件的第几帧。PoseCapture 从导入时的当前帧开始放置动作，"
+        "默认 1（即 pkl 第 1 帧落在工作文件第 1 帧）。填错会让手部提示区间整体偏移。"
+    ),
     "model_root": "当前场景中 Teto 模型最外层的 mmd_tools Root 空物体，不是 MMR Rig 或骨架。",
     "mmr_rig": "接收重定向动作的 MikuMikuRig 控制骨架。",
     "mmd_armature": "最终 Bake 并导出 VMD 的 Teto 原生 MMD 骨架。",
@@ -159,6 +167,12 @@ class MD_PG_ProjectSettings(PropertyGroup):
     work_filepath: StringProperty(subtype="FILE_PATH")
     data_directory: StringProperty(subtype="DIR_PATH")
     target_template_path: StringProperty(subtype="FILE_PATH", description=PARAMETER_DESCRIPTIONS["target_template_path"])
+    gvhmr_take_dir: StringProperty(subtype="DIR_PATH", description=PARAMETER_DESCRIPTIONS["gvhmr_take_dir"])
+    source_pkl_frame_start: IntProperty(
+        default=DEFAULTS["source_pkl_frame_start"],
+        min=1,
+        description=PARAMETER_DESCRIPTIONS["source_pkl_frame_start"],
+    )
     current_step: IntProperty(default=0, min=0)
     schema_version: IntProperty(default=0, options={"HIDDEN"})
     expected_fps: IntProperty(default=EXPECTED_FPS, options={"HIDDEN"})

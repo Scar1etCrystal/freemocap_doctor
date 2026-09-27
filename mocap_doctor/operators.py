@@ -18,10 +18,11 @@ from .core import animation as core_animation
 from .core import contacts as core_contacts
 from .core import fingers as core_fingers
 from .core import export as core_export
+from .core import occlusion as core_occlusion
 from .core import receiver as core_receiver
 from .core import source as core_source
 from .core import target as core_target
-from .core.ranges import diff_ranges
+from .core.ranges import diff_ranges, frames_to_ranges
 from .presets import (
     EXPECTED_FPS,
     MMD_ARM_FK_BONES,
@@ -1178,6 +1179,45 @@ def _run_source_check(context, settings):
     return f"源数据校验通过：{path.name}"
 
 
+def _hand_occlusion_hints(settings):
+    """Wrist-confidence ranges from the take's ViTPose output, in work frames."""
+
+    take_dir = str(getattr(settings, "gvhmr_take_dir", "") or "").strip()
+    if not take_dir:
+        return {}, {"skipped": True, "reason": "未填写 GVHMR 输出目录"}
+    keypoints = Path(bpy.path.abspath(take_dir)) / "gvhmr" / "preprocess" / "vitpose.pt"
+    if not keypoints.is_file():
+        return {}, {"skipped": True, "reason": f"找不到 {keypoints}"}
+    try:
+        left, right = core_occlusion.wrist_confidence(str(keypoints))
+    except Exception as exc:  # noqa: BLE001 - report, never block the step
+        return {}, {"skipped": True, "reason": f"读取失败：{exc}"}
+
+    # `low_confidence_ranges` works in 0-based pkl indices; annotation channels
+    # use 1-based work frames, and pkl frame 1 sits on `first_work_frame`.
+    first_work_frame = int(settings.source_pkl_frame_start)
+    hints: dict[str, list[tuple[int, int]]] = {}
+    detail = {
+        "skipped": False,
+        "file": str(keypoints),
+        "pkl_first_work_frame": first_work_frame,
+        "hands": {},
+    }
+    for side, series in (("L", left), ("R", right)):
+        threshold = core_occlusion.confidence_floor(series)
+        ranges = core_occlusion.low_confidence_ranges(series, threshold=threshold)
+        hints[side] = [
+            (index_start + first_work_frame, index_end + first_work_frame)
+            for index_start, index_end in ranges
+        ]
+        detail["hands"][side] = {
+            "threshold": round(threshold, 4),
+            "pkl_frames": [[a + 1, b + 1] for a, b in ranges],
+            "work_frames": [[a, b] for a, b in hints[side]],
+        }
+    return hints, detail
+
+
 def _run_source_analyze(context, settings):
     scene = context.scene
     _require_restore_before_rerun(scene, "source_analyze")
@@ -1209,6 +1249,31 @@ def _run_source_analyze(context, settings):
             hints["L"].extend(issue.get("frames", ()))
         elif issue.get("bone") == maps["bones"]["right_hand"]:
             hints["R"].extend(issue.get("frames", ()))
+
+    # Occlusion cue: a wrist ViTPose stopped seeing means HaMeR was guessing
+    # there, and a guess can be perfectly smooth - the motion signals above
+    # cannot see those frames at all.  These are separate, wider hints.
+    occlusion, occlusion_note = _hand_occlusion_hints(settings)
+    report["occlusion"] = occlusion_note
+    proposals = {"L": [], "R": []}
+    for side in ("L", "R"):
+        motion = frames_to_ranges(hints[side], merge_gap=2, min_length=1)
+        proposals[side] = [list(item) for item in motion]
+        hints[side] = core_occlusion.merge_ranges(
+            motion + [tuple(item) for item in occlusion.get(side, ())]
+        )
+    # Keep both halves visible in the panel: motion hints are guesses that need
+    # review, occlusion ranges are frames where the hand data is a blind guess.
+    scene["mcd_hand_hints_motion"] = proposals
+    scene["mcd_hand_hints_occlusion"] = {
+        side: [list(item) for item in occlusion.get(side, ())] for side in ("L", "R")
+    }
+    scene["mcd_hand_hints_occlusion_note"] = str(occlusion_note.get("reason", ""))
+    report["hand_hints"] = {
+        "motion": proposals,
+        "occlusion": scene["mcd_hand_hints_occlusion"],
+    }
+
     scene["mcd_hand_l_manual_initialized"] = False
     scene["mcd_hand_r_manual_initialized"] = False
     annotation.set_hand_auto_hints(
@@ -1887,6 +1952,50 @@ class MD_OT_RestoreBeforeStep(Operator):
             )
             return {"FINISHED"}
         except Exception as exc:
+            self.report({"ERROR"}, str(exc))
+            return {"CANCELLED"}
+
+
+class MD_OT_ReloadHandHints(Operator):
+    bl_idname = "mocap_doctor.reload_hand_hints"
+    bl_description = (
+        "把检测到的自动提示重新写入左右手可编辑轨道。"
+        "已经手工改过的区间会被这次载入覆盖，供你重新逐条筛"
+    )
+    bl_label = "重新载入自动提示"
+
+    def invoke(self, context, event):
+        return context.window_manager.invoke_confirm(self, event)
+
+    def execute(self, context):
+        settings = _settings(context)
+        try:
+            _require_project(context)
+            scene = context.scene
+            combined = {"L": [], "R": []}
+            for key in ("mcd_hand_hints_motion", "mcd_hand_hints_occlusion"):
+                stored = scene.get(key) or {}
+                for side in ("L", "R"):
+                    combined[side].extend(
+                        (int(item[0]), int(item[1])) for item in stored.get(side, ())
+                    )
+            if not any(combined.values()):
+                raise RuntimeError("还没有自动提示；请先在「源动作诊断」页生成")
+            scene["mcd_hand_l_manual_initialized"] = False
+            scene["mcd_hand_r_manual_initialized"] = False
+            for side in ("L", "R"):
+                annotation.set_hand_auto_hints(
+                    scene,
+                    side,
+                    core_occlusion.merge_ranges(combined[side]),
+                    force_manual=True,
+                    rebuild=side == "R",
+                )
+            total = sum(len(combined[side]) for side in ("L", "R"))
+            settings.status_message = f"已重新载入 {total} 个自动提示区间"
+            self.report({"INFO"}, settings.status_message)
+            return {"FINISHED"}
+        except Exception as exc:  # noqa: BLE001 - surface the reason in the UI
             self.report({"ERROR"}, str(exc))
             return {"CANCELLED"}
 
@@ -2872,6 +2981,7 @@ CLASSES = (
     MD_OT_SyncRangeFromScene,
     MD_OT_NavigateStep,
     MD_OT_RestoreBeforeStep,
+    MD_OT_ReloadHandHints,
     MD_OT_ReviseHandRanges,
     MD_OT_CreateCheckpoint,
     MD_OT_RestoreLastCheckpoint,
