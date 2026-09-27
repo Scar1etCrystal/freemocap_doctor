@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>MoCap Doctor — 模型与数据流</title>
+<style>
+  body { margin:0; background:#11151c; color:#e6edf3;
+         font-family:"Microsoft YaHei","PingFang SC",system-ui,sans-serif; }
+  .wrap { padding:18px 22px 40px; }
+  h1 { font-size:20px; font-weight:600; margin:4px 0 2px; }
+  h1 small { font-weight:400; color:#8b98a5; font-size:13px; margin-left:10px; }
+  svg { width:100%; height:auto; display:block; margin-top:10px; }
+  .lg { font:11.5px "Microsoft YaHei",sans-serif; }
+</style>
+</head>
+<body>
+<div class="wrap">
+<h1>模型跑在哪、吃什么、吐什么<small>PoseCapture_Pack → 插件</small></h1>
+<svg viewBox="0 0 1620 1290" xmlns="http://www.w3.org/2000/svg" font-family="Microsoft YaHei, PingFang SC, sans-serif">
+
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0,0 L10,5 L0,10 z" fill="#5b6b7d"/>
+    </marker>
+    <marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0,0 L10,5 L0,10 z" fill="#e5534b"/>
+    </marker>
+    <marker id="ag" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0,0 L10,5 L0,10 z" fill="#3fb950"/>
+    </marker>
+  </defs>
+
+  <!-- ============ 输入 ============ -->
+  <rect x="620" y="20" width="380" height="58" rx="9" fill="#1b2430" stroke="#3d4b5c" stroke-width="1.6"/>
+  <text x="810" y="46" fill="#e6edf3" font-size="16" text-anchor="middle">输入视频</text>
+  <text x="810" y="66" fill="#8b98a5" font-size="12" text-anchor="middle">0_input_video.mp4 / .mkv　（同一条视频，两边各跑一遍）</text>
+
+  <line x1="700" y1="78" x2="360" y2="126" stroke="#5b6b7d" stroke-width="1.8" marker-end="url(#a)"/>
+  <line x1="920" y1="78" x2="1260" y2="126" stroke="#5b6b7d" stroke-width="1.8" marker-end="url(#a)"/>
+
+  <!-- ============ 管线标题 ============ -->
+  <rect x="70" y="132" width="640" height="34" rx="8" fill="#1f6feb22" stroke="#1f6feb88"/>
+  <text x="390" y="155" fill="#79b8ff" font-size="15" text-anchor="middle">① GVHMR 管线　GVHMR/tools/demo/demo.py</text>
+
+  <rect x="910" y="132" width="640" height="34" rx="8" fill="#a371f722" stroke="#a371f788"/>
+  <text x="1230" y="155" fill="#c9a6ff" font-size="15" text-anchor="middle">② HaMeR 管线　HAMER/hamer_video.py</text>
+
+  <!-- ============ ① GVHMR ============ -->
+  <g>
+    <rect x="90" y="188" width="600" height="64" rx="9" fill="#161d26" stroke="#3d4b5c" stroke-width="1.5"/>
+    <text x="108" y="212" fill="#e6edf3" font-size="14.5">YOLOv8x　人体跟踪</text>
+    <text x="108" y="234" fill="#8b98a5" font-size="12">in 视频　→　out 每帧人体框 bbx_xyxy / bbx_xys</text>
+    <text x="672" y="226" fill="#6e7b8a" font-size="11.5" text-anchor="end">ultralytics</text>
+  </g>
+  <line x1="390" y1="252" x2="390" y2="286" stroke="#5b6b7d" stroke-width="1.8" marker-end="url(#a)"/>
+
+  <g>
+    <rect x="90" y="288" width="600" height="64" rx="9" fill="#161d26" stroke="#3d4b5c" stroke-width="1.5"/>
+    <text x="108" y="312" fill="#e6edf3" font-size="14.5">ViTPose（<tspan fill="#79b8ff">人体 17 点</tspan>）</text>
+    <text x="108" y="334" fill="#8b98a5" font-size="12">in 视频 + 人体框　→　out 关键点 + 置信度</text>
+    <text x="672" y="326" fill="#6e7b8a" font-size="11.5" text-anchor="end">GVHMR 自带</text>
+  </g>
+
+  <!-- 落盘：vitpose.pt -->
+  <path d="M690,320 L760,320" stroke="#5b6b7d" stroke-width="1.8" marker-end="url(#a)"/>
+  <rect x="764" y="292" width="120" height="56" rx="7" fill="#0d2a1a" stroke="#3fb950" stroke-width="1.5"/>
+  <text x="824" y="314" fill="#7ee787" font-size="12.5" text-anchor="middle">vitpose.pt</text>
+  <text x="824" y="332" fill="#5f9e6e" font-size="11" text-anchor="middle">(N,17,3)</text>
+
+  <g>
+    <rect x="90" y="388" width="600" height="60" rx="9" fill="#161d26" stroke="#3d4b5c" stroke-width="1.5"/>
+    <text x="108" y="412" fill="#e6edf3" font-size="14.5">ViT 特征提取 → GVHMR 网络</text>
+    <text x="108" y="433" fill="#8b98a5" font-size="12">in 视频 + 人体框 + vitpose　→　out 身体动作 + 相机</text>
+  </g>
+  <line x1="390" y1="448" x2="390" y2="482" stroke="#5b6b7d" stroke-width="1.8" marker-end="url(#a)"/>
+
+  <rect x="90" y="484" width="600" height="78" rx="9" fill="#0d2a1a" stroke="#3fb950" stroke-width="1.5"/>
+  <text x="108" y="508" fill="#7ee787" font-size="14">hmr4d_results.pt</text>
+  <text x="108" y="529" fill="#5f9e6e" font-size="11.5">身体姿态 · 相机内参 K_fullimg · 静止概率 static_conf_logits</text>
+  <text x="108" y="548" fill="#5f9e6e" font-size="11.5">→ 另存 hmr4d_results.pt_person-0.pkl、…_static_conf.csv</text>
+
+  <!-- ============ ② HaMeR ============ -->
+  <g>
+    <rect x="930" y="188" width="600" height="64" rx="9" fill="#161d26" stroke="#3d4b5c" stroke-width="1.5"/>
+    <text x="948" y="212" fill="#e6edf3" font-size="14.5">Mask R-CNN　人体实例分割</text>
+    <text x="948" y="234" fill="#8b98a5" font-size="12">in 视频　→　out 人体实例框 + 分数（>0.5）</text>
+    <text x="1512" y="226" fill="#6e7b8a" font-size="11.5" text-anchor="end">Detectron2 · 不是 YOLO</text>
+  </g>
+  <line x1="1230" y1="252" x2="1230" y2="286" stroke="#5b6b7d" stroke-width="1.8" marker-end="url(#a)"/>
+
+  <g>
+    <rect x="930" y="288" width="600" height="64" rx="9" fill="#161d26" stroke="#3d4b5c" stroke-width="1.5"/>
+    <text x="948" y="312" fill="#e6edf3" font-size="14.5">ViTPose wholebody（<tspan fill="#c9a6ff">133 点，含 21 点/手</tspan>）</text>
+    <text x="948" y="334" fill="#8b98a5" font-size="12">in 视频 + 人体框　→　out 全身关键点 + <tspan fill="#f0883e">置信度</tspan></text>
+    <text x="1512" y="326" fill="#6e7b8a" font-size="11.5" text-anchor="end">与①是两份不同的模型</text>
+  </g>
+  <line x1="1230" y1="352" x2="1230" y2="384" stroke="#5b6b7d" stroke-width="1.8" marker-end="url(#a)"/>
+
+  <!-- 丢弃点 -->
+  <rect x="930" y="386" width="600" height="76" rx="9" fill="#2b1416" stroke="#e5534b" stroke-width="1.8" stroke-dasharray="6 4"/>
+  <text x="948" y="410" fill="#ff9492" font-size="14">手部裁剪框　（hamer_video.py 第 262-276 行）</text>
+  <text x="948" y="431" fill="#d9a0a0" font-size="12">关键点置信度 &gt; 0.5 的点算外接框；<tspan fill="#ff9492" font-weight="600">不够就当没检测到</tspan></text>
+  <text x="948" y="450" fill="#d9a0a0" font-size="12">→ 于是拿前后帧的框<tspan fill="#ff9492" font-weight="600">线性插值造一个</tspan>，照样往下送</text>
+  <rect x="1372" y="398" width="140" height="34" rx="6" fill="#e5534b22" stroke="#e5534b"/>
+  <text x="1442" y="420" fill="#ff9492" font-size="12" text-anchor="middle">置信度在这里被扔掉</text>
+
+  <line x1="1230" y1="462" x2="1230" y2="494" stroke="#5b6b7d" stroke-width="1.8" marker-end="url(#a)"/>
+
+  <g>
+    <rect x="930" y="496" width="600" height="64" rx="9" fill="#161d26" stroke="#3d4b5c" stroke-width="1.5"/>
+    <text x="948" y="520" fill="#e6edf3" font-size="14.5">HaMeR</text>
+    <text x="948" y="542" fill="#8b98a5" font-size="12">in 裁剪图（<tspan fill="#ff9492">可能是造的</tspan>）　→　out 手部姿态 15 关节 + 手腕朝向</text>
+  </g>
+  <line x1="1230" y1="560" x2="1230" y2="592" stroke="#5b6b7d" stroke-width="1.8" marker-end="url(#a)"/>
+
+  <rect x="930" y="594" width="600" height="72" rx="9" fill="#0d2a1a" stroke="#3fb950" stroke-width="1.5"/>
+  <text x="948" y="618" fill="#7ee787" font-size="14">*_hamer_data.pkl</text>
+  <text x="948" y="639" fill="#5f9e6e" font-size="11.5">只有 5 个数组：global_orient · hand_pose · global_orient_valid</text>
+  <text x="948" y="657" fill="#5f9e6e" font-size="11.5">· hand_pose_abs_flat · global_orient_abs_lr　——　<tspan fill="#ff9492">没有置信度</tspan></text>
+
+  <!-- ============ 汇合 ============ -->
+  <line x1="390" y1="562" x2="390" y2="740" stroke="#3d4b5c" stroke-width="1.6" stroke-dasharray="5 4"/>
+  <line x1="1230" y1="666" x2="1230" y2="740" stroke="#3d4b5c" stroke-width="1.6" stroke-dasharray="5 4"/>
+
+  <rect x="330" y="742" width="960" height="62" rx="9" fill="#1b2430" stroke="#8b98a5" stroke-width="1.6"/>
+  <text x="810" y="766" fill="#e6edf3" font-size="14.5" text-anchor="middle">hand_body_merge.py　把手的姿态拼到身体上</text>
+  <text x="810" y="788" fill="#8b98a5" font-size="12" text-anchor="middle">GVHMR 的 pkl ＋ hamer_data.pkl　→　合并 pkl（另外调用它的平滑、跳变钳制、缺失填充）</text>
+
+  <line x1="810" y1="804" x2="810" y2="836" stroke="#5b6b7d" stroke-width="1.8" marker-end="url(#a)"/>
+
+  <rect x="480" y="838" width="660" height="58" rx="9" fill="#0d2a1a" stroke="#3fb950" stroke-width="1.5"/>
+  <text x="810" y="862" fill="#7ee787" font-size="14" text-anchor="middle">&lt;take&gt;.pkl　（merged）</text>
+  <text x="810" y="882" fill="#5f9e6e" font-size="11.5" text-anchor="middle">身体 · 手部姿态 · left/right_hand_is_detected（目前全是 True）</text>
+
+  <line x1="810" y1="896" x2="810" y2="928" stroke="#5b6b7d" stroke-width="1.8" marker-end="url(#a)"/>
+
+  <rect x="480" y="930" width="660" height="54" rx="9" fill="#161d26" stroke="#3d4b5c" stroke-width="1.5"/>
+  <text x="810" y="954" fill="#e6edf3" font-size="14" text-anchor="middle">PoseCapture 导入 → Blender 工作文件</text>
+  <text x="810" y="973" fill="#8b98a5" font-size="11.5" text-anchor="middle">（导入时的当前帧决定 pkl 落地位置）</text>
+
+  <line x1="810" y1="984" x2="810" y2="1016" stroke="#5b6b7d" stroke-width="1.8" marker-end="url(#a)"/>
+
+  <!-- ============ 插件 ============ -->
+  <rect x="70" y="1018" width="1480" height="150" rx="10" fill="#0d1b2a" stroke="#1f6feb" stroke-width="1.8"/>
+  <text x="94" y="1046" fill="#79b8ff" font-size="15">MoCap Doctor 插件</text>
+
+  <rect x="100" y="1062" width="440" height="88" rx="8" fill="#161d26" stroke="#3fb950" stroke-width="1.6"/>
+  <text x="118" y="1086" fill="#7ee787" font-size="13.5">现在能用：读 vitpose.pt 的手腕置信度</text>
+  <text x="118" y="1108" fill="#8b98a5" font-size="11.5">手腕 = 第 9/10 号点，取每条视频自己的 5% 分位当阈值</text>
+  <text x="118" y="1127" fill="#8b98a5" font-size="11.5">→ 划出"手不可信"区间</text>
+  <text x="118" y="1145" fill="#5f9e6e" font-size="11.5">已实测命中你标的 511-536(右) 和 ~889(左)</text>
+
+  <path d="M540,1106 L600,1106" stroke="#3fb950" stroke-width="2" marker-end="url(#ag)"/>
+
+  <rect x="604" y="1062" width="420" height="88" rx="8" fill="#161d26" stroke="#3d4b5c" stroke-width="1.6"/>
+  <text x="622" y="1086" fill="#e6edf3" font-size="13.5">并进左右手自动提示轨道</text>
+  <text x="622" y="1108" fill="#8b98a5" font-size="11.5">面板分开显示：动作跳变 N / 被遮挡 M</text>
+  <text x="622" y="1127" fill="#8b98a5" font-size="11.5">→ NLA 里人复核、增删、拖动</text>
+  <text x="622" y="1145" fill="#8b98a5" font-size="11.5">→ 手部区间修复（已有）</text>
+
+  <path d="M1024,1106 L1084,1106" stroke="#5b6b7d" stroke-width="2" marker-end="url(#a)"/>
+
+  <rect x="1088" y="1062" width="440" height="88" rx="8" fill="#2b1416" stroke="#e5534b" stroke-width="1.6" stroke-dasharray="6 4"/>
+  <text x="1106" y="1086" fill="#ff9492" font-size="13.5">阶段一补上：读 pkl 里的手部关键点置信度</text>
+  <text x="1106" y="1108" fill="#d9a0a0" font-size="11.5">比手腕点更准（看的是手本身 21 个点）</text>
+  <text x="1106" y="1127" fill="#d9a0a0" font-size="11.5">接口不变，只是多一路来源</text>
+  <text x="1106" y="1145" fill="#d9a0a0" font-size="11.5">需要朋友那边跑一次改过的 hamer_video.py</text>
+
+  <!-- 图例 -->
+  <g transform="translate(70,1190)">
+    <rect x="0" y="0" width="1480" height="76" rx="8" fill="#11161c" stroke="#2b3441"/>
+    <text class="lg" x="18" y="24" fill="#8b98a5">图例</text>
+    <rect x="18" y="36" width="22" height="14" fill="#0d2a1a" stroke="#3fb950"/><text class="lg" x="48" y="48" fill="#8b98a5">落盘文件 / 已可用</text>
+    <rect x="220" y="36" width="22" height="14" fill="#2b1416" stroke="#e5534b" stroke-dasharray="4 3"/><text class="lg" x="250" y="48" fill="#8b98a5">丢失的数据 / 待补</text>
+    <rect x="460" y="36" width="22" height="14" fill="#1f6feb22" stroke="#1f6feb"/><text class="lg" x="490" y="48" fill="#8b98a5">GVHMR 一侧</text>
+    <rect x="640" y="36" width="22" height="14" fill="#a371f722" stroke="#a371f7"/><text class="lg" x="670" y="48" fill="#8b98a5">HaMeR 一侧</text>
+    <text class="lg" x="18" y="68" fill="#6e7b8a">两条线是各跑一遍同一条视频的独立管线；只有最后合并时才相遇。</text>
+  </g>
+
+</svg>
+</div>
+</body>
+</html>
