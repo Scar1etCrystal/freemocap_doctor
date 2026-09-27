@@ -65,12 +65,9 @@ GVHMR_BONE_SUFFIXES = {
     "right_hand": "R_Wrist",
 }
 
-# Only the wrist is HaMeR's.  The collar, shoulder and elbow come from GVHMR's
-# own body model, which is clean, so a hand repair must not interpolate them
-# away - the arm has to keep moving while the hand is filled in.
 GVHMR_ARM_CHAIN_SUFFIXES = {
-    "left_hand": ("L_Wrist",),
-    "right_hand": ("R_Wrist",),
+    "hand.L": ("L_Collar", "L_Shoulder", "L_Elbow", "L_Wrist"),
+    "hand.R": ("R_Collar", "R_Shoulder", "R_Elbow", "R_Wrist"),
 }
 
 GVHMR_SMOOTH_SUFFIXES = (
