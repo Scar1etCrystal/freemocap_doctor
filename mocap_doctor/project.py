@@ -21,7 +21,11 @@ _RESTORE_MESSAGE = ""
 
 # Bump when saved projects need their workflow state adjusted on load; add a
 # migration branch in _migrate_project_schema for each previous version.
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
+
+# Where the retired "fingers" step used to sit: between mmd_bake and
+# export_prep.  Everything after it shifted down by one when it was removed.
+RETIRED_FINGERS_INDEX = 14
 
 
 @persistent
@@ -35,7 +39,7 @@ def _migrate_project_schema(_dummy):
             return
         # 0 -> 1: the "fingers" step was inserted between mmd_bake and
         # export_prep, so files saved past that point need current_step + 1.
-        fingers_index = STEP_INDEX.get("fingers", 14)
+        fingers_index = STEP_INDEX.get("fingers", RETIRED_FINGERS_INDEX)
         if settings.schema_version < 1 and settings.current_step >= fingers_index:
             settings.current_step += 1
         # 1 -> 2: the FreeMoCap "source_bake" step became the frontend-agnostic
@@ -45,6 +49,16 @@ def _migrate_project_schema(_dummy):
             for record in getattr(settings, "steps", ()):
                 if record.step_id == "source_bake":
                     record.step_id = "source_check"
+        # 2 -> 3: the "fingers" step (pose one hand shape, copy it to every
+        # frame) is gone.  HaMeR's hands are good on their own, and flattening
+        # them to a single pose measured worse than leaving them alone.  Every
+        # step after it shifted down by one, and its record is now an orphan.
+        if settings.schema_version < 3:
+            if settings.current_step > RETIRED_FINGERS_INDEX:
+                settings.current_step -= 1
+            for index in range(len(settings.steps) - 1, -1, -1):
+                if settings.steps[index].step_id == "fingers":
+                    settings.steps.remove(index)
         settings.schema_version = SCHEMA_VERSION
     except Exception as exc:
         print(f"[MoCap Doctor] schema migration failed: {exc}")

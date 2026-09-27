@@ -295,18 +295,6 @@ class MD_PT_Main(Panel):
             layout.operator("mocap_doctor.validate_manual_mmd_bake", icon="CHECKMARK")
             layout.operator("mocap_doctor.cleanup_leg_fk", icon="BONE_DATA")
 
-        elif step_id == "fingers":
-            reminder = layout.box()
-            reminder.label(text="光学动捕的手指数据不可靠，此步骤用你手动摆好的手型", icon="INFO")
-            reminder.label(text="覆盖整个动捕范围；手掌和手腕动画保持不变。")
-            row = layout.row(align=True)
-            row.operator("mocap_doctor.pose_fingers", text="摆左手手指", icon="HAND").side = "L"
-            row.operator("mocap_doctor.pose_fingers", text="摆右手手指", icon="HAND").side = "R"
-            layout.label(
-                text="点击后 MMR 手指控制器已选中：像平时一样旋转它们摆好手型。",
-                icon="HELP",
-            )
-            layout.operator("mocap_doctor.copy_finger_pose", icon="PASTEDOWN")
 
         elif step_id == "export_prep":
             layout.prop(settings, "vmd_floor_offset", text="VMD 地面 Z 偏移")
