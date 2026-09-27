@@ -2768,7 +2768,11 @@ class MD_OT_PrepareReceiverTemplate(Operator):
                     for bone in armature.data.bones
                 ),
                 "constraints": [
-                    {"type": constraint.type, "subtarget": getattr(constraint, "subtarget", "")}
+                    {
+                        "name": constraint.name,
+                        "type": constraint.type,
+                        "subtarget": getattr(constraint, "subtarget", ""),
+                    }
                     for constraint in pb.constraints
                 ],
             }
@@ -2794,15 +2798,13 @@ class MD_OT_PrepareReceiverTemplate(Operator):
 
         # ---- apply ----
         remove_keys = {
-            (item["bone"], item["type"], item["subtarget"])
-            for item in constraint_plan["remove"]
+            (item["bone"], item["name"]) for item in constraint_plan["remove"]
         }
         for pb in armature.pose.bones:
             if pb.name in toggle_off and hasattr(pb, "mmd_ik_toggle"):
                 pb.mmd_ik_toggle = False
             for constraint in list(pb.constraints):
-                key = (pb.name, constraint.type, getattr(constraint, "subtarget", ""))
-                if key in remove_keys:
+                if (pb.name, constraint.name) in remove_keys:
                     pb.constraints.remove(constraint)
 
         for name in rig_plan["rig_objects"]:

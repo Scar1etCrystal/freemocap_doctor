@@ -23,33 +23,60 @@ def _bone(name, name_j="", parent=None, constraints=(), has_children=False,
 
 
 class ConstraintPlanningTests(unittest.TestCase):
-    def test_native_leg_ik_is_kept_everything_else_removed(self):
+    def test_native_leg_ik_and_mmd_tools_rig_are_kept(self):
         bones = [
             _bone("ひじ.R", "右ひじ", parent="腕.R", constraints=[
-                {"type": "IK", "subtarget": "手IK.R"},
-                {"type": "COPY_TRANSFORMS", "subtarget": "ORG-forearm.R_parent"},
+                {"name": "【IK】R", "type": "IK", "subtarget": "手IK.R"},
+                {"name": "MMR_复制变换", "type": "COPY_TRANSFORMS",
+                 "subtarget": "ORG-forearm.R_parent"},
             ]),
             _bone("ひざ.R", "右ひざ", constraints=[
-                {"type": "IK", "subtarget": "足ＩＫ.R"},
+                {"name": "IK", "type": "IK", "subtarget": "足ＩＫ.R"},
+                {"name": "mmd_ik_limit_override", "type": "LIMIT_ROTATION",
+                 "subtarget": ""},
+                {"name": "MMR_复制变换", "type": "COPY_TRANSFORMS",
+                 "subtarget": "ORG-shin.R_parent"},
             ]),
             _bone("足首.R", "右足首", constraints=[
-                {"type": "IK", "subtarget": "つま先ＩＫ.R"},
-            ]),
-            _bone("手捩1.R", "右手捩1", constraints=[
-                {"type": "TRANSFORM", "subtarget": "_shadow_手捩1.R"},
+                {"name": "IK", "type": "IK", "subtarget": "つま先ＩＫ.R"},
             ]),
         ]
         plan = receiver.plan_constraints(bones)
-        self.assertEqual(plan["keep"], [
-            {"bone": "ひざ.R", "type": "IK", "subtarget": "足ＩＫ.R"},
-            {"bone": "足首.R", "type": "IK", "subtarget": "つま先ＩＫ.R"},
-        ])
-        removed = {(i["bone"], i["type"], i["subtarget"]) for i in plan["remove"]}
+        self.assertEqual(
+            [(i["bone"], i["name"]) for i in plan["keep"]],
+            [("ひざ.R", "IK"), ("ひざ.R", "mmd_ik_limit_override"),
+             ("足首.R", "IK")],
+        )
+        removed = {(i["bone"], i["name"]) for i in plan["remove"]}
         self.assertEqual(removed, {
-            ("ひじ.R", "IK", "手IK.R"),
-            ("ひじ.R", "COPY_TRANSFORMS", "ORG-forearm.R_parent"),
-            ("手捩1.R", "TRANSFORM", "_shadow_手捩1.R"),
+            ("ひじ.R", "【IK】R"),
+            ("ひじ.R", "MMR_复制变换"),
+            ("ひざ.R", "MMR_复制变换"),
         })
+
+    def test_deform_bone_rig_is_kept(self):
+        """The leg skin sits on 足D / ひざD / 足首D, so their 付与 rig must live.
+
+        Deleting mmd_additional_rotation / mmd_tools_at_dummy leaves the bones
+        animating while the leg mesh stays frozen at rest.
+        """
+        bones = [
+            _bone("足D.R", "右足D", constraints=[
+                {"name": "mmd_additional_rotation", "type": "TRANSFORM",
+                 "subtarget": "_shadow_足D.R"},
+            ]),
+            _bone("_shadow_足D.R", constraints=[
+                {"name": "mmd_tools_at_dummy", "type": "COPY_TRANSFORMS",
+                 "subtarget": "_dummy_足D.R"},
+            ]),
+        ]
+        plan = receiver.plan_constraints(bones)
+        self.assertEqual(len(plan["remove"]), 0)
+        self.assertEqual(
+            [(i["bone"], i["name"]) for i in plan["keep"]],
+            [("足D.R", "mmd_additional_rotation"),
+             ("_shadow_足D.R", "mmd_tools_at_dummy")],
+        )
 
     def test_constraint_without_subtarget_is_removed(self):
         plan = receiver.plan_constraints([

@@ -33,27 +33,46 @@ ELBOW_PARENT_RESTORE = {
 }
 
 
+# mmd_tools rebuilds MMD's 付与 (additional transform) rig with its own
+# constraints: mmd_additional_rotation drives 足D / ひざD / 足首D off the
+# _shadow_* bones and mmd_tools_at_dummy feeds those from the _dummy_* ones.
+# A PMX leg is skinned to the D bones, NOT to 足 / ひざ / 足首, so those
+# constraints are what actually carries the animation into the mesh.  Deleting
+# them leaves the bones moving with the leg mesh frozen at rest.
+MMD_TOOLS_CONSTRAINT_PREFIX = "mmd_"
+
+
 def _keeps_native_ik(constraint):
     if constraint.get("type") != "IK":
         return False
     return FULL_WIDTH_IK in constraint.get("subtarget", "")
 
 
+def _keeps_mmd_tools_rig(constraint):
+    return str(constraint.get("name", "")).startswith(MMD_TOOLS_CONSTRAINT_PREFIX)
+
+
 def plan_constraints(bones):
-    """Split each bone's constraints into keep (native leg IK) vs remove.
+    """Split each bone's constraints into keep vs remove.
 
     ``bones`` is an iterable of dicts with ``name`` and ``constraints``
-    (a list of dicts with ``type`` and ``subtarget``).
+    (a list of dicts with ``name``, ``type`` and ``subtarget``).
+
+    Keep mmd_tools' own rig and the native full-width leg IK.  Everything else
+    is what MMR added to slave the armature to its control rig, and that is what
+    has to go before an imported VMD can drive the model.
     """
     keep, remove = [], []
     for bone in bones:
         for constraint in bone.get("constraints", ()):
             item = {
                 "bone": bone["name"],
+                "name": constraint.get("name", ""),
                 "type": constraint.get("type", ""),
                 "subtarget": constraint.get("subtarget", ""),
             }
-            (keep if _keeps_native_ik(constraint) else remove).append(item)
+            keeps = _keeps_native_ik(constraint) or _keeps_mmd_tools_rig(constraint)
+            (keep if keeps else remove).append(item)
     return {"keep": keep, "remove": remove}
 
 
