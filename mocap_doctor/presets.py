@@ -29,7 +29,7 @@ def fixed_object_name_matches(actual: str, expected: str) -> bool:
     )
 
 SOURCE_BONES = {
-    "pelvis": "pelvis",
+    "hips": "pelvis",
     "left_hand": "hand.L",
     "right_hand": "hand.R",
     "left_foot": "foot.L",

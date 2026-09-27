@@ -1387,10 +1387,15 @@ def _run_source_floor(context, settings):
         "max_correction_delta_per_frame": settings.source_floor_max_delta,
         "window": settings.source_floor_window,
     }
+    maps = _source_maps(settings, armature)
     floor_kwargs = {}
-    contact_points = _source_maps(settings, armature)["contact_points"]
-    if contact_points is not None:
-        floor_kwargs["contact_points"] = contact_points
+    if maps["contact_points"] is not None:
+        floor_kwargs["contact_points"] = maps["contact_points"]
+    # The role name differs per frontend, so take it from the profile:
+    # hard coding "pelvis" is what made this step fail on every GVHMR file.
+    hips_bone = maps["bones"].get("hips")
+    if hips_bone:
+        floor_kwargs["root_bone"] = hips_bone
     result = core_source.level_source_ground(
         scene,
         armature,

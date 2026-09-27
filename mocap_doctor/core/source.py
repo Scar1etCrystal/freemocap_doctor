@@ -386,7 +386,7 @@ def level_source_ground(
     armature: Any,
     action: Any,
     *,
-    root_bone: str = "pelvis",
+    root_bone: str | None = None,
     contact_points: Sequence[tuple[str, str]] = DEFAULT_SOURCE_CONTACT_POINTS,
     frame_start: int | None = None,
     frame_end: int | None = None,
@@ -415,8 +415,7 @@ def level_source_ground(
     """
 
     start, end = resolve_frame_range(scene, frame_start, frame_end)
-    root_pose_bone = armature.pose.bones.get(root_bone)
-    if root_pose_bone is None:
+    if root_bone and armature.pose.bones.get(root_bone) is None:
         raise RuntimeError(f"source root bone not found: {root_bone}")
     # Move the armature OBJECT, the way PoseCapture's anti-slide fix moves its
     # root empty: a top level object's ``location`` is plain world metres, so
