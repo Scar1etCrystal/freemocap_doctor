@@ -65,9 +65,14 @@ GVHMR_BONE_SUFFIXES = {
     "right_hand": "R_Wrist",
 }
 
+# Keyed by role, resolved to the rig's own bone names in _gvhmr_maps.  A hand
+# repair must only touch what is actually unreliable: the wrist is HaMeR's
+# prediction, while the collar, shoulder and elbow come from GVHMR's body model
+# and are clean.  Interpolating those three would freeze a good arm for the
+# length of every hand repair.
 GVHMR_ARM_CHAIN_SUFFIXES = {
-    "hand.L": ("L_Collar", "L_Shoulder", "L_Elbow", "L_Wrist"),
-    "hand.R": ("R_Collar", "R_Shoulder", "R_Elbow", "R_Wrist"),
+    "left_hand": ("L_Wrist",),
+    "right_hand": ("R_Wrist",),
 }
 
 GVHMR_SMOOTH_SUFFIXES = (
@@ -93,9 +98,12 @@ def gvhmr_source_prefix(armature):
 
 def _gvhmr_maps(prefix):
     bones = {role: f"{prefix}_{suffix}" for role, suffix in GVHMR_BONE_SUFFIXES.items()}
+    # The chain map is looked up by the rig's own bone name (repair_hand_chain_ranges
+    # is handed {"<prefix>_L_Wrist": [...]}), so the role keys have to be resolved
+    # here - keying them literally leaves every lookup empty and the repair a no-op.
     arm_chains = {
-        key: tuple(f"{prefix}_{suffix}" for suffix in suffixes)
-        for key, suffixes in GVHMR_ARM_CHAIN_SUFFIXES.items()
+        bones[role]: tuple(f"{prefix}_{suffix}" for suffix in suffixes)
+        for role, suffixes in GVHMR_ARM_CHAIN_SUFFIXES.items()
     }
     smooth_bones = tuple(f"{prefix}_{suffix}" for suffix in GVHMR_SMOOTH_SUFFIXES)
     contact_points = (
