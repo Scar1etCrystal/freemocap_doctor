@@ -289,7 +289,24 @@ def _cleanup_annotation_before_load(_dummy):
 
 def _require_object(settings, attribute, object_type=None, exact_name=None):
     obj = getattr(settings, attribute, None)
+    if obj is None and exact_name:
+        # The target objects are fixed presets, and they usually arrive AFTER
+        # the project was created: the retarget step is what imports Teto and
+        # the MMR rig.  A stale pointer then reported "缺少对象" for an object
+        # sitting right there in the scene, so adopt it by name when the name
+        # is unambiguous.  「发现对象」 still does the explicit pass.
+        matches = [
+            item for item in bpy.data.objects if fixed_object_name_matches(item.name, exact_name)
+        ]
+        if len(matches) == 1:
+            obj = matches[0]
+            setattr(settings, attribute, obj)
     if obj is None:
+        if exact_name:
+            raise RuntimeError(
+                f"缺少对象：{attribute}（场景里没有名为 {exact_name} 的对象；"
+                "导入 Teto/MMR 后请点「发现对象」）"
+            )
         raise RuntimeError(f"缺少对象：{attribute}")
     if object_type and obj.type != object_type:
         raise RuntimeError(f"{obj.name} 不是 {object_type} 对象")
