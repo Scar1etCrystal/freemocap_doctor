@@ -22,15 +22,21 @@ _RESTORE_MESSAGE = ""
 
 # Bump when saved projects need their workflow state adjusted on load; add a
 # migration branch in _migrate_project_schema for each previous version.
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
+
+# Index of the first surviving step after the retired hand chain: the
+# source_analyze / hand_ranges / hand_repair block (old indices 2, 3, 4) moved
+# to a pre-import pkl tool, so every step after it shifted down by three.
+RETIRED_HAND_CHAIN_INDEX = 5
+RETIRED_HAND_STEP_IDS = ("source_analyze", "hand_ranges", "hand_repair")
 
 # Where the retired "fingers" step used to sit: between mmd_bake and
 # export_prep.  Everything after it shifted down by one when it was removed.
 RETIRED_FINGERS_INDEX = 14
 
-# Where the retired "smooth" step used to sit: after hand_repair, before
-# source_floor.  GVHMR pre-filters its own output, so the extra Gaussian pass
-# only removed the last of the snap; everything after it shifted down by one.
+# Where the retired "smooth" step used to sit: after the old hand chain,
+# before source_floor.  GVHMR pre-filters its own output, so the extra Gaussian
+# pass only removed the last of the snap; everything after it shifted down.
 RETIRED_SMOOTH_INDEX = 5
 
 # The "ground_feet" step (pin the planted foot back onto the floor) was inserted
@@ -105,6 +111,17 @@ def _migrate_project_schema(_dummy):
             settings.target_floor_strength = DEFAULTS["target_floor_strength"]
             settings.target_floor_smooth_radius = DEFAULTS["target_floor_smooth_radius"]
             settings.target_floor_max_delta = DEFAULTS["target_floor_max_delta"]
+        # 5 -> 6: the hand bad-range chain left the wizard.  It now runs on the
+        # pkl before PoseCapture import (the annotator is reused there), so the
+        # three retired indices collapse and their step records are orphans.
+        if settings.schema_version < 6:
+            if settings.current_step >= RETIRED_HAND_CHAIN_INDEX:
+                settings.current_step -= 3
+            else:
+                settings.current_step = min(settings.current_step, STEP_INDEX["source_floor"])
+            for index in range(len(settings.steps) - 1, -1, -1):
+                if settings.steps[index].step_id in RETIRED_HAND_STEP_IDS:
+                    settings.steps.remove(index)
         settings.schema_version = SCHEMA_VERSION
     except Exception as exc:
         print(f"[MoCap Doctor] schema migration failed: {exc}")

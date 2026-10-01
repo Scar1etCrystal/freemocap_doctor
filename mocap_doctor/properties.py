@@ -41,23 +41,23 @@ PARAMETER_DESCRIPTIONS = {
     "source_profile": "源数据的骨骼命名体系。自动识别会按骨架上的骨骼名判断，识别失败或识别错误时再手动指定。",
     "target_template_path": "只记录你用于重定向的干净 Teto/MMR 模板文件路径；插件不会自动从这里导入模型。",
     "gvhmr_take_dir": (
-        "GVHMR 那条 take 的原始输出目录（里面有 gvhmr/preprocess/vitpose.pt）。"
-        "填写后，源动作诊断会读它的手腕关键点置信度，把手被挡住、数据不可信的帧也列进手部提示区间。"
+        "GVHMR 那条 take 的原始输出目录（里面有 hamer/merged.pkl 与 hamer/*_hamer_data.pkl）。"
+        "导入前的「源手部修复」用它定位要改写的 pkl。"
     ),
     "source_pkl_frame_start": (
         "GVHMR 的 pkl 第 1 帧对应当前工作文件的第几帧。PoseCapture 从导入时的当前帧开始放置动作，"
-        "默认 1（即 pkl 第 1 帧落在工作文件第 1 帧）。填错会让手部提示区间整体偏移。"
+        "默认 1（即 pkl 第 1 帧落在工作文件第 1 帧）。填错会让手部坏段整体偏移。"
     ),
+    "hand_pkl_strategy": (
+        "手动标注段使用的修复策略；auto 时自动检测段按各自建议策略、纯手标段按 bridge。"
+    ),
+    "hand_pkl_channel": "修复写回哪些通道：手腕（腕部朝向）、手指（15 关节手型）或两者。",
     "model_root": "当前场景中 Teto 模型最外层的 mmd_tools Root 空物体，不是 MMR Rig 或骨架。",
     "mmr_rig": "接收重定向动作的 MikuMikuRig 控制骨架。",
     "mmd_armature": "最终 Bake 并导出 VMD 的 Teto 原生 MMD 骨架。",
     "target_mesh": "用于检查模型最低点与穿地的 Teto 网格对象。",
     "correction_empty": "插件创建的整体扶正和抬升控制对象，通常无需手动选择。",
-    "source_diagnostic_contact_height": "脚低于该离地高度时视为接近地面；调大将产生更多候选。",
-    "source_foot_slide_speed": "单位：m/帧；脚每帧水平位移超过该值时报告滑动，调低会更敏感。",
-    "source_heel_slide_speed": "单位：m/帧；脚跟每帧位移超过该值时报告滑动，调低会更敏感。",
-    "source_hand_jump": "单位：m/帧；手部相邻帧位移超过该值时报告跳变，调低会报告更多区间。",
-    "source_hips_jump": "单位：m/帧；骨盆相邻帧位移超过该值时报告跳变，调低会报告更多区间。",
+
     "source_floor_z": "源动作使用的世界坐标地面 Z 高度。",
     "source_floor_tolerance": "允许忽略的小幅穿地深度，范围内不会修复。",
     "source_floor_clearance": "修复后脚底希望保留的最小离地间隙。",
@@ -118,7 +118,6 @@ PARAMETER_DESCRIPTIONS = {
 # unitless in RNA and expose their domain unit explicitly in the UI text.
 LENGTH_PROPERTY_NAMES = frozenset(
     {
-        "source_diagnostic_contact_height",
         "source_floor_z",
         "source_floor_tolerance",
         "source_floor_clearance",
@@ -137,10 +136,6 @@ LENGTH_PROPERTY_NAMES = frozenset(
 )
 PER_FRAME_DISTANCE_PROPERTY_NAMES = frozenset(
     {
-        "source_foot_slide_speed",
-        "source_heel_slide_speed",
-        "source_hand_jump",
-        "source_hips_jump",
         "source_floor_max_delta",
         "contact_xy_speed",
         "contact_moving_xy_speed",
@@ -213,40 +208,24 @@ class MD_PG_ProjectSettings(PropertyGroup):
     target_mesh: PointerProperty(type=bpy.types.Object, description=PARAMETER_DESCRIPTIONS["target_mesh"])
     correction_empty: PointerProperty(type=bpy.types.Object, description=PARAMETER_DESCRIPTIONS["correction_empty"])
 
-    source_diagnostic_contact_height: FloatProperty(
-        default=DEFAULTS["source_diagnostic_contact_height"],
-        min=0.0,
-        subtype="DISTANCE",
-        unit="LENGTH",
-        description=PARAMETER_DESCRIPTIONS["source_diagnostic_contact_height"],
+    hand_pkl_strategy: EnumProperty(
+        items=(
+            ("auto", "按检测建议", "自动检测段用各自建议策略；纯手标段按 bridge"),
+            ("bridge", "桥接（slerp）", "段两端各取基准姿态，球面插值过渡"),
+            ("hold", "保持", "整段钉在段前姿态，尾部缓出"),
+            ("smooth", "平滑", "中值+高斯滤波去抖动"),
+        ),
+        default="auto",
+        description=PARAMETER_DESCRIPTIONS["hand_pkl_strategy"],
     )
-    source_foot_slide_speed: FloatProperty(
-        default=DEFAULTS["source_foot_slide_speed"],
-        min=0.0,
-        subtype="NONE",
-        unit="NONE",
-        description=PARAMETER_DESCRIPTIONS["source_foot_slide_speed"],
-    )
-    source_heel_slide_speed: FloatProperty(
-        default=DEFAULTS["source_heel_slide_speed"],
-        min=0.0,
-        subtype="NONE",
-        unit="NONE",
-        description=PARAMETER_DESCRIPTIONS["source_heel_slide_speed"],
-    )
-    source_hand_jump: FloatProperty(
-        default=DEFAULTS["source_hand_jump"],
-        min=0.0,
-        subtype="NONE",
-        unit="NONE",
-        description=PARAMETER_DESCRIPTIONS["source_hand_jump"],
-    )
-    source_hips_jump: FloatProperty(
-        default=DEFAULTS["source_hips_jump"],
-        min=0.0,
-        subtype="NONE",
-        unit="NONE",
-        description=PARAMETER_DESCRIPTIONS["source_hips_jump"],
+    hand_pkl_channel: EnumProperty(
+        items=(
+            ("both", "手腕+手指", "同时写回腕部朝向与 15 关节手型"),
+            ("wrist", "仅手腕", "只改腕部朝向（body_pose 57:63）"),
+            ("fingers", "仅手指", "只改 *_hand_pose 手型"),
+        ),
+        default="both",
+        description=PARAMETER_DESCRIPTIONS["hand_pkl_channel"],
     )
 
     source_floor_z: FloatProperty(

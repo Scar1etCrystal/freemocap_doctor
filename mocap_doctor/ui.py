@@ -45,6 +45,44 @@ class MD_PT_Main(Panel):
                 text="准备接收模板（导入 VMD 前先执行一次）",
                 icon="GHOST_DISABLED",
             )
+
+            hand_box = layout.box()
+            hand_box.label(text="源手部修复（pkl 级 · 重新导入前执行）", icon="HAND")
+            hand_box.prop(settings, "gvhmr_take_dir", text="GVHMR 输出目录")
+            hand_box.prop(settings, "source_pkl_frame_start", text="pkl 首帧对应工作帧")
+            row = hand_box.row(align=True)
+            row.prop(settings, "hand_pkl_strategy", text="策略")
+            row.prop(settings, "hand_pkl_channel", text="通道")
+            row = hand_box.row(align=True)
+            row.operator("mocap_doctor.pkl_hand_detect", icon="VIEWZOOM")
+            op = row.operator(
+                "mocap_doctor.enter_annotation_mode",
+                text="标注坏段",
+                icon="NLA",
+            )
+            op.channel_group = "HAND"
+            hand_box.operator("mocap_doctor.pkl_hand_repair", icon="FILE_REFRESH")
+            candidates = scene.get("mcd_pkl_hand_candidates") or {}
+            cand_lines = []
+            for side, label in (("L", "左"), ("R", "右")):
+                for item in candidates.get(side, ()):
+                    frames = item.get("frames") or (0, 0)
+                    cand_lines.append(
+                        f"{label}手 {int(frames[0])}-{int(frames[1])} "
+                        f"{item.get('kind', '')}→{item.get('strategy', '')} "
+                        f"峰 {float(item.get('peak', 0.0)):.0f}°"
+                    )
+            if cand_lines:
+                for line in cand_lines[:8]:
+                    hand_box.label(text=line, icon="DOT")
+                if len(cand_lines) > 8:
+                    hand_box.label(text=f"…共 {len(cand_lines)} 段候选")
+            marked = _range_count(
+                scene,
+                (annotation.CHANNEL_HAND_L_MANUAL, annotation.CHANNEL_HAND_R_MANUAL),
+            )
+            if marked:
+                hand_box.label(text=f"手动轨道已标 {marked} 个区间", icon="CHECKMARK")
             return
 
         step = step_at(settings.current_step)
@@ -119,6 +157,33 @@ class MD_PT_Main(Panel):
             status = layout.box()
             _draw_message(status, settings.status_message)
 
+        agent = layout.box()
+        agent.label(text="Agent 协作", icon="CONSOLE")
+        try:
+            from .core import agent_bridge
+            st = agent_bridge.status()
+            if st["running"]:
+                agent.label(
+                    text=f"服务运行中 127.0.0.1:{st['port']}  ·  v{st['version']}  ·  {st['clients']} 客户端",
+                    icon="RADIOBUT_ON",
+                )
+                if st["last_tool"]:
+                    agent.label(text=f"上次调用 {st['last_tool']}", icon="DOT")
+                if st["last_error"]:
+                    agent.label(text=f"错误：{st['last_error']}", icon="ERROR")
+                row = agent.row(align=True)
+                row.operator("mocap_doctor.agent_server_toggle",
+                             text="停止服务", icon="CANCEL")
+                row.operator("mocap_doctor.agent_ab_toggle",
+                             text="A/B 对比", icon="HIDE_OFF")
+            else:
+                agent.label(text="未运行（LLM 通过 socket/MCP 连进来）",
+                            icon="RADIOBUT_OFF")
+                agent.operator("mocap_doctor.agent_server_toggle",
+                               text="启动 Agent 服务", icon="PLAY")
+        except Exception as exc:
+            agent.label(text=f"Agent 模块加载失败：{exc}", icon="ERROR")
+
         navigation = layout.row(align=True)
         navigation.enabled = not settings.preview_step_id and not settings.busy
         previous = navigation.operator(
@@ -148,51 +213,6 @@ class MD_PT_Main(Panel):
             layout.prop(settings, "source_profile", text="源数据来源")
             layout.label(text="仅处理上方有效动捕范围")
             _draw_run(layout, step_id, "校验源数据", "CHECKMARK")
-
-        elif step_id == "source_analyze":
-            layout.prop(settings, "gvhmr_take_dir", text="GVHMR 输出目录")
-            layout.prop(settings, "source_pkl_frame_start", text="pkl 首帧对应工作帧")
-            layout.prop(settings, "source_diagnostic_contact_height", text="脚接近地面高度")
-            layout.prop(settings, "source_foot_slide_speed", text="足部每帧位移（m/帧）")
-            layout.prop(settings, "source_heel_slide_speed", text="脚跟每帧位移（m/帧）")
-            layout.prop(settings, "source_hand_jump", text="手部跳变阈值（m/帧）")
-            layout.prop(settings, "source_hips_jump", text="骨盆跳变阈值（m/帧）")
-            _draw_run(layout, step_id, "生成源动作诊断", "VIEWZOOM")
-
-        elif step_id == "hand_ranges":
-            count = _range_count(
-                scene,
-                (annotation.CHANNEL_HAND_L_MANUAL, annotation.CHANNEL_HAND_R_MANUAL),
-            )
-            layout.label(text=f"已标注 {count} 个手部坏区间")
-            for side, label in (("L", "左手"), ("R", "右手")):
-                motion = (scene.get("mcd_hand_hints_motion") or {}).get(side, [])
-                blocked = (scene.get("mcd_hand_hints_occlusion") or {}).get(side, [])
-                layout.label(
-                    text=f"{label}自动提示：动作跳变 {len(motion)} / 被遮挡 {len(blocked)}"
-                )
-            note = str(scene.get("mcd_hand_hints_occlusion_note", ""))
-            if note:
-                _draw_message(layout, f"遮挡检测跳过：{note}", icon="INFO")
-            layout.operator(
-                "mocap_doctor.reload_hand_hints",
-                text="重新载入自动提示到可编辑轨道",
-                icon="FILE_REFRESH",
-            )
-            operator = layout.operator(
-                "mocap_doctor.enter_annotation_mode",
-                text="标注坏区间",
-                icon="NLA",
-            )
-            operator.channel_group = "HAND"
-
-        elif step_id == "hand_repair":
-            _draw_run(layout, step_id, "修复已标注手部区间")
-            layout.operator(
-                "mocap_doctor.revise_hand_ranges",
-                text="返回修改坏区间（保留现有标注）",
-                icon="LOOP_BACK",
-            )
 
         elif step_id == "source_floor":
             layout.prop(settings, "source_floor_z", text="地面 Z")

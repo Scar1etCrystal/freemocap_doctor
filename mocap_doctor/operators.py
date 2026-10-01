@@ -17,7 +17,7 @@ from . import planted_indicators
 from .core import animation as core_animation
 from .core import contacts as core_contacts
 from .core import export as core_export
-from .core import occlusion as core_occlusion
+from .core import pkl_hand as core_pkl_hand
 from .core import receiver as core_receiver
 from .core import source as core_source
 from .core import target as core_target
@@ -248,7 +248,9 @@ def _finish_pending_annotation_open():
             raise RuntimeError("恢复后窗口尚未就绪")
         group = _PENDING_ANNOTATION_GROUP
         _activate_annotation_editor(window.scene, window.screen, group)
-        window.scene.mocap_doctor.current_step = STEP_INDEX[_annotation_step_for_group(group)]
+        step_index = STEP_INDEX.get(_annotation_step_for_group(group))
+        if step_index is not None:
+            window.scene.mocap_doctor.current_step = step_index
         window.scene.mocap_doctor.status_message = "已保留现有标注；请补充或调整手部坏区间"
         _cancel_pending_annotation_open()
         return None
@@ -266,12 +268,6 @@ def _finish_pending_annotation_open():
 def _resume_annotation_after_load(_dummy):
     if _PENDING_ANNOTATION_GROUP and not bpy.app.timers.is_registered(_finish_pending_annotation_open):
         bpy.app.timers.register(_finish_pending_annotation_open, first_interval=0.25)
-
-
-def _request_annotation_after_restore(channel_group):
-    global _PENDING_ANNOTATION_GROUP, _PENDING_ANNOTATION_ATTEMPTS
-    _PENDING_ANNOTATION_GROUP = str(channel_group).upper()
-    _PENDING_ANNOTATION_ATTEMPTS = 0
 
 
 def cleanup_annotation_sessions():
@@ -396,10 +392,6 @@ def _ensure_no_pending_preview(settings, step_id=None):
 def _require_restore_before_rerun(scene, step_id):
     record = project.find_step_record(scene.mocap_doctor, step_id, create=False)
     if record is not None and record.status in {"ACCEPTED", "STALE"}:
-        if step_id == "hand_ranges":
-            raise RuntimeError(
-                "手部标注已提交；请到“手部区间修复”页面点击“返回修改坏区间（保留现有标注）”"
-            )
         label = step_at(STEP_INDEX.get(step_id, 0)).label
         raise RuntimeError(f"此步骤已经提交；请使用“恢复到‘{label}’执行前”后再运行")
 
@@ -630,26 +622,6 @@ def _mute_mmr_constraints(armature, rig):
     for constraint in constraints:
         constraint.mute = True
     return len(constraints)
-
-
-def _write_hand_annotation_report(scene):
-    automatic = {
-        "L": [list(item) for item in annotation.get_channel_ranges(scene, annotation.CHANNEL_HAND_L_AUTO)],
-        "R": [list(item) for item in annotation.get_channel_ranges(scene, annotation.CHANNEL_HAND_R_AUTO)],
-    }
-    final_ranges = {
-        "L": [list(item) for item in annotation.get_channel_ranges(scene, annotation.CHANNEL_HAND_L_MANUAL)],
-        "R": [list(item) for item in annotation.get_channel_ranges(scene, annotation.CHANNEL_HAND_R_MANUAL)],
-    }
-    report = {
-        "schema_version": "mocap_doctor_hand_ranges_v2",
-        "frame_range": [scene.mocap_doctor.mocap_frame_start, scene.mocap_doctor.mocap_frame_end],
-        "automatic_seed_ranges": automatic,
-        "final_ranges": final_ranges,
-        # Kept for readers of the v1 report schema.
-        "manual_ranges": final_ranges,
-    }
-    return _record_report(scene, "hand_ranges", report, "PREVIEW", "手部坏区间等待提交")
 
 
 def _write_effective_contact_report(scene):
@@ -1194,170 +1166,13 @@ def _run_source_check(context, settings):
         f"源数据校验通过（{maps['profile']}，{frame_start}-{frame_end} 帧）",
         {"source_profile": maps["profile"]},
     )
-    settings.current_step = STEP_INDEX["source_analyze"]
+    settings.current_step = STEP_INDEX["source_floor"]
     settings.status_message = "源数据校验通过"
     project.create_accepted_checkpoint(scene, "source_check", "源数据校验通过")
     return f"源数据校验通过：{path.name}"
 
 
-def _hand_occlusion_hints(settings):
-    """Wrist-confidence ranges from the take's ViTPose output, in work frames."""
 
-    take_dir = str(getattr(settings, "gvhmr_take_dir", "") or "").strip()
-    if not take_dir:
-        return {}, {"skipped": True, "reason": "未填写 GVHMR 输出目录"}
-    keypoints = Path(bpy.path.abspath(take_dir)) / "gvhmr" / "preprocess" / "vitpose.pt"
-    if not keypoints.is_file():
-        return {}, {"skipped": True, "reason": f"找不到 {keypoints}"}
-    try:
-        left, right = core_occlusion.wrist_confidence(str(keypoints))
-    except Exception as exc:  # noqa: BLE001 - report, never block the step
-        return {}, {"skipped": True, "reason": f"读取失败：{exc}"}
-
-    # `low_confidence_ranges` works in 0-based pkl indices; annotation channels
-    # use 1-based work frames, and pkl frame 1 sits on `first_work_frame`.
-    first_work_frame = int(settings.source_pkl_frame_start)
-    hints: dict[str, list[tuple[int, int]]] = {}
-    detail = {
-        "skipped": False,
-        "file": str(keypoints),
-        "pkl_first_work_frame": first_work_frame,
-        "hands": {},
-    }
-    for side, series in (("L", left), ("R", right)):
-        threshold = core_occlusion.confidence_floor(series)
-        ranges = core_occlusion.low_confidence_ranges(series, threshold=threshold)
-        hints[side] = [
-            (index_start + first_work_frame, index_end + first_work_frame)
-            for index_start, index_end in ranges
-        ]
-        detail["hands"][side] = {
-            "threshold": round(threshold, 4),
-            "pkl_frames": [[a + 1, b + 1] for a, b in ranges],
-            "work_frames": [[a, b] for a, b in hints[side]],
-        }
-    return hints, detail
-
-
-def _run_source_analyze(context, settings):
-    scene = context.scene
-    _require_restore_before_rerun(scene, "source_analyze")
-    # The source rig is identified by its bones (see _source_maps), not by a
-    # fixed object name: GVHMR imports it as "Armature", FreeMoCap used
-    # "import_synchronized_videos_rig".
-    armature = _require_object(settings, "source_armature", "ARMATURE")
-    maps = _source_maps(settings, armature)
-    thresholds = {
-        "foot_contact_height_m": settings.source_diagnostic_contact_height,
-        "foot_slide_speed_m_per_frame": settings.source_foot_slide_speed,
-        "heel_slide_speed_m_per_frame": settings.source_heel_slide_speed,
-        "hand_jump_m_per_frame": settings.source_hand_jump,
-        "hips_jump_m_per_frame": settings.source_hips_jump,
-    }
-    report = core_source.analyze_source_motion(
-        scene,
-        armature,
-        bones=maps["bones"],
-        thresholds=thresholds,
-        frame_start=settings.mocap_frame_start,
-        frame_end=settings.mocap_frame_end,
-    )
-    hints = {"L": [], "R": []}
-    for issue in report.get("issues", ()):
-        if issue.get("type") != "hand_jump":
-            continue
-        if issue.get("bone") == maps["bones"]["left_hand"]:
-            hints["L"].extend(issue.get("frames", ()))
-        elif issue.get("bone") == maps["bones"]["right_hand"]:
-            hints["R"].extend(issue.get("frames", ()))
-
-    # Occlusion cue: a wrist ViTPose stopped seeing means HaMeR was guessing
-    # there, and a guess can be perfectly smooth - the motion signals above
-    # cannot see those frames at all.  These are separate, wider hints.
-    occlusion, occlusion_note = _hand_occlusion_hints(settings)
-    report["occlusion"] = occlusion_note
-    proposals = {"L": [], "R": []}
-    for side in ("L", "R"):
-        motion = frames_to_ranges(hints[side], merge_gap=2, min_length=1)
-        proposals[side] = [list(item) for item in motion]
-        hints[side] = core_occlusion.merge_ranges(
-            motion + [tuple(item) for item in occlusion.get(side, ())]
-        )
-    # Keep both halves visible in the panel: motion hints are guesses that need
-    # review, occlusion ranges are frames where the hand data is a blind guess.
-    scene["mcd_hand_hints_motion"] = proposals
-    scene["mcd_hand_hints_occlusion"] = {
-        side: [list(item) for item in occlusion.get(side, ())] for side in ("L", "R")
-    }
-    scene["mcd_hand_hints_occlusion_note"] = str(occlusion_note.get("reason", ""))
-    report["hand_hints"] = {
-        "motion": proposals,
-        "occlusion": scene["mcd_hand_hints_occlusion"],
-    }
-
-    scene["mcd_hand_l_manual_initialized"] = False
-    scene["mcd_hand_r_manual_initialized"] = False
-    annotation.set_hand_auto_hints(
-        scene,
-        "L",
-        hints["L"],
-        force_manual=True,
-        rebuild=False,
-    )
-    annotation.set_hand_auto_hints(
-        scene,
-        "R",
-        hints["R"],
-        force_manual=True,
-        rebuild=True,
-    )
-    path = _record_report(
-        scene,
-        "source_analyze",
-        report,
-        "ACCEPTED",
-        f"诊断完成，生成 {len(hints['L']) + len(hints['R'])} 个手部提示区间",
-        thresholds,
-    )
-    settings.current_step = STEP_INDEX["hand_ranges"]
-    settings.status_message = "源动作诊断已完成"
-    project.create_accepted_checkpoint(scene, "source_analyze", "源动作诊断已完成")
-    return f"源诊断完成：{path.name}"
-
-
-def _run_hand_repair(context, settings):
-    scene = context.scene
-    _require_restore_before_rerun(scene, "hand_repair")
-    if scene.mcd_annotation_mode and settings.annotation_step_id == "hand_ranges":
-        annotation.commit_track_reassignments(scene, rebuild=False)
-    armature = _require_object(settings, "source_armature", "ARMATURE")
-    _require_action(armature, "源骨架")
-    maps = _source_maps(settings, armature)
-    ranges = {
-        maps["bones"]["left_hand"]: annotation.get_channel_ranges(
-            scene, annotation.CHANNEL_HAND_L_MANUAL
-        ),
-        maps["bones"]["right_hand"]: annotation.get_channel_ranges(
-            scene, annotation.CHANNEL_HAND_R_MANUAL
-        ),
-    }
-    if not any(ranges.values()):
-        raise RuntimeError("最终手部坏区间为空")
-    _ensure_no_pending_preview(settings, "hand_repair")
-    action = project.begin_action_preview(scene, armature, "hand_repair")
-    result = core_source.repair_hand_chain_ranges(
-        scene,
-        armature,
-        action,
-        ranges,
-        arm_chains=_source_maps(settings, armature)["arm_chains"],
-        frame_start=settings.mocap_frame_start,
-        frame_end=settings.mocap_frame_end,
-    )
-    if result.get("values_written", 0) <= 0:
-        raise RuntimeError("没有找到可插值的手臂链 F-Curve")
-    _record_report(scene, "hand_repair", result, "PREVIEW", "手部修复预览等待检查")
-    return f"已修复 {result['processed_range_count']} 个手部区间"
 
 
 def _run_source_floor(context, settings):
@@ -1883,8 +1698,6 @@ def _run_export_prep(context, settings):
 
 RUN_STEP_HANDLERS = {
     "source_check": _run_source_check,
-    "source_analyze": _run_source_analyze,
-    "hand_repair": _run_hand_repair,
     "source_floor": _run_source_floor,
     "contacts": _run_contacts,
     "global_correction": _run_global_correction,
@@ -1941,7 +1754,7 @@ class MD_OT_RunStep(Operator):
             message = handler(context, settings)
             settings.busy = False
             settings.status_message = message
-            if self.step_id in {"source_analyze", "contacts"}:
+            if self.step_id == "contacts":
                 project.save_workfile(context.scene)
             self.report({"INFO"}, message)
             return {"FINISHED"}
@@ -2120,50 +1933,6 @@ class MD_OT_RestoreBeforeStep(Operator):
             return {"CANCELLED"}
 
 
-class MD_OT_ReloadHandHints(Operator):
-    bl_idname = "mocap_doctor.reload_hand_hints"
-    bl_description = (
-        "把检测到的自动提示重新写入左右手可编辑轨道。"
-        "已经手工改过的区间会被这次载入覆盖，供你重新逐条筛"
-    )
-    bl_label = "重新载入自动提示"
-
-    def invoke(self, context, event):
-        return context.window_manager.invoke_confirm(self, event)
-
-    def execute(self, context):
-        settings = _settings(context)
-        try:
-            _require_project(context)
-            scene = context.scene
-            combined = {"L": [], "R": []}
-            for key in ("mcd_hand_hints_motion", "mcd_hand_hints_occlusion"):
-                stored = scene.get(key) or {}
-                for side in ("L", "R"):
-                    combined[side].extend(
-                        (int(item[0]), int(item[1])) for item in stored.get(side, ())
-                    )
-            if not any(combined.values()):
-                raise RuntimeError("还没有自动提示；请先在「源动作诊断」页生成")
-            scene["mcd_hand_l_manual_initialized"] = False
-            scene["mcd_hand_r_manual_initialized"] = False
-            for side in ("L", "R"):
-                annotation.set_hand_auto_hints(
-                    scene,
-                    side,
-                    core_occlusion.merge_ranges(combined[side]),
-                    force_manual=True,
-                    rebuild=side == "R",
-                )
-            total = sum(len(combined[side]) for side in ("L", "R"))
-            settings.status_message = f"已重新载入 {total} 个自动提示区间"
-            self.report({"INFO"}, settings.status_message)
-            return {"FINISHED"}
-        except Exception as exc:  # noqa: BLE001 - surface the reason in the UI
-            self.report({"ERROR"}, str(exc))
-            return {"CANCELLED"}
-
-
 class MD_OT_ReloadAirHints(Operator):
     bl_idname = "mocap_doctor.reload_air_hints"
     bl_description = (
@@ -2220,10 +1989,80 @@ class MD_OT_ReloadAirHints(Operator):
             return {"CANCELLED"}
 
 
-class MD_OT_ReviseHandRanges(Operator):
-    bl_idname = "mocap_doctor.revise_hand_ranges"
-    bl_label = "返回修改坏区间"
-    bl_description = "撤销手部修复结果但保留现有坏区间，恢复后直接回到坏区间标注页面"
+def _pkl_hand_source(context):
+    """Resolve the take dir + locate merged/raw pkls; raise a readable error."""
+
+    settings = _settings(context)
+    take_dir = str(getattr(settings, "gvhmr_take_dir", "") or "").strip()
+    if not take_dir:
+        raise RuntimeError("请先选择 GVHMR 输出目录（含 hamer/merged.pkl）")
+    merged, raw = core_pkl_hand.find_take_pkls(Path(bpy.path.abspath(take_dir)))
+    if merged is None:
+        raise RuntimeError("目录里找不到 hamer/merged.pkl（或顶层 *.pkl）")
+    return settings, merged, raw
+
+
+class MD_OT_PklHandDetect(Operator):
+    bl_idname = "mocap_doctor.pkl_hand_detect"
+    bl_label = "检测手部候选段"
+    bl_description = (
+        "读原始 HaMeR 数据（没有则读 merged pkl）的腕/指旋转帧差与高频残余，"
+        "把候选坏段写入手部自动轨道供人工筛改。"
+        "手型错但跳变速率正常的段算法看不见，仍需人标"
+    )
+
+    def execute(self, context):
+        settings = _settings(context)
+        try:
+            settings, merged, raw = _pkl_hand_source(context)
+            detect_src = raw if raw is not None else merged
+            result = core_pkl_hand.detect_candidates(detect_src)
+            first_work = int(getattr(settings, "source_pkl_frame_start", 1) or 1)
+            shown = {"L": [], "R": []}
+            for side in ("L", "R"):
+                candidates = result[side]
+                auto_ranges = [
+                    (int(c["start"]) + first_work, int(c["end"]) + first_work)
+                    for c in candidates
+                ]
+                annotation.set_hand_auto_hints(
+                    context.scene,
+                    side,
+                    auto_ranges,
+                    initialize_manual=True,
+                    force_manual=False,
+                    rebuild=side == "R",
+                )
+                shown[side] = [
+                    {
+                        "frames": [int(c["start"]) + first_work,
+                                   int(c["end"]) + first_work],
+                        "kind": str(c["kind"]),
+                        "strategy": str(c["strategy"]),
+                        "peak": float(c["peak_deg"]),
+                    }
+                    for c in candidates
+                ]
+            context.scene["mcd_pkl_hand_candidates"] = shown
+            kind_note = "按原始 HaMeR 矩阵检测" if raw is not None else "按 merged pkl 检测"
+            settings.status_message = (
+                f"{kind_note}：L {len(shown['L'])} 段 / R {len(shown['R'])} 段"
+                "已写入手部自动轨道"
+            )
+            self.report({"INFO"}, settings.status_message)
+            return {"FINISHED"}
+        except Exception as exc:  # noqa: BLE001
+            self.report({"ERROR"}, str(exc))
+            return {"CANCELLED"}
+
+
+class MD_OT_PklHandRepair(Operator):
+    bl_idname = "mocap_doctor.pkl_hand_repair"
+    bl_label = "写出修复 pkl"
+    bl_description = (
+        "按手部手动轨道的坏段重写 merged pkl 的腕部与手指旋转，"
+        "输出 *_repaired.pkl；源 pkl 不改，需用修复文件重新导入"
+    )
 
     def invoke(self, context, event):
         return context.window_manager.invoke_confirm(self, event)
@@ -2231,57 +2070,73 @@ class MD_OT_ReviseHandRanges(Operator):
     def execute(self, context):
         settings = _settings(context)
         try:
-            _require_project(context)
-            repair_record = project.find_step_record(
-                settings,
-                "hand_repair",
-                create=False,
-            )
-            repair_was_accepted = repair_record is not None and repair_record.status in {
-                "ACCEPTED",
-                "STALE",
-            }
+            settings, merged, _raw = _pkl_hand_source(context)
+            scene = context.scene
+            if scene.mcd_annotation_mode:
+                annotation.commit_track_reassignments(scene, rebuild=False)
+            first_work = int(getattr(settings, "source_pkl_frame_start", 1) or 1)
+            strategy_prop = str(getattr(settings, "hand_pkl_strategy", "auto"))
+            channel_prop = str(getattr(settings, "hand_pkl_channel", "both"))
+            candidates = scene.get("mcd_pkl_hand_candidates") or {}
 
-            if repair_was_accepted:
-                ranges_record = project.find_step_record(
-                    settings,
-                    "hand_ranges",
-                    create=False,
+            segments = []
+            used_fallback = False
+            for side in ("L", "R"):
+                manual = annotation.get_channel_ranges(
+                    scene, annotation.CHANNEL_HAND_L_MANUAL if side == "L"
+                    else annotation.CHANNEL_HAND_R_MANUAL)
+                source_ranges = list(manual)
+                suggested = {}
+                if not source_ranges:
+                    auto = annotation.get_channel_ranges(
+                        scene, annotation.CHANNEL_HAND_L_AUTO if side == "L"
+                        else annotation.CHANNEL_HAND_R_AUTO)
+                    source_ranges = list(auto)
+                    if source_ranges:
+                        used_fallback = True
+                        for item in candidates.get(side, ()):
+                            frames = item.get("frames") or (0, 0)
+                            suggested[(int(frames[0]), int(frames[1]))] = item.get(
+                                "strategy", "bridge")
+                for start, end in source_ranges:
+                    p_start = int(start) - first_work
+                    p_end = int(end) - first_work
+                    if p_end < 0:
+                        continue
+                    p_start = max(0, p_start)
+                    if strategy_prop != "auto":
+                        strategy = strategy_prop
+                    else:
+                        strategy = suggested.get((int(start), int(end)), "bridge")
+                    segments.append({
+                        "side": side,
+                        "start": p_start,
+                        "end": p_end,
+                        "strategy": strategy,
+                        "channel": channel_prop,
+                    })
+            if not segments:
+                raise RuntimeError(
+                    "没有可用的手部坏段：先在自动检测或标注编辑器里标出区间"
                 )
-                checkpoint = Path(ranges_record.checkpoint) if ranges_record and ranges_record.checkpoint else None
-                if checkpoint is None or not checkpoint.is_file():
-                    raise RuntimeError("找不到包含现有手部标注的检查点")
-                _request_annotation_after_restore("HAND")
-                try:
-                    project.restore_checkpoint(
-                        checkpoint,
-                        settings.work_filepath,
-                        resume_step_id="hand_ranges",
-                        reset_step_id="hand_ranges",
-                        message="已保留现有标注；请补充或调整手部坏区间",
-                    )
-                except Exception:
-                    _cancel_pending_annotation_open()
-                    raise
-                return {"FINISHED"}
-
-            if settings.preview_step_id == "hand_repair" and settings.preview_action:
-                if not project.rollback_action_preview(context.scene):
-                    raise RuntimeError("无法撤销当前手部修复预览")
-            if repair_record is not None:
-                repair_record.status = "PENDING"
-                repair_record.message = "等待重新执行"
-            ranges_record = project.find_step_record(settings, "hand_ranges", create=False)
-            if ranges_record is not None:
-                ranges_record.status = "PENDING"
-                ranges_record.message = "等待补充标注"
-            project.mark_downstream_stale(context.scene, "hand_ranges")
-            settings.current_step = STEP_INDEX["hand_ranges"]
-            settings.status_message = "已保留现有标注；请补充或调整手部坏区间"
-            project.save_workfile(context.scene)
-            _activate_annotation_editor(context.scene, context.screen, "HAND")
+            dst = merged.with_name(merged.stem + "_repaired.pkl")
+            report_path = merged.with_name(merged.stem + "_repaired_report.json")
+            report = core_pkl_hand.repair_pkl(
+                merged, dst, segments, report_path=report_path
+            )
+            done = sum(
+                1 for item in report["segments"]
+                if item["strategy"] != "skipped_segment_at_edge"
+            )
+            settings.status_message = (
+                f"已写出 {dst.name}（{done} 段）；"
+                "请用修复后的 pkl 重新导入，再开始向导"
+            )
+            if used_fallback:
+                settings.status_message += "（手动轨道为空，用了自动候选段）"
+            self.report({"INFO"}, settings.status_message)
             return {"FINISHED"}
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             self.report({"ERROR"}, str(exc))
             return {"CANCELLED"}
 
@@ -2344,7 +2199,12 @@ class MD_OT_EnterAnnotationMode(Operator):
 
     def execute(self, context):
         try:
-            _require_project(context)
+            if self.channel_group == "HAND":
+                # Hand bad-range marking is a pre-project tool (pkl repair);
+                # no step record is needed to open the editor.
+                pass
+            else:
+                _require_project(context)
             if self.channel_group == "FOOT":
                 _require_restore_before_rerun(context.scene, "contacts")
                 record = project.find_step_record(
@@ -2360,8 +2220,6 @@ class MD_OT_EnterAnnotationMode(Operator):
                 # Airborne spans are read off the video, not off the data, so
                 # this editor has no prerequisite - the auto hints are optional.
                 _require_restore_before_rerun(context.scene, "ground_feet")
-            else:
-                _require_restore_before_rerun(context.scene, "hand_ranges")
             was_open = bool(context.scene.mcd_annotation_mode)
             _area, converted, step_id = _activate_annotation_editor(
                 context.scene,
@@ -2391,8 +2249,6 @@ class MD_OT_ExitAnnotationMode(Operator):
             annotation.commit_track_reassignments(scene, rebuild=False)
             if step_id == "contacts":
                 _write_effective_contact_report(scene)
-            elif step_id == "hand_ranges":
-                _write_hand_annotation_report(scene)
             # Discard any native strip transform attempted after manually
             # unlocking a projection track; Scene ranges remain authoritative.
             annotation.rebuild_projection(scene)
@@ -2403,11 +2259,9 @@ class MD_OT_ExitAnnotationMode(Operator):
             if step_id == "contacts":
                 settings.current_step = STEP_INDEX["retarget"]
                 project.create_accepted_checkpoint(scene, "contacts", "最终 planted 区间已提交")
-            elif step_id == "hand_ranges":
-                settings.current_step = STEP_INDEX["hand_repair"]
-                project.create_accepted_checkpoint(scene, "hand_ranges", "手部坏区间已提交")
             settings.status_message = "区间标注已提交"
-            project.save_workfile(scene)
+            if settings.initialized:
+                project.save_workfile(scene)
             self.report({"INFO"}, settings.status_message)
             return {"FINISHED"}
         except Exception as exc:
@@ -2958,6 +2812,47 @@ class MD_OT_PrepareReceiverTemplate(Operator):
         return {"FINISHED"}
 
 
+class MD_OT_AgentServerToggle(Operator):
+    """启动/停止 Agent 工具服务器（本地 socket + 主线程队列执行）"""
+    bl_idname = "mocap_doctor.agent_server_toggle"
+    bl_label = "Agent 服务开关"
+    bl_options = {"INTERNAL"}
+
+    def execute(self, context):
+        from .core import agent_bridge
+        if agent_bridge.is_running():
+            agent_bridge.stop_server()
+            self.report({"INFO"}, "Agent 工具服务器已停止")
+        else:
+            info = agent_bridge.start_server()
+            self.report({"INFO"},
+                        f"Agent 工具服务器已启动 127.0.0.1:{info['port']}")
+        return {"FINISHED"}
+
+
+class MD_OT_AgentPreviewToggle(Operator):
+    """A/B：静音/取消静音 AGENT_PREVIEW 轨，对比修复前后"""
+    bl_idname = "mocap_doctor.agent_ab_toggle"
+    bl_label = "A/B 预览对比"
+    bl_options = {"INTERNAL"}
+
+    def execute(self, context):
+        from .core import agent_bridge
+        settings = context.scene.mocap_doctor
+        armature = agent_bridge._source_armature(settings)
+        if armature is None:
+            self.report({"ERROR"}, "没有识别到源骨架")
+            return {"CANCELLED"}
+        track = agent_bridge._track_by_name(armature, agent_bridge.PREVIEW_TRACK)
+        if track is None:
+            self.report({"INFO"}, "还没有 AGENT_PREVIEW 轨（尚无预览 op）")
+            return {"CANCELLED"}
+        track.mute = not track.mute
+        agent_bridge._redraw()
+        self.report({"INFO"}, "预览轨已静音" if track.mute else "预览轨可见")
+        return {"FINISHED"}
+
+
 CLASSES = (
     MD_OT_PrepareVMDExport,
     MD_OT_RunStep,
@@ -2968,8 +2863,8 @@ CLASSES = (
     MD_OT_SyncRangeFromScene,
     MD_OT_NavigateStep,
     MD_OT_RestoreBeforeStep,
-    MD_OT_ReloadHandHints,
-    MD_OT_ReviseHandRanges,
+    MD_OT_PklHandDetect,
+    MD_OT_PklHandRepair,
     MD_OT_CreateCheckpoint,
     MD_OT_RestoreLastCheckpoint,
     MD_OT_EnterAnnotationMode,
@@ -2983,6 +2878,8 @@ CLASSES = (
     MD_OT_DiscardPreview,
     MD_OT_ExportVMD,
     MD_OT_PrepareReceiverTemplate,
+    MD_OT_AgentServerToggle,
+    MD_OT_AgentPreviewToggle,
 )
 
 

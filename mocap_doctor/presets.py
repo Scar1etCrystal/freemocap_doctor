@@ -90,9 +90,8 @@ def gvhmr_source_prefix(armature):
 
 def _gvhmr_maps(prefix):
     bones = {role: f"{prefix}_{suffix}" for role, suffix in GVHMR_BONE_SUFFIXES.items()}
-    # The chain map is looked up by the rig's own bone name (repair_hand_chain_ranges
-    # is handed {"<prefix>_L_Wrist": [...]}), so the role keys have to be resolved
-    # here - keying them literally leaves every lookup empty and the repair a no-op.
+    # The chain map is looked up by the rig's own bone name, so the role keys
+    # have to be resolved here - keying them literally leaves lookups empty.
     arm_chains = {
         bones[role]: tuple(f"{prefix}_{suffix}" for suffix in suffixes)
         for role, suffixes in GVHMR_ARM_CHAIN_SUFFIXES.items()
@@ -217,11 +216,6 @@ MMR_LEG_CONSTRAINTS = {
 }
 
 DEFAULTS = {
-    "source_diagnostic_contact_height": 0.050,
-    "source_foot_slide_speed": 0.020,
-    "source_heel_slide_speed": 0.018,
-    "source_hand_jump": 0.200,
-    "source_hips_jump": 0.250,
     "source_floor_z": 0.0,
     "source_floor_tolerance": 0.012,
     "source_floor_clearance": 0.004,
