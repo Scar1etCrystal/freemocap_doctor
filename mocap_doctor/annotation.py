@@ -36,6 +36,10 @@ CHANNEL_FOOT_L_AUTO = "FOOT_L_AUTO"
 CHANNEL_FOOT_L_EFFECTIVE = "FOOT_L_EFFECTIVE"
 CHANNEL_FOOT_R_AUTO = "FOOT_R_AUTO"
 CHANNEL_FOOT_R_EFFECTIVE = "FOOT_R_EFFECTIVE"
+# Airborne spans are one track, not a left/right pair: the exemption is about
+# the whole body leaving the floor, which is what the pin cares about.
+CHANNEL_AIR_AUTO = "AIR_AUTO"
+CHANNEL_AIR = "AIR"
 
 
 TRACK_DEFINITIONS = (
@@ -99,6 +103,21 @@ TRACK_DEFINITIONS = (
         "source": "EFFECTIVE",
         "style": "PLANTED",
     },
+    {
+        "channel": CHANNEL_AIR_AUTO,
+        "label": "腾空 自动提示",
+        "track": "08 | 腾空 自动提示 [锁定]",
+        "editable": False,
+        "source": "AUTO",
+    },
+    {
+        "channel": CHANNEL_AIR,
+        "label": "腾空区间",
+        "track": "08 | 腾空区间",
+        "editable": True,
+        "source": "EFFECTIVE",
+        "style": "PLANTED",
+    },
 )
 
 TRACK_BY_CHANNEL = {item["channel"]: item for item in TRACK_DEFINITIONS}
@@ -108,6 +127,7 @@ EDITABLE_CHANNELS = tuple(item["channel"] for item in TRACK_DEFINITIONS if item[
 VISIBLE_CHANNELS_BY_STEP = {
     "hand_ranges": (CHANNEL_HAND_L_MANUAL, CHANNEL_HAND_R_MANUAL),
     "contacts": (CHANNEL_FOOT_L_EFFECTIVE, CHANNEL_FOOT_R_EFFECTIVE),
+    "ground_feet": (CHANNEL_AIR,),
 }
 
 AUTO_CHANNEL_BY_WORKING = {
@@ -115,6 +135,7 @@ AUTO_CHANNEL_BY_WORKING = {
     CHANNEL_HAND_R_MANUAL: CHANNEL_HAND_R_AUTO,
     CHANNEL_FOOT_L_EFFECTIVE: CHANNEL_FOOT_L_AUTO,
     CHANNEL_FOOT_R_EFFECTIVE: CHANNEL_FOOT_R_AUTO,
+    CHANNEL_AIR: CHANNEL_AIR_AUTO,
 }
 
 CHANNEL_ENUM_ITEMS = tuple(
@@ -422,6 +443,47 @@ def set_planted_effective_ranges(scene: bpy.types.Scene, side: str, ranges: Iter
     replace_channel_ranges(scene, channel, ranges, rebuild=rebuild)
 
 
+def set_air_auto_ranges(
+    scene: bpy.types.Scene,
+    ranges: Iterable[Sequence[int]],
+    *,
+    initialize_effective: bool = True,
+    force_effective: bool = False,
+    rebuild: bool = True,
+) -> None:
+    """Write the detector's both-feet-airborne spans and seed the editable track.
+
+    ``force_effective`` overwrites hand edits (used by the explicit "reload
+    hints" button); the automatic seeding in the contacts step only fills an
+    untouched track.
+    """
+
+    cached = list(ranges)
+    updates = {CHANNEL_AIR_AUTO: cached}
+    initialized_key = f"mcd_{CHANNEL_AIR.lower()}_initialized"
+    already_initialized = bool(scene.get(initialized_key, False)) or bool(
+        get_channel_ranges(scene, CHANNEL_AIR)
+    )
+    if force_effective or (initialize_effective and not already_initialized):
+        updates[CHANNEL_AIR] = [
+            {"frame_start": item[0], "frame_end": item[1], "source": "AUTO"}
+            for item in cached
+        ]
+        scene[initialized_key] = True
+    _replace_channels(scene, updates)
+    if rebuild and getattr(scene, "mcd_annotation_helper", None):
+        rebuild_projection(scene)
+
+
+def set_air_ranges(
+    scene: bpy.types.Scene, ranges: Iterable[Sequence[int]], *, rebuild=True
+) -> None:
+    """Write the hand-editable airborne track directly."""
+
+    scene[f"mcd_{CHANNEL_AIR.lower()}_initialized"] = True
+    replace_channel_ranges(scene, CHANNEL_AIR, ranges, rebuild=rebuild)
+
+
 def reset_planted_effective_to_auto(scene: bpy.types.Scene, side: str, *, rebuild=True) -> None:
     is_left = _side_is_left(side)
     source = CHANNEL_FOOT_L_AUTO if is_left else CHANNEL_FOOT_R_AUTO
@@ -480,6 +542,8 @@ def ensure_working_ranges_initialized(scene: bpy.types.Scene, step_id: str) -> N
             (CHANNEL_FOOT_L_AUTO, CHANNEL_FOOT_L_EFFECTIVE),
             (CHANNEL_FOOT_R_AUTO, CHANNEL_FOOT_R_EFFECTIVE),
         )
+    elif step_id == "ground_feet":
+        pairs = ((CHANNEL_AIR_AUTO, CHANNEL_AIR),)
     else:
         return
 
@@ -1559,6 +1623,12 @@ class MCD_OT_annotation_mark_out(_MCDAnnotationOperator, bpy.types.Operator):
         _append_authoritative_range(scene, channel, start, end)
         scene.mcd_annotation_has_pending_in = False
         clear_pending_marker(scene)
+        # Creating a range is a batch operation: leave the channel active but
+        # nothing selected, so the next mark-in starts the following range
+        # without a detour through the empty space and the track header.  This
+        # is deliberately only the creation path - revising an existing strip
+        # keeps its selection, which is what makes chained edits work there.
+        rebuild_projection(scene, active_channel=channel, selected_uids=())
         self.report({"INFO"}, f"已创建 {min(start, end)}–{max(start, end)}")
         return {"FINISHED"}
 

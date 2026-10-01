@@ -9,7 +9,6 @@ from typing import Any
 from .animation import (
     EPSILON,
     bone_path,
-    cache_fcurve_values,
     current_view_layer,
     ensure_fcurve,
     get_fcurve,
@@ -32,29 +31,6 @@ DEFAULT_ARM_CHAINS = {
     "hand.L": ("shoulder.L", "upper_arm.L", "forearm.L", "hand.L"),
     "hand.R": ("shoulder.R", "upper_arm.R", "forearm.R", "hand.R"),
 }
-
-DEFAULT_SMOOTH_BONES = (
-    "pelvis",
-    "spine",
-    "spine.001",
-    "neck",
-    "shoulder.L",
-    "upper_arm.L",
-    "forearm.L",
-    "hand.L",
-    "shoulder.R",
-    "upper_arm.R",
-    "forearm.R",
-    "hand.R",
-    "pelvis.L",
-    "thigh.L",
-    "shin.L",
-    "foot.L",
-    "pelvis.R",
-    "thigh.R",
-    "shin.R",
-    "foot.R",
-)
 
 DEFAULT_SOURCE_CONTACT_POINTS = (
     ("foot.L", "head"),
@@ -253,98 +229,6 @@ def repair_hand_chain_ranges(
         "skipped_ranges": skipped,
         "changed_bones": sorted(changed_bones),
         "fcurve_groups_changed": changed_groups,
-        "values_written": values_written,
-    }
-
-
-def mild_rotation_smooth(
-    scene: Any,
-    armature: Any,
-    action: Any,
-    *,
-    bone_names: Sequence[str] = DEFAULT_SMOOTH_BONES,
-    frame_start: int | None = None,
-    frame_end: int | None = None,
-    radius: int = 2,
-    strength: float = 0.45,
-    include_hands: bool = False,
-    hand_bones: Sequence[str] = ("hand.L", "hand.R", "forearm.L", "forearm.R"),
-    interpolation: str = "LINEAR",
-) -> dict[str, Any]:
-    """Apply the validated mild Gaussian smooth to rotation channels only."""
-
-    start, end = resolve_frame_range(scene, frame_start, frame_end)
-    radius = int(radius)
-    strength = float(strength)
-    if radius < 0:
-        raise ValueError("radius must be non-negative")
-    if not 0.0 <= strength <= 1.0:
-        raise ValueError("strength must be between 0 and 1")
-
-    excluded = set() if include_hands else set(hand_bones)
-    changed: list[str] = []
-    missing: list[str] = []
-    no_curves: list[str] = []
-    values_written = 0
-
-    for bone_name in bone_names:
-        if bone_name in excluded:
-            continue
-        if armature.pose.bones.get(bone_name) is None:
-            missing.append(bone_name)
-            continue
-
-        quaternion_path = bone_path(bone_name, "rotation_quaternion")
-        curves = [get_fcurve(action, quaternion_path, index) for index in range(4)]
-        quaternion = all(curve is not None for curve in curves)
-
-        if not quaternion:
-            euler_path = bone_path(bone_name, "rotation_euler")
-            curves = [get_fcurve(action, euler_path, index) for index in range(3)]
-            if not all(curve is not None for curve in curves):
-                no_curves.append(bone_name)
-                continue
-
-        originals = [cache_fcurve_values(curve, start, end) for curve in curves]
-        smoothed = [
-            smooth_frame_values(values, start, end, radius)
-            for values in originals
-        ]
-        results = [
-            {
-                frame: originals[index][frame] * (1.0 - strength)
-                + smoothed[index][frame] * strength
-                for frame in range(start, end + 1)
-            }
-            for index in range(len(curves))
-        ]
-        caches = [keyframe_map(curve) for curve in curves]
-
-        for frame in range(start, end + 1):
-            frame_values = [result[frame] for result in results]
-            if quaternion:
-                frame_values = normalize_quaternion(frame_values)
-            for index, curve in enumerate(curves):
-                set_fcurve_value(
-                    curve,
-                    frame,
-                    frame_values[index],
-                    interpolation=interpolation,
-                    cache=caches[index],
-                )
-                values_written += 1
-        changed.append(bone_name)
-
-    update_action(action)
-    return {
-        "operation": "mild_rotation_smooth",
-        "frame_range": [start, end],
-        "radius": radius,
-        "strength": strength,
-        "include_hands": include_hands,
-        "changed_bones": changed,
-        "missing_bones": missing,
-        "bones_without_rotation_curves": no_curves,
         "values_written": values_written,
     }
 

@@ -95,6 +95,36 @@ def get_action(owner: Any, *, required: bool = True) -> Any | None:
     return action
 
 
+def ensure_action_slot(owner: Any) -> None:
+    """Bind an Action slot on Blender 4.4+ slotted Actions.
+
+    Assigning a brand new (empty) Action leaves ``animation_data.action_slot``
+    unset, and every legacy ``action.fcurves`` write then lands in a channelbag
+    the object is not bound to: the curve exists, evaluates, and animates
+    nothing.  An Action copied from an existing one carries a bound slot, so
+    only owners that start WITHOUT an Action were silently dead - measured on
+    the correction Empty of a GVHMR project (全局扶正 never run), where the
+    mesh floor repair had been writing a lift that never applied.
+    """
+
+    animation_data = getattr(owner, "animation_data", None)
+    action = getattr(animation_data, "action", None) if animation_data else None
+    if animation_data is None or action is None:
+        return
+    slots = getattr(action, "slots", None)
+    if slots is None:  # Blender < 4.4 keeps the plain legacy behaviour.
+        return
+    if getattr(animation_data, "action_slot", None) is not None:
+        return
+    try:
+        slot = slots[0] if len(slots) else slots.new(
+            id_type=getattr(owner, "id_type", "OBJECT"), name=str(owner.name)
+        )
+        animation_data.action_slot = slot
+    except Exception:  # noqa: BLE001 - binding is best effort, never fatal
+        pass
+
+
 def ensure_action(owner: Any, name: str) -> Any:
     """Return the owner's Action, creating a legacy Action when necessary."""
 
@@ -104,6 +134,7 @@ def ensure_action(owner: Any, name: str) -> Any:
     if action is None:
         action = bpy.data.actions.new(name=name)
         owner.animation_data.action = action
+    ensure_action_slot(owner)
     return action
 
 

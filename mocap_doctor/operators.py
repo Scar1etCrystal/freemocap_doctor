@@ -120,7 +120,12 @@ def _restore_all_annotation_areas():
 
 
 def _annotation_step_for_group(channel_group):
-    return "contacts" if str(channel_group).upper() == "FOOT" else "hand_ranges"
+    group = str(channel_group).upper()
+    if group == "FOOT":
+        return "contacts"
+    if group == "AIR":
+        return "ground_feet"
+    return "hand_ranges"
 
 
 def _activate_annotation_editor_impl(scene, screen, channel_group):
@@ -1355,38 +1360,6 @@ def _run_hand_repair(context, settings):
     return f"已修复 {result['processed_range_count']} 个手部区间"
 
 
-def _run_smooth(context, settings):
-    scene = context.scene
-    _require_restore_before_rerun(scene, "smooth")
-    armature = _require_object(settings, "source_armature", "ARMATURE")
-    _require_action(armature, "源骨架")
-    _ensure_no_pending_preview(settings, "smooth")
-    action = project.begin_action_preview(scene, armature, "smooth")
-    maps = _source_maps(settings, armature)
-    params = {
-        "radius": settings.smooth_radius,
-        "strength": settings.smooth_strength,
-        "include_hands": settings.smooth_include_hands,
-    }
-    smooth_kwargs = {}
-    if maps["smooth_bones"] is not None:
-        smooth_kwargs["bone_names"] = maps["smooth_bones"]
-        smooth_kwargs["hand_bones"] = tuple(
-            name for chain in maps["arm_chains"].values() for name in chain[1:]
-        )
-    result = core_source.mild_rotation_smooth(
-        scene,
-        armature,
-        action,
-        frame_start=settings.mocap_frame_start,
-        frame_end=settings.mocap_frame_end,
-        **params,
-        **smooth_kwargs,
-    )
-    _record_report(scene, "smooth", result, "PREVIEW", "旋转平滑预览等待检查", params)
-    return f"已平滑 {result.get('changed_bone_count', len(result.get('changed_bones', ())))} 根骨骼"
-
-
 def _run_source_floor(context, settings):
     scene = context.scene
     _require_restore_before_rerun(scene, "source_floor")
@@ -1465,6 +1438,22 @@ def _run_contacts(context, settings):
             initialize_effective=True,
             rebuild=side == "R",
         )
+    # "Both feet off the floor at once" is the one thing the data CAN state
+    # reliably - it is the grounding step's exemption list, and a missed jump
+    # is what happens when nobody marks it.  Seed it as a hint; the human
+    # extends it (GVHMR smears real jumps into near-ground, so it under-finds).
+    airborne_frames = [
+        frame
+        for frame in range(settings.mocap_frame_start, settings.mocap_frame_end + 1)
+        if all(
+            report["feet"][side]["per_frame"].get(frame, {}).get("state")
+            == "airborne_or_lifted"
+            for side in ("L", "R")
+        )
+    ]
+    annotation.set_air_auto_ranges(
+        scene, frames_to_ranges(airborne_frames), initialize_effective=True
+    )
     path = _record_report(
         scene,
         "contacts",
@@ -1581,6 +1570,17 @@ def _run_foot_lock(context, settings):
         raise RuntimeError("最终 planted 区间为空，请先完成接触区间修订")
     rig = _require_object(settings, "mmr_rig", "ARMATURE", OBJECT_NAMES["mmr_rig"])
     _require_action(rig, "MMR Rig")
+    armature = _require_object(
+        settings, "mmd_armature", "ARMATURE", OBJECT_NAMES["mmd_armature"]
+    )
+    # The closed loop measures the ankle through the MMR copy constraints;
+    # with them muted (i.e. after a bake) it would correct against a frozen
+    # bone and write garbage.  Fail before touching anything.
+    if not _active_mmr_constraints(armature, rig):
+        raise RuntimeError(
+            "MMR 到 MMD 的约束未激活；闭环稳定靠约束把脚 IK 传给足首，"
+            "请在 MMD Visual Bake 之前运行此步骤"
+        )
     drift = core_target.analyze_foot_ik_drift(
         scene,
         rig,
@@ -1613,9 +1613,149 @@ def _run_foot_lock(context, settings):
         frame_end=settings.mocap_frame_end,
         **params,
     )
-    report = {"operation": "analyze_and_lock_teto_foot_ik", "drift_before": drift, "repair": repair}
+    # Closed-loop world-space stabilization: measure the evaluated MMD ankle
+    # (what the mesh and the bake actually follow) and pull foot_ik until the
+    # ankle holds the segment anchor pose.  This replaces the 1.4.0 channel
+    # locks that only ever saw the controller side of the constraint chain.
+    # The pelvis pass runs inside it first: per-frame the model's leg reach
+    # ratio is re-solved onto the source skeleton's (restoring the captured
+    # knee bend Teto's longer legs were flattening), which lowers torso_root
+    # enough that planted anchors at floor height stay physically reachable.
+    stabilized = core_target.stabilize_planted_feet(
+        scene,
+        armature,
+        rig,
+        action,
+        planted,
+        source_armature=settings.source_armature,
+        pelvis_correction_max=settings.pelvis_correction_max,
+        sole_offset=core_target.model_sole_offset(
+            armature, settings.target_mesh
+        ),
+        sole_dirs=core_target.sole_contact_offsets(
+            armature, settings.target_mesh
+        ),
+        foot_bones=TARGET_FOOT_IK,
+        frame_start=settings.mocap_frame_start,
+        frame_end=settings.mocap_frame_end,
+        trim_segment_ends=settings.lock_trim,
+        min_segment_len=settings.lock_min_segment_len,
+        blend_frames=settings.lock_blend_frames,
+    )
+    report = {
+        "operation": "analyze_and_lock_teto_foot_ik",
+        "drift_before": drift,
+        "repair": repair,
+        "stabilize": stabilized,
+    }
     _record_report(scene, "foot_lock", report, "PREVIEW", "脚滑 XY Lock 等待检查", params)
-    return f"XY Lock 修复 {repair.get('repaired_count', 0)} 个区间"
+    message = f"XY Lock 修复 {repair.get('repaired_count', 0)} 个区间"
+    residual = (
+        stabilized.get("residual_after") or stabilized.get("residual_before") or {}
+    )
+    message += (
+        f"；闭环稳定 {stabilized.get('stabilized_segments', 0)} 段"
+        f"（踝残余 {residual.get('max_pos_mm', 0.0):.1f} mm / "
+        f"{residual.get('max_rot_deg', 0.0):.2f}°）"
+    )
+    pelvis = stabilized.get("pelvis_solve") or {}
+    if pelvis.get("status") == "applied":
+        message += (
+            f"；骨盆修约 {pelvis.get('frames_corrected', 0)} 帧"
+            f"（最大 {pelvis.get('max_correction_mm', 0.0):.1f} mm）"
+        )
+    if stabilized.get("verification") == "unconverged":
+        message += "；个别段首帧残余未收敛（落地帧腿够程上限），见报告"
+    return message
+
+
+def _air_source_labels(scene):
+    """Map each airborne radio to its annotation provenance, for the report."""
+
+    labels = []
+    for record in getattr(scene, "mcd_annotation_ranges", ()):
+        if record.channel != annotation.CHANNEL_AIR:
+            continue
+        labels.append(
+            {
+                "frames": [int(record.frame_start), int(record.frame_end)],
+                "source": str(record.source or ""),
+            }
+        )
+    return labels
+
+
+def _run_ground_feet(context, settings):
+    scene = context.scene
+    _require_restore_before_rerun(scene, "ground_feet")
+    _model_root, armature, rig, _foot_ik = _validate_mmd_identity(settings)
+    # The correction rides into MMD Visual Bake through the MMR copy
+    # constraints.  Once those are muted (or the MMD armature already has an
+    # Action) the bake is done, and moving the rig would no longer reach the
+    # model - say so instead of writing a correction that does nothing.
+    if not _active_mmr_constraints(armature, rig):
+        raise RuntimeError(
+            "MMR 到 MMD 的约束已经禁用（多半已完成 MMD Bake）；"
+            "贴地锁定必须在 Bake 之前运行，请先恢复到“MMD Visual Bake”执行前"
+        )
+    animation_data = armature.animation_data
+    if animation_data and (
+        animation_data.action is not None or len(animation_data.nla_tracks) > 0
+    ):
+        raise RuntimeError(
+            "原生 MMD 骨架已有 Action/NLA（多半已完成 Bake）；"
+            "贴地锁定必须在 Bake 之前运行，请先恢复到“MMD Visual Bake”执行前"
+        )
+    _require_no_nla(rig, "MMR Rig")
+    rig_action = _require_action(rig, "MMR Rig")
+    if not _action_has_range_keys(
+        rig_action, settings.mocap_frame_start, settings.mocap_frame_end
+    ):
+        raise RuntimeError("MMR Rig Action 没有覆盖完整动捕范围")
+    _ensure_no_pending_preview(settings, "ground_feet")
+    action = project.begin_action_preview(scene, rig, "ground_feet")
+    airborne = annotation.get_channel_ranges(scene, annotation.CHANNEL_AIR)
+    # The pin works on ankle bones; the shoe sole hangs below them by the
+    # model's own bind-pose drop (~5.6 cm on Teto).  Read it off the model
+    # instead of carrying a hand tuned default.
+    sole_offset = core_target.model_sole_offset(armature, settings.target_mesh)
+    params = {
+        "floor_z": settings.target_floor_z,
+        "clearance": settings.target_clearance,
+        "sole_offset": sole_offset,
+        "smooth_radius": settings.ground_smooth_radius,
+        "max_delta": settings.ground_max_delta,
+    }
+    result = core_target.ground_feet_outside_airborne(
+        scene,
+        armature,
+        rig,
+        action,
+        airborne,
+        frame_start=settings.mocap_frame_start,
+        frame_end=settings.mocap_frame_end,
+        **params,
+    )
+    result["airborne_sources"] = _air_source_labels(scene)
+    _record_report(scene, "ground_feet", result, "PREVIEW", "贴地锁定等待检查", params)
+    message = (
+        f"贴地锁定 {result.get('changed_frames', 0)} 帧"
+        f"，最大修正 {result.get('max_applied_correction', 0.0) * 1000:.0f} mm"
+    )
+    spans = result.get("airborne_segments", ())
+    if spans:
+        ballistic = sum(1 for item in spans if item.get("mode") == "ballistic")
+        message += f"；腾空段 {len(spans)} 个（弹道重建 {ballistic}）"
+    else:
+        message += "；没有腾空区间——若这段舞有跳跃，请先标注再重跑，否则跳跃会被压平"
+    suspects = result.get("unmarked_airborne_suspects", ())
+    if suspects:
+        worst = suspects[0]
+        message += (
+            f"；另有 {len(suspects)} 段没标腾空但脚离地很高"
+            f"（最高 {worst['max_height'] * 100:.0f} cm，见报告）"
+        )
+    return message
 
 
 def _run_export_prep(context, settings):
@@ -1745,13 +1885,13 @@ RUN_STEP_HANDLERS = {
     "source_check": _run_source_check,
     "source_analyze": _run_source_analyze,
     "hand_repair": _run_hand_repair,
-    "smooth": _run_smooth,
     "source_floor": _run_source_floor,
     "contacts": _run_contacts,
     "global_correction": _run_global_correction,
     "tilt": _run_tilt,
     "target_floor": _run_target_floor,
     "foot_lock": _run_foot_lock,
+    "ground_feet": _run_ground_feet,
     "export_prep": _run_export_prep,
 }
 
@@ -2024,6 +2164,62 @@ class MD_OT_ReloadHandHints(Operator):
             return {"CANCELLED"}
 
 
+class MD_OT_ReloadAirHints(Operator):
+    bl_idname = "mocap_doctor.reload_air_hints"
+    bl_description = (
+        "从 planted 检测结果里取「双脚同时离地」的帧作为腾空提示初稿。"
+        "只在腾空轨道为空时写入；已有标注不会被覆盖（标错的跳跃比漏标贵得多）"
+    )
+    bl_label = "载入自动腾空提示"
+
+    def execute(self, context):
+        settings = _settings(context)
+        try:
+            _require_project(context)
+            scene = context.scene
+            if annotation.get_channel_ranges(scene, annotation.CHANNEL_AIR):
+                raise RuntimeError(
+                    "腾空轨道里已经有标注，这次载入不改动它；"
+                    "要重新载入请先在标注编辑器里清空腾空区间"
+                )
+            record = project.find_step_record(settings, "contacts", create=False)
+            if (
+                record is None
+                or not record.artifact_path
+                or not Path(record.artifact_path).is_file()
+            ):
+                raise RuntimeError(
+                    "还没有 planted 检测结果；请先运行「Planted 检测与修订」"
+                )
+            with Path(record.artifact_path).open("r", encoding="utf-8") as handle:
+                report = json.load(handle)
+            frames = []
+            for frame in range(
+                int(settings.mocap_frame_start), int(settings.mocap_frame_end) + 1
+            ):
+                states = []
+                for side in ("L", "R"):
+                    per_frame = report.get("feet", {}).get(side, {}).get("per_frame", {})
+                    entry = per_frame.get(str(frame)) or per_frame.get(frame) or {}
+                    states.append(entry.get("state"))
+                if states[0] == "airborne_or_lifted" and states[1] == "airborne_or_lifted":
+                    frames.append(frame)
+            if not frames:
+                # GVHMR smears real jumps into near-ground, so this take's data
+                # may never show both feet off the floor at once.
+                raise RuntimeError(
+                    "检测结果里没有「双脚同时离地」的帧——这段数据里跳跃被抹平了，"
+                    "自动提示帮不上忙，请在视频里手动标注腾空区间"
+                )
+            annotation.set_air_auto_ranges(scene, frames_to_ranges(frames))
+            settings.status_message = f"已载入 {len(frames)} 帧腾空提示初稿"
+            self.report({"INFO"}, settings.status_message)
+            return {"FINISHED"}
+        except Exception as exc:  # noqa: BLE001 - surface the reason in the UI
+            self.report({"ERROR"}, str(exc))
+            return {"CANCELLED"}
+
+
 class MD_OT_ReviseHandRanges(Operator):
     bl_idname = "mocap_doctor.revise_hand_ranges"
     bl_label = "返回修改坏区间"
@@ -2160,6 +2356,10 @@ class MD_OT_EnterAnnotationMode(Operator):
                     or not Path(record.artifact_path).is_file()
                 ):
                     raise RuntimeError("请先运行 planted 自动检测，再打开区间标注")
+            elif self.channel_group == "AIR":
+                # Airborne spans are read off the video, not off the data, so
+                # this editor has no prerequisite - the auto hints are optional.
+                _require_restore_before_rerun(context.scene, "ground_feet")
             else:
                 _require_restore_before_rerun(context.scene, "hand_ranges")
             was_open = bool(context.scene.mcd_annotation_mode)
@@ -2169,7 +2369,7 @@ class MD_OT_EnterAnnotationMode(Operator):
                 self.channel_group,
             )
             action = "已切换到" if was_open else "已打开"
-            label = "planted" if step_id == "contacts" else "手部"
+            label = {"contacts": "planted", "ground_feet": "腾空"}.get(step_id, "手部")
             suffix = "（原 Timeline 已临时切换）" if converted else ""
             self.report({"INFO"}, f"{action}{label}标注{suffix}")
             return {"FINISHED"}
@@ -2775,6 +2975,7 @@ CLASSES = (
     MD_OT_EnterAnnotationMode,
     MD_OT_ExitAnnotationMode,
     MD_OT_ResetEffectiveContacts,
+    MD_OT_ReloadAirHints,
     MD_OT_MMDBake,
     MD_OT_ValidateManualMMDBake,
     MD_OT_CleanupLegFK,

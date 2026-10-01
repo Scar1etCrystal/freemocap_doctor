@@ -9,7 +9,8 @@ from pathlib import Path
 import bpy
 from bpy.app.handlers import persistent
 
-from .presets import EXPECTED_FPS, OBJECT_NAMES, fixed_object_name_matches
+from .core import animation as core_animation
+from .presets import DEFAULTS, EXPECTED_FPS, OBJECT_NAMES, fixed_object_name_matches
 from .workflow import STEP_INDEX
 
 
@@ -21,11 +22,20 @@ _RESTORE_MESSAGE = ""
 
 # Bump when saved projects need their workflow state adjusted on load; add a
 # migration branch in _migrate_project_schema for each previous version.
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 5
 
 # Where the retired "fingers" step used to sit: between mmd_bake and
 # export_prep.  Everything after it shifted down by one when it was removed.
 RETIRED_FINGERS_INDEX = 14
+
+# Where the retired "smooth" step used to sit: after hand_repair, before
+# source_floor.  GVHMR pre-filters its own output, so the extra Gaussian pass
+# only removed the last of the snap; everything after it shifted down by one.
+RETIRED_SMOOTH_INDEX = 5
+
+# The "ground_feet" step (pin the planted foot back onto the floor) was inserted
+# right after foot_lock, so mmd_bake and everything after it shifted up by one.
+GROUND_FEET_INDEX = 12
 
 
 @persistent
@@ -59,6 +69,42 @@ def _migrate_project_schema(_dummy):
             for index in range(len(settings.steps) - 1, -1, -1):
                 if settings.steps[index].step_id == "fingers":
                     settings.steps.remove(index)
+        # 3 -> 4: the "smooth" step is gone.  GVHMR already filters its own
+        # output, and a take that never ran step 6 still came out visibly
+        # smooth - the extra pass only ate the remaining sharpness.  Every
+        # step after it shifted down by one, and its record is now an orphan.
+        # The same version adds "ground_feet" right after foot_lock, which
+        # shifts mmd_bake and everything after it back up by one.
+        if settings.schema_version < 4:
+            if settings.current_step > RETIRED_SMOOTH_INDEX:
+                settings.current_step -= 1
+            for index in range(len(settings.steps) - 1, -1, -1):
+                if settings.steps[index].step_id == "smooth":
+                    settings.steps.remove(index)
+            if settings.current_step >= GROUND_FEET_INDEX:
+                settings.current_step += 1
+        # 4 -> 5: "ground_feet" moved ahead of "target_floor", because the mesh
+        # floor repair is only meaningful once the model has been grounded.
+        # Old 10 target_floor -> 11, old 11 foot_lock -> 12, old 12 ground_feet
+        # -> 10; step records are keyed by id and need no remapping.
+        if settings.schema_version < 5:
+            if settings.current_step == 10:
+                settings.current_step = 11
+            elif settings.current_step == 11:
+                settings.current_step = 12
+            elif settings.current_step == 12:
+                settings.current_step = 10
+            # The same version zeroes the ground heights (0.0257/0.02 were
+            # hand fitted to old FreeMoCap output) and re-tunes the mesh floor
+            # repair for its new role, which runs after the pin and must track
+            # it closely.  Blender keeps property values inside the .blend, so
+            # a saved project would otherwise keep the stale numbers.
+            settings.source_floor_z = DEFAULTS["source_floor_z"]
+            settings.target_floor_z = DEFAULTS["target_floor_z"]
+            settings.vmd_floor_offset = DEFAULTS["vmd_floor_offset"]
+            settings.target_floor_strength = DEFAULTS["target_floor_strength"]
+            settings.target_floor_smooth_radius = DEFAULTS["target_floor_smooth_radius"]
+            settings.target_floor_max_delta = DEFAULTS["target_floor_max_delta"]
         settings.schema_version = SCHEMA_VERSION
     except Exception as exc:
         print(f"[MoCap Doctor] schema migration failed: {exc}")
@@ -370,6 +416,11 @@ def begin_action_preview(scene, owner, step_id):
     if base:
         preview.name = f"MD_PREVIEW_{step_id}_{base.name}"
     owner.animation_data.action = preview
+    # A brand new preview Action is assigned unbound; on Blender 4.4+ that
+    # leaves every later fcurve write animating nothing (see
+    # core.animation.ensure_action_slot).  A copy of an existing Action already
+    # carries a bound slot, so this only matters for owners that had none.
+    core_animation.ensure_action_slot(owner)
     _ACTION_PREVIEWS[scene.as_pointer()] = {"owner": owner, "base": base, "preview": preview, "step_id": step_id}
     settings.preview_step_id = step_id
     settings.preview_owner_name = owner.name

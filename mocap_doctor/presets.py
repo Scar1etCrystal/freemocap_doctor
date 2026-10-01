@@ -75,14 +75,6 @@ GVHMR_ARM_CHAIN_SUFFIXES = {
     "right_hand": ("R_Wrist",),
 }
 
-GVHMR_SMOOTH_SUFFIXES = (
-    "Pelvis", "Spine1", "Spine2", "Spine3", "Neck",
-    "L_Collar", "L_Shoulder", "L_Elbow", "L_Wrist",
-    "R_Collar", "R_Shoulder", "R_Elbow", "R_Wrist",
-    "L_Hip", "L_Knee", "L_Ankle",
-    "R_Hip", "R_Knee", "R_Ankle",
-)
-
 
 def gvhmr_source_prefix(armature):
     """Return the SMPL bone prefix (``f_avg`` / ``m_avg``) present on the rig."""
@@ -105,7 +97,6 @@ def _gvhmr_maps(prefix):
         bones[role]: tuple(f"{prefix}_{suffix}" for suffix in suffixes)
         for role, suffixes in GVHMR_ARM_CHAIN_SUFFIXES.items()
     }
-    smooth_bones = tuple(f"{prefix}_{suffix}" for suffix in GVHMR_SMOOTH_SUFFIXES)
     contact_points = (
         (f"{prefix}_L_Ankle", "head"),
         (f"{prefix}_L_Ankle", "tail"),
@@ -131,7 +122,6 @@ def _gvhmr_maps(prefix):
         "prefix": prefix,
         "bones": bones,
         "arm_chains": arm_chains,
-        "smooth_bones": smooth_bones,
         "contact_points": contact_points,
         "foot_points": foot_points,
     }
@@ -148,7 +138,6 @@ def _freemocap_maps(armature):
             SOURCE_BONES["left_hand"]: tuple(ARM_CHAINS["L"]),
             SOURCE_BONES["right_hand"]: tuple(ARM_CHAINS["R"]),
         },
-        "smooth_bones": None,  # 算法模块自带的 FreeMoCap 默认值
         "contact_points": None,
         "foot_points": None,
     }
@@ -233,9 +222,7 @@ DEFAULTS = {
     "source_heel_slide_speed": 0.018,
     "source_hand_jump": 0.200,
     "source_hips_jump": 0.250,
-    "smooth_radius": 2,
-    "smooth_strength": 0.45,
-    "source_floor_z": 0.02,
+    "source_floor_z": 0.0,
     "source_floor_tolerance": 0.012,
     "source_floor_clearance": 0.004,
     "source_floor_max_lift": 0.6,
@@ -257,20 +244,23 @@ DEFAULTS = {
     "global_rot_y": 0.0,
     "global_rot_z": 0.0,
     "tilt_strength": 0.65,
-    "target_floor_z": 0.0257,
+    "target_floor_z": 0.0,
     "target_clearance": 0.0015,
     "target_floor_tolerance": 0.004,
     "target_floor_max_lift": 0.035,
-    "target_floor_strength": 0.55,
-    "target_floor_smooth_radius": 3,
-    "target_floor_max_delta": 0.0045,
+    "target_floor_strength": 1.0,
+    "target_floor_smooth_radius": 0,
+    "target_floor_max_delta": 0.01,
     "target_vertex_sample_step": 2,
     "lock_trim": 2,
+    "pelvis_correction_max": 0.04,
     "drift_min_segment_len": 4,
     "lock_min_segment_len": 5,
     "lock_blend_frames": 2,
     "lock_min_xy_range": 0.006,
-    "vmd_floor_offset": -0.0257,
+    "ground_smooth_radius": 2,
+    "ground_max_delta": 0.01,
+    "vmd_floor_offset": 0.0,
     "source_pkl_frame_start": 1,
 }
 

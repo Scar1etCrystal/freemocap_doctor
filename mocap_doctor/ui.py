@@ -194,12 +194,6 @@ class MD_PT_Main(Panel):
                 icon="LOOP_BACK",
             )
 
-        elif step_id == "smooth":
-            layout.prop(settings, "smooth_strength", text="强度")
-            layout.prop(settings, "smooth_radius", text="半径（帧）")
-            layout.prop(settings, "smooth_include_hands", text="包含手和前臂")
-            _draw_run(layout, step_id)
-
         elif step_id == "source_floor":
             layout.prop(settings, "source_floor_z", text="地面 Z")
             layout.prop(settings, "source_floor_strength", text="强度")
@@ -281,11 +275,44 @@ class MD_PT_Main(Panel):
             layout.prop(settings, "lock_trim", text="裁掉段首尾")
             layout.prop(settings, "drift_min_segment_len", text="漂移分析最短区间")
             layout.prop(settings, "lock_min_segment_len", text="锁定最短区间")
+            layout.prop(settings, "pelvis_correction_max", text="骨盆修约上限")
             row = layout.row(align=True)
+            row.label(text="锁位置")
             row.prop(settings, "lock_x", text="X", toggle=True)
             row.prop(settings, "lock_y", text="Y", toggle=True)
             row.prop(settings, "lock_z", text="Z", toggle=True)
+            note = layout.box()
+            note.label(text="位置锁冻结脚踝；闭环稳定再把整只脚钉在世界空间。", icon="INFO")
+            note.label(text="锚 = 段中位帧的足首世界位姿（高度贴地），位置+旋转全锁。")
+            note.label(text="planted 段内按源骨架腿长比重解骨盆高度（写 torso_root），")
+            note.label(text="骨盆抬脚离地时身体下沉让膝恢复弯度、脚够回地面。")
+            note.label(text="有真实原地碾转的段：先把那几帧从 planted 删掉。")
             _draw_run(layout, step_id)
+
+        elif step_id == "ground_feet":
+            layout.prop(settings, "target_floor_z", text="地面 Z")
+            layout.prop(settings, "target_clearance", text="离地间隙")
+            layout.prop(settings, "ground_smooth_radius", text="平滑半径")
+            layout.prop(settings, "ground_max_delta", text="帧间最大变化（m/帧）")
+            note = layout.box()
+            note.label(text="非腾空帧一律把最低的脚钉到地面。", icon="INFO")
+            note.label(text="腾空区间 = 两只脚都不在地面的帧：")
+            note.label(text="从最后一只脚离地之后起，到第一只脚触地之前止。")
+            note.label(text="一只脚在地面的过渡帧不用标；漏标会把跳跃压平。")
+            note.label(text="跳高由区间时长决定（T²）；报告里给出该段顶点高度。")
+            note.label(text="必须在 MMD Visual Bake 之前运行。")
+            operator = layout.operator(
+                "mocap_doctor.enter_annotation_mode",
+                text="编辑腾空区间",
+                icon="NLA",
+            )
+            operator.channel_group = "AIR"
+            layout.operator(
+                "mocap_doctor.reload_air_hints",
+                text="载入自动腾空提示",
+                icon="FILE_REFRESH",
+            )
+            _draw_run(layout, step_id, "贴地锁定", "SNAP_ON")
 
         elif step_id == "mmd_bake":
             layout.prop(settings, "mmd_armature", text="原生 MMD 骨架")

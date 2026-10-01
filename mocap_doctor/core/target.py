@@ -9,10 +9,13 @@ from typing import Any
 
 try:
     import bpy  # type: ignore
-    from mathutils import Euler  # type: ignore
+    from mathutils import Euler, Matrix, Quaternion, Vector  # type: ignore
 except ImportError:  # pragma: no cover - module is executed inside Blender.
     bpy = None
     Euler = None
+    Matrix = None
+    Quaternion = None
+    Vector = None
 
 from .animation import (
     EPSILON,
@@ -27,6 +30,7 @@ from .animation import (
     insert_pose_rotation_key,
     keyframe_map,
     limit_frame_delta,
+    pose_bone_point_world,
     pose_bone_world_location,
     preserve_scene_frame,
     resolve_frame_range,
@@ -41,6 +45,54 @@ from .ranges import normalize_ranges
 
 
 DEFAULT_FOOT_IK = {"L": "foot_ik.L", "R": "foot_ik.R"}
+# The MMD ankle bone spans heel to ball of foot, so its head and tail are the
+# closest thing to a sole the fixed Teto skeleton offers for measuring where a
+# planted foot actually is.  The toe bone is deliberately not used: MMR does not
+# drive it before MMD Visual Bake, so it would report a frozen rest position.
+DEFAULT_GROUND_POINTS = {
+    "L": (("足首.L", "head"), ("足首.L", "tail")),
+    "R": (("足首.R", "head"), ("足首.R", "tail")),
+}
+# Airborne spans are rebuilt ballistically; gravity is what turns the marked
+# flight time into a jump height, so it is a physical constant, not a taste knob.
+GRAVITY = 9.81
+# 0.8 s of flight is already a 78 cm jump (g*T^2/8); anything longer is not a
+# jump, so it falls back to interpolating the neighbouring pins.
+BALLISTIC_MAX_FRAMES = 24
+# A fuse, not a judgement: only a mis-marked range can ask for more than this.
+MAX_CORRECTION = 0.5
+# Grounded frames whose foot sits higher than this are reported as suspected
+# missing airborne marks (informational only - the pin still applies).
+SUSPECT_AIRBORNE_HEIGHT = 0.06
+# Pelvis reach pass (inside foot_lock, before the ankle lock): re-solve the
+# body height per frame so the model keeps the SOURCE's leg reach ratio
+# |hip-ankle| / leg_length - which for a two-bone chain is the knee angle by
+# geometric identity.  Teto's legs are proportionally longer than the capture
+# subject's, so retargeted poses straighten the knee beyond the source and
+# lift planted feet off the floor; lowering the torso onto the correct reach
+# restores both.  Written onto torso_root (the bone the retarget actually
+# animates for body translation; torso/hips/root carry no location fcurves).
+PELVIS_CORRECTION_MAX = 0.025  # metres of torso drop/lift per frame
+PELVIS_SMOOTH_FRAMES = 9  # low-pass half-window for the correction curve
+PELVIS_DEADBAND = 0.002  # corrections below this are noise, skip them
+DEFAULT_PELVIS_BONE = "torso_root"
+SOURCE_LEG_BONES = {
+    "L": ("f_avg_L_Hip", "f_avg_L_Knee", "f_avg_L_Ankle"),
+    "R": ("f_avg_R_Hip", "f_avg_R_Knee", "f_avg_R_Ankle"),
+}
+MODEL_LEG_BONES = {
+    "L": ("足.L", "ひざ.L", "足首.L"),
+    "R": ("足.R", "ひざ.R", "足首.R"),
+}
+# Closed-loop stabilizer converge thresholds for the post-write verification
+# measure.  They gate the reported state, not the write: a residual above
+# them after one pass is a reachability floor, not a retryable error.
+STABILIZE_POS_TOLERANCE = 0.0005  # metres of ankle translation error
+STABILIZE_ROT_TOLERANCE_DEG = 0.5  # degrees of ankle rotation error
+
+# The loop measures the MMD-side ankle: the constrained bone the mesh and the
+# bake actually follow.
+DEFAULT_ANKLE_BONES = {"L": "足首.L", "R": "足首.R"}
 DEFAULT_EXCLUDED_MESH_KEYWORDS = (
     "ground",
     "plane",
@@ -708,5 +760,1585 @@ def lock_foot_ik_xy(
         "skipped_segments": skipped,
         "missing_bones": missing,
         "values_written": total_values_written,
+    }
+
+
+def _segment_lock_weights(
+    seg_start: int,
+    seg_end: int,
+    blend_frames: int,
+    frame_start: int,
+    frame_end: int,
+) -> dict[int, float]:
+    """Frame -> correction weight for one locked segment.
+
+    Interior frames take the full correction; a ring of ``blend_frames`` frames
+    outside the trimmed segment eases it toward zero with weight
+    (b + 1 - k)/(b + 1) at ring distance k - the same easing the channel locks
+    apply.
+    """
+
+    weights: dict[int, float] = {}
+    for frame in range(int(seg_start), int(seg_end) + 1):
+        if frame_start <= frame <= frame_end:
+            weights[frame] = 1.0
+    for offset in range(1, int(blend_frames) + 1):
+        weight = 1.0 - offset / (int(blend_frames) + 1.0)
+        for frame in (seg_start - offset, seg_end + offset):
+            if frame_start <= frame <= frame_end:
+                weights[frame] = max(weight, weights.get(frame, 0.0))
+    return weights
+
+
+def sole_contact_offsets(
+    sample_armature: Any,
+    mesh_object: Any,
+    *,
+    ankle_bones: Mapping[str, str] = DEFAULT_ANKLE_BONES,
+    vertex_sample_limit: int = 2000,
+) -> dict[str, Any] | None:
+    """Per-side ankle-local vector from ankle head to the sole contact point.
+
+    The sole point is the lowest mesh vertex on the ankle's own half of the
+    model in bind pose.  With this vector the planted ankle height for ANY
+    foot orientation follows geometrically: `ankle_z = floor - (R @ d).z` -
+    a flat foot degenerates to `floor + sole_offset` and a toe-stand
+    automatically keeps its higher ankle instead of being flattened.
+
+    Returns ``{side: Vector}`` or None when the geometry cannot be measured.
+    """
+
+    if sample_armature is None or mesh_object is None:
+        return None
+    vertices = getattr(getattr(mesh_object, "data", None), "vertices", None)
+    if not vertices:
+        return None
+    mesh_world = mesh_object.matrix_world
+    step = max(1, len(vertices) // max(1, int(vertex_sample_limit)))
+    out: dict[str, Any] = {}
+    for side, bone_name in ankle_bones.items():
+        bone = sample_armature.data.bones.get(bone_name)
+        if bone is None:
+            continue
+        head_w = sample_armature.matrix_world @ bone.head_local
+        sign = 1.0 if head_w.x >= 0.0 else -1.0
+        lowest = None
+        lowest_z = None
+        for index in range(0, len(vertices), step):
+            v = mesh_world @ vertices[index].co
+            if v.x * sign < 0.0:
+                continue
+            if lowest_z is None or v.z < lowest_z:
+                lowest, lowest_z = v, v.z
+        if lowest is None:
+            continue
+        rest_rot = (
+            (sample_armature.matrix_world @ bone.matrix_local)
+            .to_quaternion()
+            .normalized()
+        )
+        out[side] = rest_rot.inverted() @ (lowest - head_w)
+    return out or None
+
+
+def _settle_pelvis_for_reach(
+    scene: Any,
+    source_armature: Any,
+    sample_armature: Any,
+    rig: Any,
+    action: Any,
+    segments: Mapping[str, list[dict[str, Any]]],
+    usable: Mapping[str, bool],
+    *,
+    pelvis_bone: str,
+    ankle_bones: Mapping[str, str],
+    grounded_height_for: Any,
+    correction_max: float,
+    smooth_frames: int,
+    frame_start: int,
+    frame_end: int,
+    view_layer: Any,
+    source_leg_bones: Mapping[str, Sequence[str]] = SOURCE_LEG_BONES,
+    model_leg_bones: Mapping[str, Sequence[str]] = MODEL_LEG_BONES,
+) -> dict[str, Any]:
+    """Re-solve the torso height per frame from the source leg reach ratio.
+
+    For a two-bone leg chain the ratio |hip-ankle| / (thigh+shin) determines
+    the knee angle exactly, so holding the model's ratio equal to the source
+    skeleton's preserves the captured knee bend.  Teto's legs are
+    proportionally longer than the capture subject's: the same retargeted hip
+    height leaves the model's knee straighter than intended and - inside
+    planted spans - physically unable to reach the floor.  Rather than only
+    dropping the pelvis when a planted foot saturates, every frame is solved
+    for the hip height that makes the model's reach ratio equal the source's;
+    planted frames use the (floor-grounded) anchor as the foot target, and
+    when both feet are planted the lower of the two solutions wins so both
+    stay reachable.
+
+    The correction is written as a Z offset on torso_root, the bone that
+    carries the retargeted body translation on this rig family - its parent
+    (root) holds no fcurves and stays static, so the same constant-multiplier
+    basis decomposition used for foot_ik applies.  The curve is interpolated
+    over unmeasurable frames, low-passed, dead-banded and hard-clamped to
+    +-correction_max; clamped frames are counted in the report but never
+    warned (user decision).
+    """
+
+    report: dict[str, Any] = {"status": "applied", "pelvis_bone": pelvis_bone}
+
+    pelvis_pb = rig.pose.bones.get(pelvis_bone)
+    pelvis_rest = rig.data.bones.get(pelvis_bone)
+    if pelvis_pb is None or pelvis_rest is None or pelvis_rest.parent is None:
+        report.update(
+            {"status": "skipped_no_pelvis_bone", "bone": pelvis_bone}
+        )
+        return report
+
+    needed: list[str] = []
+    for side in ("L", "R"):
+        if not usable.get(side):
+            continue
+        for name in model_leg_bones[side]:
+            if sample_armature.pose.bones.get(name) is None:
+                needed.append(name)
+        for name in source_leg_bones[side]:
+            if source_armature.pose.bones.get(name) is None:
+                needed.append(name)
+    if needed:
+        report.update(
+            {
+                "status": "skipped_missing_bones",
+                "bones": sorted(set(needed)),
+            }
+        )
+        return report
+
+    planted_frames: dict[str, set[int]] = {"L": set(), "R": set()}
+    for side in ("L", "R"):
+        for segment in segments[side]:
+            for frame in range(
+                segment["frames"][0], segment["frames"][1] + 1
+            ):
+                planted_frames[side].add(frame)
+
+    frames = list(range(int(frame_start), int(frame_end) + 1))
+    sweep: dict[int, dict[str, Any]] = {}
+    with preserve_scene_frame(scene, view_layer):
+        for frame in frames:
+            set_scene_frame(scene, frame, view_layer)
+            depsgraph = bpy.context.evaluated_depsgraph_get()
+            ev_mmd = sample_armature.evaluated_get(depsgraph)
+            ev_rig = rig.evaluated_get(depsgraph)
+            ev_src = source_armature.evaluated_get(depsgraph)
+            entry: dict[str, Any] = {
+                "rig_world": ev_rig.matrix_world.copy(),
+                "pelvis": (
+                    ev_rig.matrix_world @ ev_rig.pose.bones[pelvis_bone].matrix
+                ).copy(),
+            }
+            src_entry: dict[str, Any] = {}
+            for side in ("L", "R"):
+                if not usable.get(side):
+                    continue
+                thigh, knee, ankle = model_leg_bones[side]
+                ankle_matrix = (
+                    ev_mmd.matrix_world
+                    @ ev_mmd.pose.bones[ankle_bones[side]].matrix
+                ).copy()
+                entry[side] = {
+                    "hip": (
+                        ev_mmd.matrix_world
+                        @ ev_mmd.pose.bones[thigh].matrix
+                    ).translation.copy(),
+                    "knee": (
+                        ev_mmd.matrix_world
+                        @ ev_mmd.pose.bones[knee].matrix
+                    ).translation.copy(),
+                    "ankle": ankle_matrix.translation.copy(),
+                    "ankle_matrix": ankle_matrix,
+                }
+                s_hip, s_knee, s_ankle = source_leg_bones[side]
+                src_entry[side] = {
+                    "hip": (
+                        ev_src.matrix_world
+                        @ ev_src.pose.bones[s_hip].matrix
+                    ).translation.copy(),
+                    "knee": (
+                        ev_src.matrix_world
+                        @ ev_src.pose.bones[s_knee].matrix
+                    ).translation.copy(),
+                    "ankle": (
+                        ev_src.matrix_world
+                        @ ev_src.pose.bones[s_ankle].matrix
+                    ).translation.copy(),
+                }
+            entry["src"] = src_entry
+            sweep[frame] = entry
+
+    # Leg lengths are rigid - one frame's measurement is enough.
+    leg_model: dict[str, float] = {}
+    leg_source: dict[str, float] = {}
+    for side in ("L", "R"):
+        if not usable.get(side):
+            continue
+        sample = sweep.get(frames[0], {})
+        mdl = sample.get(side)
+        src = sample.get("src", {}).get(side)
+        if mdl is not None:
+            leg_model[side] = (mdl["hip"] - mdl["knee"]).length + (
+                mdl["knee"] - mdl["ankle"]
+            ).length
+        if src is not None:
+            leg_source[side] = (src["hip"] - src["knee"]).length + (
+                src["knee"] - src["ankle"]
+            ).length
+    if not leg_model or not leg_source:
+        report.update({"status": "skipped_no_leg_measure"})
+        return report
+
+    # Anchored planted foot targets: mid-segment XY, grounded ankle height
+    # under the anchor's own rotation (rolled feet keep their planted
+    # height instead of being flattened to a flat-sole target).
+    anchor_target: dict[str, dict[int, Any]] = {"L": {}, "R": {}}
+    for side in ("L", "R"):
+        for segment in segments[side]:
+            anchor_matrix = sweep[segment["anchor_frame"]][side]["ankle_matrix"]
+            target_pos = anchor_matrix.translation.copy()
+            grounded = grounded_height_for(side, anchor_matrix)
+            if grounded is not None:
+                target_pos.z = grounded
+            for frame in range(
+                segment["frames"][0], segment["frames"][1] + 1
+            ):
+                anchor_target[side][frame] = target_pos
+
+    raw: dict[int, float] = {}
+    for frame in frames:
+        entry = sweep.get(frame)
+        if entry is None:
+            continue
+        candidates: list[tuple[float, bool]] = []
+        for side in ("L", "R"):
+            if not usable.get(side):
+                continue
+            mdl = entry.get(side)
+            src = entry.get("src", {}).get(side)
+            if mdl is None or src is None:
+                continue
+            if leg_source[side] <= EPSILON or leg_model[side] <= EPSILON:
+                continue
+            ratio = (src["hip"] - src["ankle"]).length / leg_source[side]
+            planted = frame in planted_frames[side]
+            foot = (
+                anchor_target[side].get(frame) if planted else mdl["ankle"]
+            )
+            if foot is None:
+                continue
+            required_reach = ratio * leg_model[side]
+            d_xy = math.hypot(
+                mdl["hip"].x - foot.x, mdl["hip"].y - foot.y
+            )
+            dz = math.sqrt(max(required_reach * required_reach - d_xy * d_xy, 0.0))
+            hip_required_z = foot.z + dz
+            candidates.append((hip_required_z - mdl["hip"].z, planted))
+        if not candidates:
+            continue
+        if any(planted for _, planted in candidates):
+            # Planted drives; the deeper drop keeps both feet reachable.
+            correction = min(c for c, planted in candidates if planted)
+        else:
+            correction = sum(c for c, _ in candidates) / len(candidates)
+        raw[frame] = correction
+
+    series = [raw.get(frame) for frame in frames]
+    index = 0
+    while index < len(series):
+        if series[index] is not None:
+            index += 1
+            continue
+        end_index = index
+        while end_index < len(series) and series[end_index] is None:
+            end_index += 1
+        left = series[index - 1] if index > 0 else None
+        right = series[end_index] if end_index < len(series) else None
+        for k in range(index, end_index):
+            if left is None and right is None:
+                series[k] = 0.0
+            elif left is None:
+                series[k] = right
+            elif right is None:
+                series[k] = left
+            else:
+                t = (k - index + 1) / (end_index - index + 1)
+                series[k] = left + (right - left) * t
+        index = end_index
+
+    half = max(1, int(smooth_frames)) // 2
+    smoothed = [
+        sum(
+            series[k]
+            for k in range(
+                max(0, i - half), min(len(series), i + half + 1)
+            )
+        )
+        / len(
+            range(max(0, i - half), min(len(series), i + half + 1))
+        )
+        for i in range(len(series))
+    ]
+
+    cap = abs(float(correction_max))
+    capped = 0
+    corrected = []
+    for value in smoothed:
+        if abs(value) < PELVIS_DEADBAND:
+            value = 0.0
+        elif abs(value) > cap:
+            value = math.copysign(cap, value)
+            capped += 1
+        corrected.append(value)
+
+    # Constant-multiplier write path - same guarantees as the foot_ik writer:
+    # parent (root) verified static on range ends + middle, then an empirical
+    # basis-vs-channels check against a live sample.
+    parent_rest = pelvis_rest.parent
+    sample_frames = sorted({int(frame_start), int(frame_end), (int(frame_start) + int(frame_end)) // 2})
+    parent_poses = []
+    pose_samples = []
+    with preserve_scene_frame(scene, view_layer):
+        for sample_frame in sample_frames:
+            set_scene_frame(scene, sample_frame, view_layer)
+            depsgraph = bpy.context.evaluated_depsgraph_get()
+            ev_rig = rig.evaluated_get(depsgraph)
+            parent_poses.append(
+                ev_rig.pose.bones[parent_rest.name].matrix.copy()
+            )
+            pose_samples.append(
+                ev_rig.pose.bones[pelvis_bone].matrix.copy()
+            )
+    first = parent_poses[0]
+    pos_spread = max(
+        (first.translation - p.translation).length for p in parent_poses[1:]
+    )
+    rot_spread = max(
+        abs(
+            math.degrees(
+                first.to_quaternion()
+                .rotation_difference(p.to_quaternion())
+                .angle
+            )
+        )
+        for p in parent_poses[1:]
+    )
+    if len(parent_poses) == 1:
+        pos_spread = rot_spread = 0.0
+    if pos_spread > 0.0001 or rot_spread > 0.05:
+        report.update(
+            {
+                "status": "skipped_parent_not_static",
+                "parent": parent_rest.name,
+                "pos_mm": round(pos_spread * 1000.0, 3),
+                "rot_deg": round(rot_spread, 3),
+            }
+        )
+        return report
+    # The map from location channel to armature-space pose translation is
+    # affine (pose_trans = M @ loc + t) for every inherit/local-location flag
+    # combination - only (M, t) change.  Instead of assuming the default
+    # composition, evaluate both candidate rules and keep whichever
+    # reproduces the live channels at the sample frames.  torso_root on this
+    # rig family does NOT follow the default rule (it failed the
+    # matrix_local-based basis check by ~300 mm, hence this calibration).
+    parent_pose = parent_poses[0]
+    g = parent_rest.matrix_local.inverted_safe() @ pelvis_rest.matrix_local
+    candidates = [
+        (
+            "default",
+            (parent_pose @ g).to_3x3(),
+            (parent_pose @ g).translation,
+        ),
+        (
+            "parent_space",
+            (parent_pose @ parent_rest.matrix_local.inverted_safe()).to_3x3(),
+            (
+                parent_pose
+                @ parent_rest.matrix_local.inverted_safe()
+                @ pelvis_rest.matrix_local
+            ).translation,
+        ),
+    ]
+    chosen = None
+    best_err = None
+    with preserve_scene_frame(scene, view_layer):
+        for tag, m_rot, t_vec in candidates:
+            worst = 0.0
+            for sample_frame in sample_frames:
+                set_scene_frame(scene, sample_frame, view_layer)
+                depsgraph = bpy.context.evaluated_depsgraph_get()
+                ev_rig = rig.evaluated_get(depsgraph)
+                pose_trans = ev_rig.pose.bones[pelvis_bone].matrix.translation
+                loc_channel = rig.pose.bones[pelvis_bone].location.copy()
+                predicted = m_rot @ loc_channel + t_vec
+                worst = max(worst, (predicted - pose_trans).length)
+            if best_err is None or worst < best_err:
+                best_err = worst
+                chosen = (tag, m_rot, t_vec)
+    if best_err is None or best_err > 0.0001:
+        report.update(
+            {
+                "status": "skipped_transform_mismatch",
+                "loc_mm": round((best_err or 0.0) * 1000.0, 3),
+            }
+        )
+        return report
+    comp_rule, m_rot, t_vec = chosen
+    report["composition"] = comp_rule
+    m_inv = m_rot.inverted_safe()
+
+    loc_path = bone_path(pelvis_bone, "location")
+    loc_curves = [
+        ensure_fcurve(action, loc_path, axis, group=pelvis_bone)
+        for axis in range(3)
+    ]
+    loc_cache = [keyframe_map(curve) for curve in loc_curves]
+    needed_frames = {
+        frame
+        for frame, corr in zip(frames, corrected)
+        if abs(corr) > PELVIS_DEADBAND
+    }
+    for curve, cache in zip(loc_curves, loc_cache):
+        missing_keys = [f for f in needed_frames if f not in cache]
+        if not missing_keys:
+            continue
+        existing = {
+            int(key.as_pointer()) for key in curve.keyframe_points
+        }
+        curve.keyframe_points.add(len(missing_keys))
+        fresh = [
+            key
+            for key in curve.keyframe_points
+            if int(key.as_pointer()) not in existing
+        ]
+        for key, frame in zip(fresh, sorted(missing_keys)):
+            key.co.x = float(frame)
+            key.co.y = 0.0
+            key.interpolation = "LINEAR"
+            cache[frame] = key
+        curve.update()
+
+    written = 0
+    for frame, corr in zip(frames, corrected):
+        if abs(corr) <= PELVIS_DEADBAND:
+            continue
+        desired = sweep[frame]["pelvis"].copy()
+        desired.translation.z += corr
+        target_arm = (
+            sweep[frame]["rig_world"].inverted_safe() @ desired
+        ).translation
+        loc = m_inv @ (target_arm - t_vec)
+        for axis in range(3):
+            key = loc_cache[axis].get(frame)
+            if key is None:
+                continue
+            key.co.y = float(loc[axis])
+            key.interpolation = "LINEAR"
+        written += 1
+    for curve in loc_curves:
+        curve.update()
+    update_action(action)
+
+    magnitudes = [abs(v) for v in corrected if abs(v) > PELVIS_DEADBAND]
+    report.update(
+        {
+            "frames_corrected": written,
+            "capped_frames": capped,
+            "max_correction_mm": round(
+                (max(magnitudes) if magnitudes else 0.0) * 1000.0, 2
+            ),
+            "mean_correction_mm": round(
+                (sum(magnitudes) / len(magnitudes) if magnitudes else 0.0)
+                * 1000.0,
+                2,
+            ),
+            "grounded_ankle_z_mm": sorted(
+                {
+                    round(p.z * 1000.0, 2)
+                    for targets in anchor_target.values()
+                    for p in targets.values()
+                }
+            ),
+        }
+    )
+    return report
+
+
+def stabilize_planted_feet(
+    scene: Any,
+    sample_armature: Any,
+    rig: Any,
+    action: Any,
+    planted_ranges: Mapping[str, Sequence[Sequence[int]]],
+    *,
+    source_armature: Any = None,
+    pelvis_bone: str = DEFAULT_PELVIS_BONE,
+    pelvis_correction_max: float = PELVIS_CORRECTION_MAX,
+    pelvis_smooth_frames: int = PELVIS_SMOOTH_FRAMES,
+    sole_offset: float = 0.0,
+    sole_dirs: Mapping[str, Any] | None = None,
+    floor_z: float = 0.0,
+    ankle_bones: Mapping[str, str] = DEFAULT_ANKLE_BONES,
+    foot_bones: Mapping[str, str] = DEFAULT_FOOT_IK,
+    frame_start: int | None = None,
+    frame_end: int | None = None,
+    trim_segment_ends: int = 2,
+    min_segment_len: int = 5,
+    blend_frames: int = 2,
+    pos_tolerance: float = STABILIZE_POS_TOLERANCE,
+    rot_tolerance_deg: float = STABILIZE_ROT_TOLERANCE_DEG,
+    worst_sample_limit: int = 100,
+) -> dict[str, Any]:
+    """Freeze each planted foot's world pose by closing the loop on the ankle.
+
+    Locking controller channels on faith failed measurably: foot_ik froze to
+    0.1 mm while the MMD ankle - the bone the mesh and the bake actually
+    follow - kept swinging ~9-19 deg inside planted spans (measured on
+    0001-1499 segment [1,100]).  This pass inverts the direction.  Every
+    planted segment gets an anchor: the evaluated 足首 world matrix at its
+    middle frame.  Per frame the evaluated ankle is compared against the
+    anchor, and foot_ik is moved by the world-space difference - position and
+    rotation together, so the foot stops pivoting on its frozen ankle instead
+    of merely stopping sliding.
+
+    The ankle chain is rigid for what it can reach: foot_ik -> MCH parent ->
+    ORG-foot -> COPY_TRANSFORMS 足首 transfers a world delta verbatim (probe
+    measured +50 mm -> +50.0 mm), so one write pass pins every reachable
+    frame - a second pass can only re-enter the fcurve write path that
+    corrupts Blender 4.5's guarded allocator on large actions.  What does not
+    converge after one pass is a reachability floor, not slack: at landing
+    and lift-off edges the anchor pose can sit beyond the leg's extension, so
+    the IK clamps the ankle short of it (~10 cm on this file).  The verify
+    measure reports that honestly instead of hammering saturated frames.
+
+    The anchor keeps the ankle's pose at the anchor frame, except height:
+    planted means in contact, so the anchor's Z is replaced by the grounded
+    ankle height (floor + sole offset measured off the model's bind pose)
+    whenever that offset is available - a foot the pelvis carried into the
+    air gets put back on the floor, and the preceding pelvis-reach pass
+    (source-leg reach ratio re-solved onto torso_root) is what makes that
+    grounding physically reachable instead of pinned in the air at leg
+    extension.  A real on-the-spot turn is exempted the existing way: delete
+    those frames from the planted annotation so no segment covers them.
+    """
+
+    start, end = resolve_frame_range(scene, frame_start, frame_end)
+    if get_action(rig) is not action:
+        raise RuntimeError("the supplied Action is not active on the MMR rig")
+    if bpy is None or Matrix is None or Quaternion is None:
+        raise RuntimeError("planted foot stabilization must run inside Blender")
+    if int(blend_frames) < 0:
+        raise ValueError("blend_frames must be non-negative")
+
+    segments: dict[str, list[dict[str, Any]]] = {"L": [], "R": []}
+    skipped: list[dict[str, Any]] = []
+    missing: list[str] = []
+    usable: dict[str, bool] = {}
+    for side in ("L", "R"):
+        ok = True
+        for owner, bone_name in (
+            (sample_armature, ankle_bones[side]),
+            (rig, foot_bones[side]),
+        ):
+            if owner.pose.bones.get(bone_name) is None:
+                missing.append(bone_name)
+                ok = False
+        usable[side] = ok
+        if not ok:
+            continue
+        for raw_start, raw_end in _normalize_side_ranges(
+            planted_ranges, side, start, end
+        ):
+            seg_start = raw_start + int(trim_segment_ends)
+            seg_end = raw_end - int(trim_segment_ends)
+            if seg_end - seg_start + 1 < int(min_segment_len):
+                skipped.append(
+                    {
+                        "side": side,
+                        "source_frames": [raw_start, raw_end],
+                        "reason": "too_short_after_trim",
+                    }
+                )
+                continue
+            segments[side].append(
+                {
+                    "frames": [seg_start, seg_end],
+                    "source_frames": [raw_start, raw_end],
+                    "anchor_frame": seg_start + (seg_end - seg_start) // 2,
+                    "weights": _segment_lock_weights(
+                        seg_start, seg_end, int(blend_frames), start, end
+                    ),
+                }
+            )
+    if missing and not any(usable.values()):
+        raise RuntimeError(
+            "缺少闭环稳定所需骨骼：" + ", ".join(sorted(set(missing)))
+        )
+
+    report: dict[str, Any] = {
+        "operation": "stabilize_planted_feet",
+        "frame_range": [start, end],
+        "params": {
+            "trim_segment_ends": int(trim_segment_ends),
+            "min_segment_len": int(min_segment_len),
+            "blend_frames": int(blend_frames),
+            "pos_tolerance": float(pos_tolerance),
+            "rot_tolerance_deg": float(rot_tolerance_deg),
+            "pelvis_correction_max": float(pelvis_correction_max),
+            "pelvis_smooth_frames": int(pelvis_smooth_frames),
+            "sole_offset": float(sole_offset),
+            "floor_z": float(floor_z),
+        },
+        "skipped_segments": skipped,
+        "missing_bones": missing,
+    }
+
+    work_frames = sorted(
+        {
+            frame
+            for side in ("L", "R")
+            for segment in segments[side]
+            for frame in segment["weights"]
+        }
+    )
+    if not work_frames:
+        report.update(
+            {
+                "verification": "nothing_to_lock",
+                "iterations": [],
+                "segments": [],
+                "stabilized_segments": 0,
+                "frames_written": 0,
+                "worst_samples_before": [],
+            }
+        )
+        return report
+
+    view_layer = current_view_layer()
+
+    # Planted anchors are grounded: contact means the sole touches the floor,
+    # so the anchor's ankle height becomes the planted height under its own
+    # rotation (sole-contact vector projected down), not wherever the
+    # retarget left it floating.  Without sole geometry we keep the anchor's
+    # own height rather than guess one.
+    def _grounded_height(side, anchor_matrix):
+        direction = sole_dirs.get(side) if sole_dirs else None
+        if direction is not None:
+            sole_down = (
+                anchor_matrix.to_quaternion().normalized() @ direction
+            ).z
+            return float(floor_z) - sole_down
+        if float(sole_offset) > EPSILON:
+            return float(floor_z) + float(sole_offset)
+        return None
+
+    def _anchor_pos(anchor_matrix, side):
+        pos = anchor_matrix.translation.copy()
+        grounded = _grounded_height(side, anchor_matrix)
+        if grounded is not None:
+            pos.z = grounded
+        return pos
+
+    # Reach pass first: the torso height solve gives the legs their margin
+    # back, so the ankle lock that follows can actually reach the floor.
+    if source_armature is not None and float(pelvis_correction_max) > 0.0:
+        report["pelvis_solve"] = _settle_pelvis_for_reach(
+            scene,
+            source_armature,
+            sample_armature,
+            rig,
+            action,
+            segments,
+            usable,
+            pelvis_bone=str(pelvis_bone),
+            ankle_bones=ankle_bones,
+            grounded_height_for=_grounded_height,
+            correction_max=float(pelvis_correction_max),
+            smooth_frames=int(pelvis_smooth_frames),
+            frame_start=start,
+            frame_end=end,
+            view_layer=view_layer,
+        )
+    else:
+        report["pelvis_solve"] = {"status": "disabled"}
+
+    def _measure(frames_to_scan):
+        data: dict[int, dict[str, Any]] = {}
+        with preserve_scene_frame(scene, view_layer):
+            for frame in frames_to_scan:
+                set_scene_frame(scene, frame, view_layer)
+                depsgraph = bpy.context.evaluated_depsgraph_get()
+                ev_mmd = sample_armature.evaluated_get(depsgraph)
+                ev_rig = rig.evaluated_get(depsgraph)
+                entry: dict[str, Any] = {
+                    "rig_world": ev_rig.matrix_world.copy(),
+                }
+                for side in ("L", "R"):
+                    if not usable[side]:
+                        continue
+                    ankle_pb = ev_mmd.pose.bones.get(ankle_bones[side])
+                    ik_pb = ev_rig.pose.bones.get(foot_bones[side])
+                    entry[side] = {
+                        "ankle": (
+                            (ev_mmd.matrix_world @ ankle_pb.matrix).copy()
+                            if ankle_pb is not None
+                            else None
+                        ),
+                        "ik": (
+                            (ev_rig.matrix_world @ ik_pb.matrix).copy()
+                            if ik_pb is not None
+                            else None
+                        ),
+                    }
+                data[frame] = entry
+        return data
+
+    def _interior_residuals(measured):
+        """Max ankle pose error vs anchor over fully locked (weight 1) frames."""
+        max_pos = 0.0
+        max_rot = 0.0
+        rows: list[dict[str, Any]] = []
+        for side in ("L", "R"):
+            for segment in segments[side]:
+                anchor_matrix = (
+                    measured.get(segment["anchor_frame"], {})
+                    .get(side, {})
+                    .get("ankle")
+                )
+                if anchor_matrix is None:
+                    continue
+                anchor_quat = anchor_matrix.to_quaternion()
+                anchor_loc = _anchor_pos(anchor_matrix, side)
+                for frame in range(
+                    segment["frames"][0], segment["frames"][1] + 1
+                ):
+                    sample = (
+                        measured.get(frame, {}).get(side, {}).get("ankle")
+                    )
+                    if sample is None:
+                        continue
+                    d_pos = float((sample.translation - anchor_loc).length)
+                    d_angle = (
+                        anchor_quat.rotation_difference(
+                            sample.to_quaternion()
+                        ).angle
+                    )
+                    if d_angle > math.pi:
+                        d_angle = 2.0 * math.pi - d_angle
+                    d_rot = abs(math.degrees(d_angle))
+                    max_pos = max(max_pos, d_pos)
+                    max_rot = max(max_rot, d_rot)
+                    rows.append(
+                        {
+                            "side": side,
+                            "frame": frame,
+                            "pos_mm": round(d_pos * 1000.0, 3),
+                            "rot_deg": round(d_rot, 3),
+                        }
+                    )
+        return max_pos, max_rot, rows
+
+    def _corrections(measured):
+        """frame -> target foot_ik world matrix; strongest claim wins."""
+        corrections: dict[str, dict[int, Any]] = {"L": {}, "R": {}}
+        claims: dict[str, dict[int, float]] = {"L": {}, "R": {}}
+        for side in ("L", "R"):
+            for segment in segments[side]:
+                anchor_matrix = (
+                    measured.get(segment["anchor_frame"], {})
+                    .get(side, {})
+                    .get("ankle")
+                )
+                if anchor_matrix is None:
+                    continue
+                anchor_quat = anchor_matrix.to_quaternion()
+                anchor_loc = _anchor_pos(anchor_matrix, side)
+                for frame, weight in segment["weights"].items():
+                    sample = measured.get(frame, {}).get(side, {})
+                    ankle_matrix = sample.get("ankle")
+                    ik_matrix = sample.get("ik")
+                    if ankle_matrix is None or ik_matrix is None:
+                        continue
+                    if weight >= 1.0:
+                        target_quat = anchor_quat.copy()
+                        target_loc = anchor_loc.copy()
+                    else:
+                        current_quat = ankle_matrix.to_quaternion()
+                        blended_anchor = anchor_quat.copy()
+                        if current_quat.dot(blended_anchor) < 0.0:
+                            blended_anchor.negate()
+                        target_quat = current_quat.slerp(
+                            blended_anchor, weight
+                        )
+                        target_loc = ankle_matrix.translation.lerp(
+                            anchor_loc, weight
+                        )
+                    delta_rot = (
+                        target_quat
+                        @ ankle_matrix.to_quaternion().inverted()
+                    )
+                    delta_pos = target_loc - ankle_matrix.translation
+                    target = Matrix.LocRotScale(
+                        ik_matrix.translation + delta_pos,
+                        delta_rot @ ik_matrix.to_quaternion(),
+                        ik_matrix.to_scale(),
+                    )
+                    previous = claims[side].get(frame)
+                    if previous is None or weight >= previous:
+                        claims[side][frame] = weight
+                        corrections[side][frame] = target
+        return corrections
+
+    # Static-parent analytic basis path.  foot_ik's parent chain is rigid on
+    # this rig family, so the basis decomposition of a world-space target
+    # reduces to a constant left-multiplier:
+    #     basis = (B_rest^-1 @ P_rest @ P_pose^-1) @ M_target_armature
+    # The write pass then stays pure math plus direct key writes - no pose
+    # assignment, no per-frame scene evaluation, and no mid-pass keyframe
+    # insertion.  Those allocator-heavy paths corrupted Blender 4.5's guarded
+    # memory pools (MEM_dupallocN mismatches, then a tbbmalloc access
+    # violation) when hammered across ~2500 writes on the full range.
+    channel_setup: dict[str, dict[str, Any]] = {}
+    with preserve_scene_frame(scene, view_layer):
+        for side in ("L", "R"):
+            if not usable[side]:
+                continue
+            bone_name = foot_bones[side]
+            pose_bone = rig.pose.bones[bone_name]
+            bone = rig.data.bones.get(bone_name)
+            parent_bone = bone.parent if bone is not None else None
+            if bone is None or parent_bone is None:
+                missing.append(f"{bone_name} (rest bone)")
+                usable[side] = False
+                continue
+
+            # The multiplier is only constant while the parent holds still;
+            # verify on the range ends and middle rather than trusting it.
+            # Read through the EVALUATED depsgraph so a constrained parent
+            # still reports its true pose.
+            sample_frames = sorted(
+                {
+                    int(frame_start),
+                    int(frame_end),
+                    (int(frame_start) + int(frame_end)) // 2,
+                }
+            )
+            parent_poses = []
+            pose_samples = []
+            loc_samples = []
+            quat_samples = []
+            for sample_frame in sample_frames:
+                set_scene_frame(scene, sample_frame, view_layer)
+                depsgraph = bpy.context.evaluated_depsgraph_get()
+                ev_rig = rig.evaluated_get(depsgraph)
+                parent_poses.append(
+                    ev_rig.pose.bones[parent_bone.name].matrix.copy()
+                )
+                pose_samples.append(
+                    ev_rig.pose.bones[bone_name].matrix.copy()
+                )
+                # Channel values belong to the frame we set, not the frame
+                # preserve_scene_frame restores afterwards - sample them
+                # here or the basis check compares two different frames.
+                loc_samples.append(
+                    rig.pose.bones[bone_name].location.copy()
+                )
+                if rig.pose.bones[bone_name].rotation_mode == "QUATERNION":
+                    quat_samples.append(
+                        get_pose_quaternion(rig.pose.bones[bone_name]).copy()
+                    )
+            first = parent_poses[0]
+            pos_spread = max(
+                (first.translation - p.translation).length
+                for p in parent_poses[1:]
+            )
+            rot_spread = max(
+                abs(
+                    math.degrees(
+                        first.to_quaternion()
+                        .rotation_difference(p.to_quaternion())
+                        .angle
+                    )
+                )
+                for p in parent_poses[1:]
+            )
+            if len(parent_poses) == 1:
+                pos_spread = rot_spread = 0.0
+            if pos_spread > 0.0001 or rot_spread > 0.05:
+                raise RuntimeError(
+                    f"脚 IK {bone_name} 的父骨 {parent_bone.name} 在区间内不静止"
+                    f"（位移 {pos_spread * 1000:.2f} mm / "
+                    f"旋转 {rot_spread:.2f}°），闭环稳定无法解析写入；请报告"
+                )
+            multiplier = (
+                bone.matrix_local.inverted_safe()
+                @ parent_bone.matrix_local
+                @ first.inverted_safe()
+            )
+
+            # Empirical formula check: decomposing the evaluated pose through
+            # the multiplier must reproduce the live channel values.
+            check_basis = multiplier @ pose_samples[-1]
+            loc_err = (
+                check_basis.to_translation() - loc_samples[-1]
+            ).length
+            if pose_bone.rotation_mode == "QUATERNION":
+                rot_err = 1.0 - abs(
+                    check_basis.to_quaternion().dot(quat_samples[-1])
+                )
+            else:
+                rot_err = 0.0  # non-quaternion modes fall back below anyway
+            if loc_err > 0.0001 or rot_err > 0.0001:
+                raise RuntimeError(
+                    f"脚 IK {bone_name} 的父子变换结构不符合默认继承模式"
+                    f"（位置差 {loc_err * 1000:.3f} mm）；请报告此情形"
+                )
+
+            loc_path = bone_path(bone_name, "location")
+            if pose_bone.rotation_mode == "QUATERNION":
+                rot_prop, rot_count = "rotation_quaternion", 4
+            elif pose_bone.rotation_mode == "AXIS_ANGLE":
+                rot_prop, rot_count = "rotation_axis_angle", 4
+            else:
+                rot_prop, rot_count = "rotation_euler", 3
+            rot_path = bone_path(bone_name, rot_prop)
+            loc_curves = [
+                ensure_fcurve(action, loc_path, axis, group=bone_name)
+                for axis in range(3)
+            ]
+            rot_curves = [
+                ensure_fcurve(action, rot_path, axis, group=bone_name)
+                for axis in range(rot_count)
+            ]
+            channel_setup[side] = {
+                "mode": pose_bone.rotation_mode,
+                "multiplier": multiplier,
+                "loc_curves": loc_curves,
+                "rot_curves": rot_curves,
+                "loc_cache": [keyframe_map(curve) for curve in loc_curves],
+                "rot_cache": [keyframe_map(curve) for curve in rot_curves],
+            }
+
+    written_quats: dict[str, dict[int, Any]] = {"L": {}, "R": {}}
+
+    def _seed_quat(side, frame):
+        values = [
+            float(curve.evaluate(frame))
+            for curve in channel_setup[side]["rot_curves"]
+        ]
+        quat = Quaternion(values)
+        if quat.magnitude < EPSILON:
+            return None
+        quat.normalize()
+        return quat
+
+    def _ensure_keys(setup, frames_needed):
+        """Batch-create missing keys once per curve, then rebuild the cache.
+
+        Missing keys are rare (the retarget action is baked dense), but
+        inserting them one by one inside the write loop would hammer the
+        guarded allocator's realloc path - the suspected crash trigger.
+        """
+
+        all_curves = [*setup["loc_curves"], *setup["rot_curves"]]
+        all_caches = [*setup["loc_cache"], *setup["rot_cache"]]
+        for curve, cache in zip(all_curves, all_caches):
+            missing = [f for f in frames_needed if f not in cache]
+            if not missing:
+                continue
+            existing = {
+                int(key.as_pointer()) for key in curve.keyframe_points
+            }
+            curve.keyframe_points.add(len(missing))
+            fresh = [
+                key
+                for key in curve.keyframe_points
+                if int(key.as_pointer()) not in existing
+            ]
+            for key, frame in zip(fresh, sorted(missing)):
+                key.co.x = float(frame)
+                key.co.y = 0.0
+                key.interpolation = "LINEAR"
+                cache[frame] = key
+            curve.update()
+
+    def _write(corrections, measured):
+        written = 0
+        touched: set[Any] = set()
+        for side in ("L", "R"):
+            setup = channel_setup.get(side)
+            if setup is None:
+                continue
+            frames_to_write = sorted(corrections[side])
+            print(
+                f"[STAB] write side {side}: {len(frames_to_write)} frames",
+                flush=True,
+            )
+            _ensure_keys(setup, frames_to_write)
+            multiplier = setup["multiplier"]
+            for frame in frames_to_write:
+                rig_world = measured[frame]["rig_world"]
+                m_target = (
+                    rig_world.inverted_safe() @ corrections[side][frame]
+                )
+                basis = multiplier @ m_target
+                loc = basis.to_translation()
+                for axis in range(3):
+                    key = setup["loc_cache"][axis].get(frame)
+                    if key is None:
+                        continue
+                    key.co.y = float(loc[axis])
+                    key.interpolation = "LINEAR"
+                if setup["mode"] == "QUATERNION":
+                    quat = basis.to_quaternion()
+                    reference = written_quats[side].get(frame - 1)
+                    if reference is None:
+                        reference = _seed_quat(side, frame - 1)
+                    if reference is not None and quat.dot(reference) < 0.0:
+                        quat.negate()
+                    for axis, value in enumerate(
+                        (quat.w, quat.x, quat.y, quat.z)
+                    ):
+                        key = setup["rot_cache"][axis].get(frame)
+                        if key is None:
+                            continue
+                        key.co.y = float(value)
+                        key.interpolation = "LINEAR"
+                    written_quats[side][frame] = quat.copy()
+                elif setup["mode"] == "AXIS_ANGLE":
+                    values = basis.to_quaternion().to_axis_angle()
+                    for axis, value in enumerate(
+                        (values[1], values[0].x, values[0].y, values[0].z)
+                    ):
+                        key = setup["rot_cache"][axis].get(frame)
+                        if key is None:
+                            continue
+                        key.co.y = float(value)
+                        key.interpolation = "LINEAR"
+                else:
+                    values = basis.to_euler(setup["mode"])
+                    for axis in range(3):
+                        key = setup["rot_cache"][axis].get(frame)
+                        if key is None:
+                            continue
+                        key.co.y = float(values[axis])
+                        key.interpolation = "LINEAR"
+                written += 1
+            touched.update(
+                [*setup["loc_curves"], *setup["rot_curves"]]
+            )
+        for curve in touched:
+            curve.update()
+        update_action(action)
+        return written
+
+    # Single write pass, then a verifying re-measure.  One pass is all the
+    # geometry can use: on this rig a commanded foot_ik lands on the ankle
+    # exactly, so whatever residual survives is a reachability floor (the leg
+    # IK clamps an unreachable anchor at full extension) rather than
+    # correction slack - measured residual 104 mm staying identical after a
+    # second pass proved pushing further cannot move a saturated ankle.
+    # Keeping a second write pass also re-entered the allocator path that
+    # kept crashing Blender 4.5 on this file size.
+    iterations: list[dict[str, Any]] = []
+    after_rows: list[dict[str, Any]] = []
+    frames_written = 0
+
+    measured = _measure(work_frames)
+    max_pos, max_rot, before_rows = _interior_residuals(measured)
+    iterations.append(
+        {
+            "iteration": 0,
+            "max_pos_mm": round(max_pos * 1000.0, 3),
+            "max_rot_deg": round(max_rot, 3),
+        }
+    )
+    print(
+        f"[STAB] before: {len(work_frames)} frames, "
+        f"max residual {max_pos * 1000.0:.2f} mm / {max_rot:.2f} deg",
+        flush=True,
+    )
+
+    if max_pos <= float(pos_tolerance) and max_rot <= float(rot_tolerance_deg):
+        verification = "already_still"
+        after_rows = before_rows
+    else:
+        frames_written = _write(_corrections(measured), measured)
+        print(f"[STAB] wrote corrections: {frames_written} frames", flush=True)
+
+        post = _measure(work_frames)
+        max_pos, max_rot, after_rows = _interior_residuals(post)
+        iterations.append(
+            {
+                "iteration": 1,
+                "max_pos_mm": round(max_pos * 1000.0, 3),
+                "max_rot_deg": round(max_rot, 3),
+            }
+        )
+        print(
+            f"[STAB] after: max residual {max_pos * 1000.0:.2f} mm / "
+            f"{max_rot:.2f} deg",
+            flush=True,
+        )
+        verification = (
+            "converged"
+            if max_pos <= float(pos_tolerance)
+            and max_rot <= float(rot_tolerance_deg)
+            else "unconverged"
+        )
+
+    segment_reports = [
+        {
+            "side": side,
+            "source_frames": segment["source_frames"],
+            "frames": segment["frames"],
+            "anchor_frame": segment["anchor_frame"],
+            "locked_frames": sum(
+                1 for w in segment["weights"].values() if w >= 1.0
+            ),
+        }
+        for side in ("L", "R")
+        for segment in segments[side]
+    ]
+    def _severity(row):
+        return (row["rot_deg"], row["pos_mm"])
+
+    before_rows.sort(key=_severity, reverse=True)
+    after_rows.sort(key=_severity, reverse=True)
+    unconverged_frames = [
+        row
+        for row in after_rows
+        if row["pos_mm"] > float(pos_tolerance) * 1000.0
+        or row["rot_deg"] > float(rot_tolerance_deg)
+    ]
+    report.update(
+        {
+            "verification": verification,
+            "iterations": iterations,
+            "residual_before": iterations[0] if iterations else None,
+            "residual_after": (
+                iterations[1] if len(iterations) > 1 else None
+            ),
+            "segments": segment_reports,
+            "stabilized_segments": len(segment_reports),
+            "frames_written": frames_written,
+            "worst_samples_before": before_rows[: int(worst_sample_limit)],
+            "worst_samples_after": after_rows[: int(worst_sample_limit)],
+            "unconverged_frames": unconverged_frames[: int(worst_sample_limit)],
+            "unconverged_count": len(unconverged_frames),
+        }
+    )
+    return report
+
+
+def _pin_corrections(lowest_by_frame, frame_start, frame_end, target_z):
+    """Signed whole-body shifts that put the lowest foot on the floor.
+
+    Unconditional by design: the annotation only marks where the person is
+    AIRBORNE, so every other frame counts as a contact and gets pinned.  A
+    frame with no usable sample holds the previous value - a missing sample is
+    a data gap, not a reason to move the body.
+    """
+
+    corrections: dict[int, float] = {}
+    missing: list[int] = []
+    previous = 0.0
+    for frame in range(int(frame_start), int(frame_end) + 1):
+        lowest = lowest_by_frame.get(frame)
+        if lowest is None:
+            missing.append(frame)
+            corrections[frame] = previous
+            continue
+        previous = float(target_z) - float(lowest)
+        corrections[frame] = previous
+    return corrections, missing
+
+
+def _smooth_limit_grounded(
+    corrections, airborne_frames, frame_start, frame_end, radius, max_delta
+):
+    """Smooth and rate-limit inside each grounded stretch, never across a flight.
+
+    The rate limit is what keeps the body from hopping at stretch edges, but a
+    real takeoff moves several cm per frame; letting the smoothing or the limit
+    see across an airborne span would flatten the jump, so both utilities run
+    per stretch instead.
+    """
+
+    out = dict(corrections)
+    start, end = int(frame_start), int(frame_end)
+    frame = start
+    while frame <= end:
+        if frame in airborne_frames:
+            frame += 1
+            continue
+        run_start = frame
+        while frame + 1 <= end and (frame + 1) not in airborne_frames:
+            frame += 1
+        run_end = frame
+        values = {f: float(out.get(f, 0.0)) for f in range(run_start, run_end + 1)}
+        if int(radius) > 0:
+            values = smooth_frame_values(values, run_start, run_end, int(radius))
+        if float(max_delta) > 0.0:
+            values = limit_frame_delta(values, run_start, run_end, float(max_delta))
+        out.update(values)
+        frame += 1
+    return out
+
+
+def _ballistic_z(z0, z1, t0, t1, frames, fps, gravity):
+    """Vertical positions of a true ballistic arc through both anchors.
+
+    ``z0``/``z1`` are the body heights at the takeoff and landing anchors and
+    ``t1 - t0`` is the flight time.  Gravity plus the flight time decide the
+    apex (equal anchors: g*T^2/8) - that is the point of rebuilding instead of
+    interpolating: a jump flies at the height its duration implies, so GVHMR's
+    crushed arcs are restored and the drift correction rides along for free.
+    """
+
+    duration = (int(t1) - int(t0)) / float(fps)
+    initial = (float(z1) - float(z0)) / duration + 0.5 * float(gravity) * duration
+    arc: dict[int, float] = {}
+    for frame in frames:
+        t = (int(frame) - int(t0)) / float(fps)
+        arc[int(frame)] = (
+            float(z0) + initial * t - 0.5 * float(gravity) * t * t
+        )
+    return arc
+
+
+def _world_z_shift_in_object_space(obj, delta):
+    """Express a world +Z shift in the object's own ``location`` space."""
+
+    if Vector is None:
+        raise RuntimeError("foot grounding must run inside Blender")
+    parent = obj.parent
+    if parent is None:
+        return (0.0, 0.0, float(delta))
+    local = parent.matrix_world.inverted_safe().to_3x3() @ Vector((0.0, 0.0, float(delta)))
+    return (float(local.x), float(local.y), float(local.z))
+
+
+def model_sole_offset(
+    sample_armature: Any,
+    mesh_object: Any,
+    *,
+    contact_points: Mapping[str, Sequence[tuple[str, str]]] = DEFAULT_GROUND_POINTS,
+    vertex_sample_limit: int = 2000,
+) -> float:
+    """How far the pinned bone rests above the model's sole in its bind pose.
+
+    A PMX model is built standing on the ground, so the ankle's bind height IS
+    the ankle-to-sole drop - measured on arue Teto as 5.6 cm (ankle sample at
+    +5.3 cm, sole's lowest vertex at -0.3 cm).  Pinning the ankle to the floor
+    without this offset buries the shoe by that much; the old pipeline hid the
+    problem behind a hand tuned 2.57 cm default, this reads it off the model
+    instead.  Returns 0.0 when the geometry cannot be measured, which keeps the
+    old bare-bone behaviour rather than guessing a number.
+    """
+
+    if sample_armature is None or mesh_object is None:
+        return 0.0
+    rest = []
+    for points in contact_points.values():
+        for bone_name, point in points:
+            bone = sample_armature.data.bones.get(bone_name)
+            if bone is None:
+                continue
+            local = bone.head_local if point == "head" else bone.tail_local
+            rest.append(float((sample_armature.matrix_world @ local).z))
+    vertices = getattr(getattr(mesh_object, "data", None), "vertices", None)
+    if not rest or not vertices:
+        return 0.0
+    matrix = mesh_object.matrix_world
+    step = max(1, len(vertices) // max(1, int(vertex_sample_limit)))
+    sole = min(
+        float((matrix @ vertices[index].co).z)
+        for index in range(0, len(vertices), step)
+    )
+    return float(min(rest) - sole)
+
+
+def ground_feet_outside_airborne(
+    scene: Any,
+    sample_armature: Any,
+    move_object: Any,
+    action: Any,
+    airborne_ranges: Sequence[Sequence[int]] = (),
+    *,
+    contact_points: Mapping[str, Sequence[tuple[str, str]]] = DEFAULT_GROUND_POINTS,
+    frame_start: int | None = None,
+    frame_end: int | None = None,
+    floor_z: float = 0.0,
+    clearance: float = 0.0015,
+    sole_offset: float = 0.0,
+    smooth_radius: int = 2,
+    max_delta: float = 0.01,
+    worst_sample_limit: int = 100,
+) -> dict[str, Any]:
+    """Pin the lowest foot to the floor everywhere except marked airborne spans.
+
+    The old design pinned the frames a *planted* detection called contacts, and
+    it could not be made to work: GVHMR's data does not let anyone tell a float
+    from a jump, so a detection band either missed floats entirely (0001-1499
+    stopped detecting at frame 566 of 1499) or admitted 16 cm of air as a
+    contact (0001-0999 frames 1-11: pinned 19.3 cm, then yanked back - the
+    "comic hop").  Both failures share one root: the annotation asked a human to
+    mark something invisible in the data.
+
+    This pass inverts it.  A human marks where the person is AIRBORNE - few,
+    obvious, visible in the video - and every other frame counts as a contact
+    and is pinned unconditionally, PoseCapture's way.  Nothing has to infer
+    contact from corrupted data any more.
+
+    Airborne spans are rebuilt as a true ballistic arc anchored at the pinned
+    heights on both sides: the body flies at the height its duration implies
+    (equal anchors: g*T^2/8), which restores GVHMR's crushed jumps, and the
+    drift correction rides through the flight for free - no takeoff boost, no
+    landing settle.  A span longer than ``BALLISTIC_MAX_FRAMES`` (0.8 s, i.e. a
+    78 cm jump) or missing an anchor falls back to a smooth interpolation
+    between the neighbouring pins.
+
+    The rig object moves rather than a bone because a top level object's
+    ``location`` is plain world metres, and because the MMD armature follows the
+    rig through WORLD-space copy constraints; the correction therefore rides
+    into MMD Visual Bake and on into the VMD, and survives a re-bake.
+
+    Sampling reads *sample_armature* (the constrained MMD skeleton, i.e. what
+    will be baked) while *move_object* is the rig that gets the correction.
+    """
+
+    start, end = resolve_frame_range(scene, frame_start, frame_end)
+    if get_action(move_object) is not action:
+        raise RuntimeError("the supplied Action is not active on the MMR rig")
+    if int(smooth_radius) < 0:
+        raise ValueError("smooth_radius must be non-negative")
+    if float(max_delta) < 0.0:
+        raise ValueError("max_delta must be non-negative")
+
+    prepared: dict[str, list[tuple[str, str]]] = {}
+    missing_bones: list[str] = []
+    for side in ("L", "R"):
+        points = [
+            (bone_name, point)
+            for bone_name, point in contact_points[side]
+            if sample_armature.pose.bones.get(bone_name) is not None
+        ]
+        if not points:
+            missing_bones.extend(name for name, _point in contact_points[side])
+        prepared[side] = points
+    if not any(prepared.values()):
+        raise RuntimeError("目标骨架缺少贴地接触骨：" + ", ".join(missing_bones))
+
+    spans = normalize_ranges(airborne_ranges, frame_start=start, frame_end=end)
+    airborne_frames: set[int] = set()
+    for raw_start, raw_end in spans:
+        airborne_frames.update(range(raw_start, raw_end + 1))
+
+    lowest_by_frame: dict[int, float | None] = {}
+    original_location: dict[int, tuple[float, float, float]] = {}
+    view_layer = current_view_layer()
+    if bpy is None:
+        raise RuntimeError("foot grounding must run inside Blender")
+    with preserve_scene_frame(scene, view_layer):
+        for frame in range(start, end + 1):
+            set_scene_frame(scene, frame, view_layer)
+            original_location[frame] = tuple(float(value) for value in move_object.location)
+            # The MMD skeleton is driven by constraints, so its world pose only
+            # exists on the evaluated copy.  Reading the original object reports
+            # the stale pre-constraint pose, which measured feet up to 5 cm away
+            # from where the viewer actually sees them.
+            evaluated = sample_armature.evaluated_get(
+                bpy.context.evaluated_depsgraph_get()
+            )
+            lowest: float | None = None
+            for points in prepared.values():
+                for bone_name, point in points:
+                    location = pose_bone_point_world(evaluated, bone_name, point)
+                    if location is None:
+                        continue
+                    z = float(location.z)
+                    lowest = z if lowest is None else min(lowest, z)
+            lowest_by_frame[frame] = lowest
+
+    target_z = float(floor_z) + float(clearance) + float(sole_offset)
+    fps_base = float(getattr(scene.render, "fps_base", 1.0)) or 1.0
+    fps = float(scene.render.fps) / fps_base
+
+    corrected, missing_samples = _pin_corrections(
+        lowest_by_frame, start, end, target_z
+    )
+    corrected = _smooth_limit_grounded(
+        corrected, airborne_frames, start, end, int(smooth_radius), float(max_delta)
+    )
+
+    airborne_stats: list[dict[str, Any]] = []
+    for raw_start, raw_end in spans:
+        frames = list(range(raw_start, raw_end + 1))
+        takeoff = next(
+            (f for f in range(raw_start - 1, start - 1, -1) if f not in airborne_frames),
+            None,
+        )
+        landing = next(
+            (f for f in range(raw_end + 1, end + 1) if f not in airborne_frames),
+            None,
+        )
+        entry: dict[str, Any] = {
+            "frames": [raw_start, raw_end],
+            "length": len(frames),
+            "takeoff_anchor": takeoff,
+            "landing_anchor": landing,
+        }
+        if (
+            takeoff is not None
+            and landing is not None
+            and (landing - takeoff) <= BALLISTIC_MAX_FRAMES
+        ):
+            z0 = original_location[takeoff][2] + corrected[takeoff]
+            z1 = original_location[landing][2] + corrected[landing]
+            arc = _ballistic_z(z0, z1, takeoff, landing, frames, fps, GRAVITY)
+            for frame in frames:
+                corrected[frame] = arc[frame] - original_location[frame][2]
+            entry.update(
+                {
+                    "mode": "ballistic",
+                    "flight_seconds": round((landing - takeoff) / fps, 4),
+                    "apex_height": round(max(arc.values()) - min(z0, z1), 4),
+                }
+            )
+        else:
+            if takeoff is None and landing is None:
+                start_value = end_value = 0.0
+            elif takeoff is None:
+                start_value = end_value = corrected[landing]
+            elif landing is None:
+                start_value = end_value = corrected[takeoff]
+            else:
+                start_value = corrected[takeoff]
+                end_value = corrected[landing]
+            for offset, frame in enumerate(frames):
+                weight = (offset + 1) / (len(frames) + 1.0)
+                corrected[frame] = start_value + (end_value - start_value) * weight
+            entry["mode"] = (
+                "interpolated" if takeoff is not None and landing is not None else "held"
+            )
+            if entry["mode"] == "interpolated":
+                entry["note"] = (
+                    f"腾空段 {len(frames)} 帧超过弹道重建上限 "
+                    f"{BALLISTIC_MAX_FRAMES} 帧，按两端插值"
+                )
+        airborne_stats.append(entry)
+
+    fuse_clamped = 0
+    for frame in range(start, end + 1):
+        if abs(corrected[frame]) > MAX_CORRECTION:
+            corrected[frame] = math.copysign(MAX_CORRECTION, corrected[frame])
+            fuse_clamped += 1
+
+    curves = [ensure_fcurve(action, "location", axis) for axis in range(3)]
+    caches = [keyframe_map(curve) for curve in curves]
+    changed_frames = 0
+    max_applied = 0.0
+    measured: list[dict[str, Any]] = []
+    with preserve_scene_frame(scene, view_layer):
+        for frame in range(start, end + 1):
+            correction = float(corrected.get(frame, 0.0))
+            set_scene_frame(scene, frame, view_layer)
+            delta = _world_z_shift_in_object_space(move_object, correction)
+            base = original_location[frame]
+            for axis in range(3):
+                set_fcurve_value(
+                    curves[axis],
+                    frame,
+                    base[axis] + delta[axis],
+                    cache=caches[axis],
+                )
+            if abs(correction) > EPSILON:
+                changed_frames += 1
+                max_applied = max(max_applied, abs(correction))
+            lowest = lowest_by_frame.get(frame)
+            if frame not in airborne_frames and lowest is not None:
+                measured.append(
+                    {
+                        "frame": frame,
+                        "foot_z_before": round(lowest, 6),
+                        "correction": round(correction, 6),
+                        "foot_z_after": round(lowest + correction, 6),
+                    }
+                )
+    for curve in curves:
+        curve.update()
+    update_action(action)
+
+    measured.sort(key=lambda item: abs(item["correction"]), reverse=True)
+    applied = [item["correction"] for item in measured]
+
+    suspects: list[dict[str, Any]] = []
+    current_suspect: dict[str, Any] | None = None
+    for frame in range(start, end + 1):
+        lowest = lowest_by_frame.get(frame)
+        height = None
+        if frame not in airborne_frames and lowest is not None:
+            height = lowest - target_z
+        if height is not None and height > SUSPECT_AIRBORNE_HEIGHT:
+            if current_suspect is None:
+                current_suspect = {"frames": [frame, frame], "max_height": height}
+            else:
+                current_suspect["frames"][1] = frame
+                current_suspect["max_height"] = max(
+                    current_suspect["max_height"], height
+                )
+        elif current_suspect is not None:
+            suspects.append(current_suspect)
+            current_suspect = None
+    if current_suspect is not None:
+        suspects.append(current_suspect)
+    suspects.sort(key=lambda item: item["max_height"], reverse=True)
+    suspect_report = [
+        {
+            "frames": item["frames"],
+            "length": item["frames"][1] - item["frames"][0] + 1,
+            "max_height": round(item["max_height"], 4),
+        }
+        for item in suspects[: int(worst_sample_limit)]
+    ]
+
+    return {
+        "operation": "ground_teto_feet_outside_airborne",
+        "frame_range": [start, end],
+        "sample_armature": sample_armature.name,
+        "move_object": move_object.name,
+        "params": {
+            "floor_z": float(floor_z),
+            "clearance": float(clearance),
+            "sole_offset": float(sole_offset),
+            "smooth_radius": int(smooth_radius),
+            "max_delta": float(max_delta),
+            "gravity": float(GRAVITY),
+            "ballistic_max_frames": int(BALLISTIC_MAX_FRAMES),
+        },
+        "contact_points": {
+            side: [f"{bone_name}:{point}" for bone_name, point in points]
+            for side, points in prepared.items()
+        },
+        "airborne_segments": airborne_stats,
+        "pinned_frames": (end - start + 1) - len(airborne_frames),
+        "changed_frames": changed_frames,
+        "max_applied_correction": round(max_applied, 6),
+        "correction_range": (
+            [round(min(applied), 6), round(max(applied), 6)] if applied else None
+        ),
+        "fuse_clamped_frames": fuse_clamped,
+        "missing_sample_frames": len(missing_samples),
+        "unmarked_airborne_suspects": suspect_report,
+        "worst_samples": measured[: int(worst_sample_limit)],
     }
 

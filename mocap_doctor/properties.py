@@ -58,9 +58,6 @@ PARAMETER_DESCRIPTIONS = {
     "source_heel_slide_speed": "单位：m/帧；脚跟每帧位移超过该值时报告滑动，调低会更敏感。",
     "source_hand_jump": "单位：m/帧；手部相邻帧位移超过该值时报告跳变，调低会报告更多区间。",
     "source_hips_jump": "单位：m/帧；骨盆相邻帧位移超过该值时报告跳变，调低会报告更多区间。",
-    "smooth_radius": "每帧向前后参考的帧数；越大越平滑，也越容易损失快速动作。",
-    "smooth_strength": "平滑结果的使用比例：0 不改变，1 完全采用平滑结果。",
-    "smooth_include_hands": "同时平滑手和前臂；可能削弱细小、快速的手部动作。",
     "source_floor_z": "源动作使用的世界坐标地面 Z 高度。",
     "source_floor_tolerance": "允许忽略的小幅穿地深度，范围内不会修复。",
     "source_floor_clearance": "修复后脚底希望保留的最小离地间隙。",
@@ -97,9 +94,19 @@ PARAMETER_DESCRIPTIONS = {
     "drift_min_segment_len": "参与脚部漂移分析所需的最短区间长度。",
     "lock_min_segment_len": "裁掉首尾后仍需达到的最短锁定区间长度。",
     "lock_blend_frames": "锁定区间前后用于渐入和渐出的帧数。",
+    "pelvis_correction_max": (
+        "骨盆修约逐帧允许的最大躯干下沉/抬升量（m）。planted 段内按源骨架腿长比逐帧"
+        "重解骨盆高度、写进 torso_root：腿长被拉大导致膝不够弯/脚被骨盆带离地面时，"
+        "身体下沉让腿恢复弯度、脚够回地面。0 = 关闭。超出此量的帧按上限截断并在报告计数。"
+    ),
     "lock_anchor_mode": "锁定位置的取法：中位数最抗噪，第一帧保持落脚点，中间帧取区间中部。",
     "lock_min_xy_range": "区间水平漂移小于该值时不修复；调低会锁定更多区间。",
-    "lock_axis": "是否锁定脚 IK 的该位置轴；Z 通常关闭。",
+    "lock_axis": "是否锁定脚 IK 的该位置轴；Z 通常关闭。整段是否修复由水平漂移决定，脚在原地悬空的段会被整段跳过——那种飘要用贴地锁定解决。",
+    "ground_smooth_radius": "对非腾空段的贴地修正曲线做平滑时前后参考的帧数；把台阶变成缓坡。腾空段不受影响。",
+    "ground_max_delta": (
+        "单位：m/帧；非腾空段修正曲线相邻帧允许的最大变化，防止身体因贴地突然上下跳。"
+        "腾空段按物理弹道重建，不受这个限速约束（真实起跳速度远大于它）。"
+    ),
     "vmd_floor_offset": "导出前写入全ての親的固定 Z 偏移；负值下移，正值上移。",
     "vmd_export_path": "VMD 文件的完整保存位置；省略 .vmd 后缀时插件会自动补上。",
     "mmd_bake_mode": "自动模式仅在固定结构全部通过时 Bake；手动模式由用户 Bake 后再验证和清理。",
@@ -124,6 +131,7 @@ LENGTH_PROPERTY_NAMES = frozenset(
         "target_floor_tolerance",
         "target_floor_max_lift",
         "lock_min_xy_range",
+        "pelvis_correction_max",
         "vmd_floor_offset",
     }
 )
@@ -138,11 +146,11 @@ PER_FRAME_DISTANCE_PROPERTY_NAMES = frozenset(
         "contact_moving_xy_speed",
         "contact_vertical_speed",
         "target_floor_max_delta",
+        "ground_max_delta",
     }
 )
 FACTOR_PROPERTY_NAMES = frozenset(
     {
-        "smooth_strength",
         "source_floor_strength",
         "tilt_strength",
         "target_floor_strength",
@@ -240,17 +248,6 @@ class MD_PG_ProjectSettings(PropertyGroup):
         unit="NONE",
         description=PARAMETER_DESCRIPTIONS["source_hips_jump"],
     )
-
-    smooth_radius: IntProperty(default=DEFAULTS["smooth_radius"], min=0, max=30, description=PARAMETER_DESCRIPTIONS["smooth_radius"])
-    smooth_strength: FloatProperty(
-        default=DEFAULTS["smooth_strength"],
-        min=0.0,
-        max=1.0,
-        subtype="FACTOR",
-        unit="NONE",
-        description=PARAMETER_DESCRIPTIONS["smooth_strength"],
-    )
-    smooth_include_hands: BoolProperty(default=False, description=PARAMETER_DESCRIPTIONS["smooth_include_hands"])
 
     source_floor_z: FloatProperty(
         default=DEFAULTS["source_floor_z"],
@@ -415,6 +412,7 @@ class MD_PG_ProjectSettings(PropertyGroup):
     drift_min_segment_len: IntProperty(default=DEFAULTS["drift_min_segment_len"], min=1, description=PARAMETER_DESCRIPTIONS["drift_min_segment_len"])
     lock_min_segment_len: IntProperty(default=DEFAULTS["lock_min_segment_len"], min=1, description=PARAMETER_DESCRIPTIONS["lock_min_segment_len"])
     lock_blend_frames: IntProperty(default=DEFAULTS["lock_blend_frames"], min=0, description=PARAMETER_DESCRIPTIONS["lock_blend_frames"])
+    pelvis_correction_max: FloatProperty(default=DEFAULTS["pelvis_correction_max"], min=0.0, description=PARAMETER_DESCRIPTIONS["pelvis_correction_max"])
     lock_anchor_mode: EnumProperty(
         items=(("median", "中位数", ""), ("first", "第一帧", ""), ("middle", "中间帧", "")),
         default="median",
@@ -430,6 +428,20 @@ class MD_PG_ProjectSettings(PropertyGroup):
     lock_x: BoolProperty(default=True, description=PARAMETER_DESCRIPTIONS["lock_axis"])
     lock_y: BoolProperty(default=True, description=PARAMETER_DESCRIPTIONS["lock_axis"])
     lock_z: BoolProperty(default=False, description=PARAMETER_DESCRIPTIONS["lock_axis"])
+
+    ground_smooth_radius: IntProperty(
+        default=DEFAULTS["ground_smooth_radius"],
+        min=0,
+        max=30,
+        description=PARAMETER_DESCRIPTIONS["ground_smooth_radius"],
+    )
+    ground_max_delta: FloatProperty(
+        default=DEFAULTS["ground_max_delta"],
+        min=0.0,
+        subtype="NONE",
+        unit="NONE",
+        description=PARAMETER_DESCRIPTIONS["ground_max_delta"],
+    )
 
     vmd_floor_offset: FloatProperty(
         default=DEFAULTS["vmd_floor_offset"],
