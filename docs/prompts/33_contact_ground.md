@@ -27,18 +27,44 @@
 4. **复测**：`slide_report side=R frame_range=[a,b]` → 该行 `drift_mm` 应 < 1。
 5. 一个 interval 一个 op。做完 `list_ops` → `save` → `release`。
 
-## B. 穿地 / 悬空
+## B. 下沉（穿地）/ 悬空（ground_report · fix_ground）
 
-1. `validate '{"frame_range":[A,B]}'` → 看哪些帧 `foot.*.pen > 0`（穿地，米）或悬空。
-2. `fix_ground '{"frame_range":[A,B],"side":"L","loc_path":"pose.bones[\"foot_ik.L\"].location","mode":"lift"}'`
-   - `lift`：只把穿地的帧抬到地面；`snap`：整段贴地。
-3. ⚠ `validate`/`fix_ground` 用的是**最初烘焙的快照**里的脚底高度（修完不会刷新）。
-   修后复测用 `effect_check op_id=<id>` 看是否动了，或 `slide_report` 看 `z_range_mm`。
+先知道一件事：工具量的"脚底"是**关节中心**（踝 / 前掌 / 脚尖骨的头尾取最低），不是鞋底。穿厚底鞋的
+模型踩实时这些点也离地好几厘米（fixture：左 77 mm、右 81.5 mm）。所以 `ground_report` 会先从全片的
+contact 标注**标定每只脚"正常着地"的高度** `contact_height_mm`，再按相对值判断：
+`rel = 当前高度 − 着地高度`，rel 负 = 比平时踩地还低（下沉/穿地），接触期整段 rel 正 = 悬空。
+
+1. **体检（实时，修前）**：
+   ```
+   /home/sb/remote_kit_1.7.1/tools/agent ground_report '{"agent_id":"<ME>","side":"R","frame_range":[A,B]}'
+   ```
+   看 `data.sides.R`：`contact_height_mm`、`pen_frames`（rel < −10 mm 的帧段）、`pen_max_mm`、
+   `contacts[]`（`floating:true` = 这段接触整段比平时高 > 10 mm）、`fix_ground_args`（现成参数）。
+   修前数字：下沉记 `pen_max_mm`；悬空记那段 contact 的 `rel_min_mm`。
+2. `claim bones=["foot_ik.R"] frames=<fix_ground_args 的 frame_range>`。
+3. **写入**：把 `fix_ground_args` 里的一项**去掉 `why`** 原样传（`rest_clearance` 已经是**米**，别换算）：
+   ```
+   /home/sb/remote_kit_1.7.1/tools/agent fix_ground '{"agent_id":"<ME>","frame_range":[a,b],"side":"R",
+     "loc_path":"pose.bones[\"foot_ik.R\"].location","mode":"pen","rest_clearance":0.0815,"expect_version":<v>}'
+   ```
+   | mode | 做什么 | 用在 |
+   |---|---|---|
+   | `pen` | 低于 地面+rest_clearance 的帧**往上推**到这个高度，其余不动 | 下沉/穿地 |
+   | `lift` | 高于 地面+rest_clearance 的帧**往下拉**到这个高度，其余不动 | 接触期悬空 |
+   | `float` | 整段钉在 地面+rest_clearance（脚跟/脚尖滚动也被抹平） | 很少用 |
+   **没有 `snap`**（旧手册写错了）。**不传 rest_clearance = 0**：在穿鞋的模型上 `lift` 会把整段脚按进地里
+   几厘米——所以一律用 ground_report 给的参数。
+4. **复测**：同第 1 步，`frame_range` 用写入窗去掉两端 blend（[a+4, b−4]）→ 下沉：`pen_max_mm ≤ 1`；
+   悬空：那段 contact 的 `rel_max_mm ≤ 1`。`effect_check` 只答"动没动"。
+5. ⚠ `fix_ground` 按**快照**（最初烘焙的原始动作）里的脚底高度计算。ground_report 的 warnings 出现
+   "快照…与当前姿态差 > 1 mm" = 这只脚这段已经被修过（foot_lock 的 pos/xy+rot、别人的 fix_ground）——
+   fix_ground 会按旧高度算错：**不写**，报告给协调者。`validate` 也是快照、而且按"关节贴地面"判，在穿鞋的
+   模型上没有参考价值——用 ground_report。
 
 ## C. 顺序
 
-同一只脚、同一段：先 foot_lock（水平），再 fix_ground（高度）。反过来做 foot_lock 的
-`pos*` 模式会把抬高的结果钉回去。
+同一只脚、同一段：先 foot_lock（`lock:"xy"`，水平），再 fix_ground（高度）。xy 锁不改高度，快照仍然有效；
+用了 `pos*`/`xy+rot` 之后快照就过时了（见 B-5），反过来先 fix_ground 再 `pos*` 又会把抬高的结果钉回去。
 
 ## 报告
 ```

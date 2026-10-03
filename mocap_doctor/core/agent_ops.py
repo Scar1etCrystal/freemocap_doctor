@@ -1182,9 +1182,11 @@ def fix_ground(
     name = f"agent_ground_{start}_{end}"
     _track, strip = _write_strip(armature, name, start, scalars=scalars,
                                blend=blend, track_name=track_name)
-    op = _new_op("fix_ground",
-                 {"loc_path": loc_path, "floor_z": floor_z, "mode": mode,
-                  "pin_xy": pin_xy},
+    params = {"loc_path": loc_path, "floor_z": floor_z, "mode": mode,
+              "pin_xy": pin_xy}
+    if rest_clearance:                      # 只在用到时记录（旧 op 记录不变）
+        params["rest_clearance"] = float(rest_clearance)
+    op = _new_op("fix_ground", params,
                  (start, end), strip.name, op_mode,
                  {"max_sole_shift": float(np.abs(desired_sole - sole_h).max())},
                  track=_track.name)

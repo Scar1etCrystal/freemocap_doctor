@@ -808,9 +808,21 @@ def _tool_clean_jitter(ctx, frame_range, bone=None, paths=None,
     return op
 
 
+_GROUND_MODES = {"lift": "高于 地面+rest_clearance 的帧往下拉到这个高度（治悬空）",
+                 "pen": "低于 地面+rest_clearance 的帧往上推到这个高度（治穿地）",
+                 "float": "整段钉在 地面+rest_clearance（脚跟/脚尖滚动也会被抹平）"}
+
+
 def _tool_fix_ground(ctx, frame_range, side, loc_path,
-                     mode="lift", pin_xy=False, blend=4,
+                     mode="lift", pin_xy=False, blend=4, rest_clearance=0.0,
                      op_mode="preview", **_):
+    """rest_clearance（米）：脚底点（关节中心）正常着地时离地面的高度。穿厚底鞋的
+    模型这里不是 0——用 ground_report 的 fix_ground_args（已按这只脚标定好）。"""
+    if mode not in _GROUND_MODES:
+        raise RuntimeError(
+            f"fix_ground mode={mode!r} 不存在；只有 "
+            + "；".join(f"{k}：{v}" for k, v in _GROUND_MODES.items())
+            + "。（旧手册写的 snap 从来不存在——整段贴地是 float）")
     armature = ctx["armature"]
     store = get_store()
     sole = store.signals.get(f"foot.{side}.sole_h")
@@ -820,7 +832,8 @@ def _tool_fix_ground(ctx, frame_range, side, loc_path,
     mask = (store.frames >= a) & (store.frames <= b)
     op = agent_ops.fix_ground(
         armature, _base_action(armature), loc_path, sole[mask],
-        floor_z=store.floor_z, mode=mode, pin_xy=bool(pin_xy),
+        floor_z=store.floor_z, rest_clearance=float(rest_clearance),
+        mode=mode, pin_xy=bool(pin_xy),
         frame_range=frame_range, blend=int(blend), op_mode=op_mode,
         data_dir=ctx["data_dir"])
     _write_common(ctx, armature, frame_range)

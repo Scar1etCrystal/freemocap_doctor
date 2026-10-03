@@ -105,7 +105,7 @@ list_ops       确认新 op 在册
 | `reapply` | `op_id` `overrides`（params 局部覆盖 dict） | 同轨重写该 op：删旧 strip 写新的，op_id 不变 |
 | `clean_jitter` | `frame_range` `bone`\|`paths` `strength` `width` `blend` | 零相位平滑 |
 | `restore_accent` | `frame_range` `data_path` `index` `method`(ease_reshape/retime/hf_reinject/refilter) `strength` `impact_frame` `retime_speed` `retime_split` `raw_action` `blend` | 力量感（quat 四分量整体重塑） |
-| `fix_ground` | `frame_range` `side` `loc_path` `mode`(lift/snap) `pin_xy` `blend` | 脚底贴地 |
+| `fix_ground` | `frame_range` `side` `loc_path` `mode`（`pen` 推上穿地帧 / `lift` 拉下悬空帧 / `float` 整段钉住；**没有 snap**，旧版此处写错）`rest_clearance`（米：脚底关节点正常着地离地高度，穿鞋模型不是 0——用 `ground_report` 的 `fix_ground_args`）`pin_xy` `blend` | 脚底贴地（按快照高度算） |
 | `solve_pelvis` | `frame_range` `pelvis_path` `pelvis_dz` `blend` | 骨盆高度曲线 |
 | `apply_exemplar` | `frame_range` `ex_id` `loc_path` `quat_path` `target_pos` `target_quat` `anchor_yaw_deg` `yaw_scale` `mirror` `blend` | 模板残差重放 |
 | `reapply` | `op_id` `overrides`(params 局部覆盖) | 同轨重写该 op（调参） |
@@ -127,7 +127,7 @@ list_ops       确认新 op 在册
 | 类别 | 工具 | 数据来源 |
 |---|---|---|
 | 快照类 | describe / get_series / find_events / compare / snapshot / bake_range / get_joint_angles / list_intervals / validate / get_overview | 最初烘焙的 npz（原始动作），**修复后不变** |
-| 实时类 | probe_anatomy / analyze_motion / compare_motion / chain_lag / slide_report / effect_check | 当前可见姿态（含全部修复）——**修后复测只用这些** |
+| 实时类 | probe_anatomy / analyze_motion / compare_motion / chain_lag / slide_report / ground_report / effect_check | 当前可见姿态（含全部修复）——**修后复测只用这些** |
 
 ### 新工具（2026-10-03）
 
@@ -137,6 +137,7 @@ list_ops       确认新 op 在册
 | `compare_motion` | 读 | `a:{bones/chain,frame_range}` `b:{…}` `mirror` `bone_map` `space` `trim` | 两段动作逐帧角差 `err_inner_deg`（复制/镜像验收；a 放目标窗） |
 | `chain_lag` | 读 | `bones`/`chain` `frame_range` `max_lag` `signal` | 每骨相对链内父骨的滞后帧数（只信 `reliable=true`） |
 | `slide_report` | 读 | `side` `frame_range` `threshold_mm` | 每段接触 foot_ik 水平漂移 `drift_mm`（**毫米**），flagged 行带 foot_lock 参数 |
+| `ground_report` | 读 | `frame_range` `side` `threshold_mm`(默认 10) `detail` | 实时脚底高度（DEF-foot 头/尾 + DEF-toe 尾取最低，与快照同一组点）。先从全片 contact 标注标定每只脚"正常着地"高度 `contact_height_mm`（关节中心不是鞋底，穿鞋模型踩实时也离地几厘米），再按相对值判：`pen_max_mm`/`pen_frames`（下沉）、`contacts[].floating`（悬空）；`fix_ground_args` 带好 `mode` 和 `rest_clearance`（米）；`snapshot_diff_max_mm` > 1 mm = 快照已过时，fix_ground 会按旧高度算 |
 | `motion_copy` | 写 | `bones`/`chain` `src_range` `dst_start`/`dst_range`/`time_scale` `mirror` `bone_map` `space`(local/world) `channels`(rot/rot+loc) `mode`(replace/add) | 动作搬到别的时间/另一侧/别的部位；镜像用 rest 标定的 F=Rest_src⁻¹·S·Rest_dst |
 | `anticipation` | 写 | `bones`/`chain` `frame_range` `main_bone` `amount` `lead` `delay` | 发力前反向小动 + 起点后移 + 时间重映射补回总时长 |
 | `follow_through` | 写 | 同上 + `stop_frame` `amount` `period` `decay` `cycles` `propagate` | 停止点后衰减振荡 |

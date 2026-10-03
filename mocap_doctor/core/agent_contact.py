@@ -23,6 +23,7 @@ from __future__ import annotations
 import numpy as np
 
 from . import agent_io, agent_ops, agent_pose as P
+from .ranges import frames_to_ranges
 
 LOCK_MODES = ("xy", "xy+rot", "pos", "pos+rot")
 
@@ -146,6 +147,147 @@ def slide_report(scene, armature, *, side=None, frame_range=None,
 
 
 # ---------------------------------------------------------------------------
+# ground_report (read) - live sole height, same three points as the snapshot
+
+# 与信号库快照（agent_io.rig_bake_spec 的 foot_points）同一组脚底点：
+# DEF-foot 头（踝）/ 尾（前掌）+ DEF-toe 尾（脚尖），取三者最低 = 脚底高度。
+_SOLE_POINTS = (("DEF-foot.{s}", "head"), ("DEF-foot.{s}", "tail"), ("DEF-toe.{s}", "tail"))
+
+
+def sole_heights(scene, armature, sides, frames) -> dict:
+    """{side: (T,3) world Z of heel/ball/toe} for the CURRENT visible pose.
+
+    Computed exactly like the snapshot bake (``armature.matrix_world @ head/tail``),
+    so frames nobody has touched read identically to ``foot.<s>.sole_h``."""
+    names = {s: [(n.format(s=s), w) for n, w in _SOLE_POINTS] for s in sides}
+    for s in sides:
+        for n, _w in names[s]:
+            if armature.pose.bones.get(n) is None:
+                raise RuntimeError(f"骨架上没有 {n}（脚底高度用它的头/尾）")
+
+    def extra(arm, _scene):
+        world = arm.matrix_world
+        row = {}
+        for s in sides:
+            zs = []
+            for n, w in names[s]:
+                pb = arm.pose.bones[n]
+                zs.append(float((world @ (pb.head if w == "head" else pb.tail)).z))
+            row[s] = zs
+        return row
+
+    smp = P.sample_visible(scene, armature, [names[sides[0]][0][0]], frames,
+                           extra_fn=extra)
+    return {s: np.asarray([e[s] for e in smp["extra"]], dtype=np.float64)
+            for s in sides}
+
+
+def contact_heights(signals, frames, floor_z, scene) -> dict:
+    """每只脚"正常着地"时脚底点离地面的高度（米），从快照（原始动作）标定。
+
+    脚底点是关节中心（踝/前掌/脚尖骨的头尾），不是鞋底：穿厚底鞋的模型着地时它们
+    离地好几厘米（fixture：左 77 mm、右 81.5 mm）。取全片每段 contact 标注里脚底点
+    最低值的中位数 = 这只脚踩实时的高度。少于 3 段标注 → 不标定（按 0 算）。"""
+    ivs = agent_io.scene_intervals(scene)
+    fr = np.asarray(frames)
+    out = {}
+    for s in ("L", "R"):
+        sh = signals.get(f"foot.{s}.sole_h")
+        if sh is None:
+            continue
+        sh = np.asarray(sh, dtype=np.float64)
+        mins = []
+        for it in ivs.get(f"contact.{s}", []):
+            m = (fr >= int(it["start"])) & (fr <= int(it["end"]))
+            if m.any():
+                mins.append(float(sh[m].min()) - float(floor_z))
+        if len(mins) >= 3:
+            arr = np.asarray(mins) * 1000.0
+            out[s] = {"height_m": float(np.median(arr)) / 1000.0, "contacts": len(mins),
+                      "p10_mm": round(float(np.percentile(arr, 10)), 1),
+                      "p90_mm": round(float(np.percentile(arr, 90)), 1)}
+    return out
+
+
+def ground_report(scene, armature, *, frame_range, floor_z, side=None,
+                  threshold_mm: float = 10.0, blend: int = 4, snapshot=None,
+                  contact_height=None, detail: bool = False) -> dict:
+    """Live penetration / floating check - the before/after check for fix_ground.
+
+    clearance = 脚底点最低值 − floor_z（mm）。判定相对"这只脚正常着地的高度"
+    contact_height（见 contact_heights）：
+      rel = clearance − contact_height；rel < −threshold = 下沉/穿地（pen_frames）；
+      接触段整段 rel > +threshold = 悬空（contacts[].floating）。
+    fix_ground_args：穿地 → mode=pen、悬空 → mode=lift，rest_clearance 已填好（米），
+    两侧各留 blend。snapshot：{side: 快照 sole_h} → snapshot_diff_max_mm。"""
+    sides = [_foot(side)] if side else ["L", "R"]
+    a, b, frames = P.strip_window(frame_range)
+    lo_clip, hi_clip = int(scene.frame_start), int(scene.frame_end)
+    heights = sole_heights(scene, armature, sides, frames)
+    ivs = agent_io.scene_intervals(scene)
+    thr = float(threshold_mm)
+    contact_height = contact_height or {}
+    out = {"frame_range": [a, b], "floor_z": float(floor_z), "threshold_mm": thr,
+           "units": "mm。clearance = 脚底点（关节中心）最低值 − 地面；rel = clearance − "
+                    "contact_height（这只脚正常着地时的 clearance）；rel 负 = 下沉/穿地",
+           "sides": {}}
+    for s in sides:
+        cal = contact_height.get(s)
+        ref_m = float(cal["height_m"]) if cal else 0.0
+        ref_mm = ref_m * 1000.0
+        sole = heights[s].min(axis=1)
+        clr = (sole - float(floor_z)) * 1000.0
+        rel = clr - ref_mm
+        i_min = int(np.argmin(clr))
+        pen_frames = [f for f, r in zip(frames, rel) if r < -thr]
+        pen_ranges = frames_to_ranges(pen_frames) if pen_frames else []
+        loc_path = f'pose.bones["foot_ik.{s}"].location'
+        contacts, suggest = [], []
+        for lo, hi in pen_ranges:
+            suggest.append({"frame_range": [max(lo_clip, lo - int(blend)),
+                                            min(hi_clip, hi + int(blend))],
+                            "side": s, "loc_path": loc_path, "mode": "pen",
+                            "rest_clearance": round(ref_m, 4),
+                            "why": f"{lo}–{hi} 比正常着地低 > {thr:g} mm（下沉/穿地）"})
+        for k, it in enumerate(ivs.get(f"contact.{s}", [])):
+            ca, cb = int(it["start"]), int(it["end"])
+            idx = [i for i, f in enumerate(frames) if ca <= f <= cb]
+            if not idx:
+                continue
+            r_c = rel[idx]
+            row = {"interval": f"contact.{s}:{k}", "frames": [ca, cb],
+                   "measured": [frames[idx[0]], frames[idx[-1]]],
+                   "rel_min_mm": round(float(r_c.min()), 1),
+                   "rel_max_mm": round(float(r_c.max()), 1),
+                   "floating": bool(r_c.min() > thr),
+                   "sunk": bool(r_c.min() < -thr)}
+            contacts.append(row)
+            if row["floating"]:
+                suggest.append({"frame_range": [max(lo_clip, ca - int(blend)),
+                                                min(hi_clip, cb + int(blend))],
+                                "side": s, "loc_path": loc_path, "mode": "lift",
+                                "rest_clearance": round(ref_m, 4),
+                                "why": f"{row['interval']} 接触期比正常着地高 "
+                                       f"{row['rel_min_mm']} mm（悬空）"})
+        res = {"contact_height_mm": round(ref_mm, 1),
+               "calibration": cal or {"contacts": 0, "note": "没有足够的 contact 标注，按 0 算"},
+               "clearance_min_mm": round(float(clr[i_min]), 1),
+               "clearance_min_frame": frames[i_min],
+               "rel_min_mm": round(float(rel[i_min]), 1),
+               "pen_max_mm": round(max(0.0, -float(rel[i_min])), 1),
+               "pen_frames": [[int(lo), int(hi)] for lo, hi in pen_ranges],
+               "contacts": contacts, "fix_ground_args": suggest}
+        if snapshot is not None and snapshot.get(s) is not None:
+            snap = np.asarray(snapshot[s], dtype=np.float64)
+            if len(snap) == len(sole):
+                res["snapshot_diff_max_mm"] = round(float(np.abs(sole - snap).max() * 1000.0), 2)
+        if detail:
+            res["rel_mm"] = [round(float(v), 1) for v in rel]
+        out["sides"][s] = res
+    return out
+
+
+# ---------------------------------------------------------------------------
 # foot_lock (write)
 
 def foot_lock(scene, armature, *, side, frame_range, ref="auto", lock="xy",
@@ -257,6 +399,37 @@ def _tool_slide_report(ctx, side=None, frame_range=None, threshold_mm=10.0,
             "flagged 段直接把 foot_lock_args 展开给 foot_lock；修后再调 slide_report 复测"}
 
 
+def _tool_ground_report(ctx, frame_range=None, side=None, threshold_mm=10.0,
+                        blend=4, detail=False, **_):
+    if frame_range is None:
+        raise RuntimeError("ground_report 需要 frame_range=[A,B]")
+    from . import agent_bridge          # 运行期取信号库（避免插件载入时循环引用）
+    store = agent_bridge.get_store()
+    a, b = int(frame_range[0]), int(frame_range[1])
+    snapshot = {}
+    mask = (store.frames >= a) & (store.frames <= b)
+    for s in (["L", "R"] if not side else [_foot(side)]):
+        sh = store.signals.get(f"foot.{s}.sole_h")
+        if sh is not None and int(mask.sum()) == b - a + 1:
+            snapshot[s] = np.asarray(sh)[mask]
+    cal = contact_heights(store.signals, store.frames, store.floor_z, ctx["scene"])
+    res = ground_report(ctx["scene"], ctx["armature"], frame_range=frame_range,
+                        floor_z=store.floor_z, side=side, threshold_mm=threshold_mm,
+                        blend=blend, snapshot=snapshot, contact_height=cal,
+                        detail=bool(detail))
+    parts = []
+    for s, r in res["sides"].items():
+        parts.append(f"{s}: 着地高度 {r['contact_height_mm']} mm，最低处 rel {r['rel_min_mm']} mm"
+                     f" @ {r['clearance_min_frame']}，下沉段 {len(r['pen_frames'])}，悬空接触段 "
+                     f"{sum(1 for c in r['contacts'] if c['floating'])}")
+    stale = [s for s, r in res["sides"].items() if r.get("snapshot_diff_max_mm", 0) > 1.0]
+    warnings = ([f"{'/'.join(stale)} 脚的快照（fix_ground 用的 sole_h）与当前姿态差 > 1 mm："
+                 "这段已经被修过，fix_ground 会按旧高度算"] if stale else [])
+    return {"summary": "；".join(parts), "data": res, "warnings": warnings,
+            "truncated": False,
+            "hint": "fix_ground_args 去掉 why 后原样传给 fix_ground（rest_clearance 已是米）；修后同参数再调 ground_report 复测"}
+
+
 def _scope_foot_lock(ctx, args):
     if args.get("dry_run"):
         return []
@@ -273,7 +446,8 @@ def _reapply_foot_lock(armature, base_action, *, params, frame_range, status,
                      track_name=track_name, record=False, **p)
 
 
-TOOLS = {"foot_lock": _tool_foot_lock, "slide_report": _tool_slide_report}
+TOOLS = {"foot_lock": _tool_foot_lock, "slide_report": _tool_slide_report,
+         "ground_report": _tool_ground_report}
 WRITE_SCOPES = {"foot_lock": _scope_foot_lock}
 TUNABLE = {"foot_lock": [
     {"key": "lock", "kind": "choice", "options": list(LOCK_MODES)},
