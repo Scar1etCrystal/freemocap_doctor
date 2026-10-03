@@ -36,11 +36,17 @@ FIX = bpy.data.filepath
 SCRATCH = os.path.join(KIT, "sandbox", "tmp", "bench_wizard_data")
 STEPS = ["source_check", "source_floor", "contacts", "global_correction", "tilt",
          "ground_feet", "target_floor", "foot_lock"]
+if "--steps" in ARGV:
+    STEPS = ARGV[ARGV.index("--steps") + 1].split(",")
 
 OPS._require_restore_before_rerun = lambda scene, step_id: None   # throwaway only
 
 
 def digest():
+    """Actions only - the step's real product.  Object matrices are NOT part of
+    the oracle: the MMD rig's hair/skirt are rigid-body physics objects whose
+    transforms depend on simulation-cache state (frame history), not on the
+    step's math (they made two runs of identical code look different)."""
     h = hashlib.sha1()
     for act in sorted(bpy.data.actions, key=lambda a: a.name):
         h.update(act.name.encode())
@@ -50,7 +56,14 @@ def digest():
             fc.keyframe_points.foreach_get("co", co)
             h.update(f"{fc.data_path}[{fc.array_index}]:{n}".encode())
             h.update(co.tobytes())
+    return h.hexdigest()[:16]
+
+
+def obj_digest():
+    h = hashlib.sha1()
     for ob in sorted(bpy.context.scene.objects, key=lambda o: o.name):
+        if ob.rigid_body is not None:
+            continue
         h.update(ob.name.encode())
         h.update(np.asarray(ob.matrix_world, dtype=np.float32).tobytes())
     return h.hexdigest()[:16]
@@ -65,6 +78,10 @@ for step in STEPS:
         os.makedirs(SCRATCH, exist_ok=True)
         st = bpy.context.scene.mocap_doctor
         st.data_directory = SCRATCH
+        rbw = bpy.context.scene.rigidbody_world
+        no_rb = "--no-rb" in ARGV and rbw is not None and rbw.enabled
+        if no_rb:                       # experiment: physics suspended during the step
+            rbw.enabled = False
         t0 = time.perf_counter()
         try:
             r = bpy.ops.mocap_doctor.run_step(step_id=step)
@@ -72,10 +89,14 @@ for step in STEPS:
         except Exception as exc:  # noqa: BLE001
             r, msg = f"EXC {exc!r}"[:160], ""
         times.append(time.perf_counter() - t0)
-        outs.append((str(r), msg[:100], digest()))
+        if no_rb:
+            rbw.enabled = True
+        outs.append((str(r), msg[:100], digest(), obj_digest()))
     res[step] = {"median_s": statistics.median(times), "runs": len(times),
                  "result": outs[0][0], "msg": outs[0][1], "digest": outs[0][2],
-                 "deterministic": len({o[2] for o in outs}) == 1}
+                 "obj_digest": outs[0][3],
+                 "deterministic": len({o[2] for o in outs}) == 1,
+                 "obj_deterministic": len({o[3] for o in outs}) == 1}
     print(f"WIZBENCH {step:18s} {res[step]['median_s'] * 1000:9.1f} ms  {outs[0][0]}  "
           f"digest={outs[0][2]}  {outs[0][1]!r}", flush=True)
 shutil.rmtree(SCRATCH, ignore_errors=True)

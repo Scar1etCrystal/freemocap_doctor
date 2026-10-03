@@ -223,8 +223,12 @@ def damp_foot_ik_tilt(
                     float(euler.z),
                 )
 
+        # 写入遍不再逐帧 frame_set（任务2）：目标值只由第一遍的采样算出，
+        # insert_pose_rotation_key 的帧号是显式的、写入的是刚设的属性值——
+        # 逐帧求值没有任何读数依赖它，却在每插一个 key 后逼 Blender 重算
+        # 整个场景（并拷贝刚被改脏的 517 条曲线的 Action），约占本步 80% 耗时。
+        # 退出 preserve_scene_frame 时会按原帧重求值一次，结束状态不变。
         for frame in range(start, end + 1):
-            set_scene_frame(scene, frame, view_layer)
             for bone_name in valid:
                 current = samples[bone_name][frame]
                 target = samples[bone_name][reference]
@@ -300,12 +304,20 @@ def _evaluated_mesh_min_z(
         mesh = evaluated.to_mesh()
         if mesh is None or not mesh.vertices:
             return None
-        matrix = evaluated.matrix_world
-        minimum: float | None = None
-        for index in range(0, len(mesh.vertices), max(1, int(vertex_sample_step))):
-            z = float((matrix @ mesh.vertices[index].co).z)
-            minimum = z if minimum is None else min(minimum, z)
-        return minimum
+        # 任务2：逐顶点 Python 循环（本步 ~10 s、1700 万次 min）→ numpy 批量。
+        # 逐位复现 mathutils 的 Matrix @ Vector：每个乘积按 float32 算、在 double
+        # 里按列顺序累加、最后转回 float32（18546 次网格求值对拍 0 差异）。
+        import numpy as np
+        n = len(mesh.vertices)
+        co = np.empty(n * 3, dtype=np.float32)
+        mesh.vertices.foreach_get("co", co)
+        co = co.reshape(n, 3)[::max(1, int(vertex_sample_step))]
+        m = np.array(evaluated.matrix_world, dtype=np.float32)
+        z = (co[:, 0] * m[2, 0]).astype(np.float64)
+        z = z + (co[:, 1] * m[2, 1]).astype(np.float64)
+        z = z + (co[:, 2] * m[2, 2]).astype(np.float64)
+        z = z + np.float64(m[2, 3] * np.float32(1.0))
+        return float(z.astype(np.float32).min())
     finally:
         if mesh is not None:
             evaluated.to_mesh_clear()
@@ -351,30 +363,23 @@ def repair_mesh_floor_lift_v3_safe(
 
     view_layer = current_view_layer()
     original_z: dict[int, float] = {}
-    with preserve_scene_frame(scene, view_layer):
-        for frame in range(start, end + 1):
-            set_scene_frame(scene, frame, view_layer)
-            original_z[frame] = float(correction.location.z)
-
-    removed_curves = 0
-    if reset_existing_z_curve and existing_curve is not None:
-        action.fcurves.remove(existing_curve)
-        existing_curve = None
-        removed_curves = 1
-
     depsgraph = (
         bpy.context.evaluated_depsgraph_get() if bpy is not None else None
     )
     if depsgraph is None:
         raise RuntimeError("mesh floor repair must run inside Blender")
 
+    # 任务2：原来先单独扫一遍只为读 original_z、删旧 Z 曲线、再扫第二遍量网格
+    # （第二遍里又把 Z 显式设回 original_z）。合成一遍：旧曲线还在时 frame_set
+    # 给出的 Z 就是 original_z[frame]，再显式设一次同值 → 求值状态与原来第二遍
+    # 逐位相同；旧曲线在循环后再删。省掉 1499 次整场景求值。
     minimum_by_frame: dict[int, float | None] = {}
     mesh_by_frame: dict[int, str | None] = {}
     with preserve_scene_frame(scene, view_layer):
         for frame in range(start, end + 1):
             set_scene_frame(scene, frame, view_layer)
-            # When a stale Z curve was removed, explicitly restore that frame's
-            # cached clean baseline before evaluating the mesh.
+            original_z[frame] = float(correction.location.z)
+            # explicitly pin that frame's clean baseline before evaluating the mesh
             correction.location.z = original_z[frame]
             if view_layer is not None:
                 view_layer.update()
@@ -391,6 +396,12 @@ def repair_mesh_floor_lift_v3_safe(
                     minimum_mesh = mesh.name
             minimum_by_frame[frame] = minimum
             mesh_by_frame[frame] = minimum_mesh
+
+    removed_curves = 0
+    if reset_existing_z_curve and existing_curve is not None:
+        action.fcurves.remove(existing_curve)
+        existing_curve = None
+        removed_curves = 1
 
     target_z = float(floor_z) + float(target_clearance)
     raw: dict[int, float] = {}
@@ -2027,6 +2038,15 @@ def _world_z_shift_in_object_space(obj, delta):
     return (float(local.x), float(local.y), float(local.z))
 
 
+def _world_z_shift_from_parent_rot(parent_rot_inv, delta):
+    """_world_z_shift_in_object_space with the parent's inverted world rotation
+    recorded beforehand (None = no parent)."""
+    if parent_rot_inv is None:
+        return (0.0, 0.0, float(delta))
+    local = parent_rot_inv @ Vector((0.0, 0.0, float(delta)))
+    return (float(local.x), float(local.y), float(local.z))
+
+
 def model_sole_offset(
     sample_armature: Any,
     mesh_object: Any,
@@ -2148,10 +2168,14 @@ def ground_feet_outside_airborne(
     view_layer = current_view_layer()
     if bpy is None:
         raise RuntimeError("foot grounding must run inside Blender")
+    parent_rot_inv: dict[int, Any] = {}     # 写入遍用：父物体世界旋转之逆（逐帧）
     with preserve_scene_frame(scene, view_layer):
         for frame in range(start, end + 1):
             set_scene_frame(scene, frame, view_layer)
             original_location[frame] = tuple(float(value) for value in move_object.location)
+            if move_object.parent is not None:
+                parent_rot_inv[frame] = \
+                    move_object.parent.matrix_world.inverted_safe().to_3x3()
             # The MMD skeleton is driven by constraints, so its world pose only
             # exists on the evaluated copy.  Reading the original object reports
             # the stale pre-constraint pose, which measured feet up to 5 cm away
@@ -2251,8 +2275,10 @@ def ground_feet_outside_airborne(
     with preserve_scene_frame(scene, view_layer):
         for frame in range(start, end + 1):
             correction = float(corrected.get(frame, 0.0))
-            set_scene_frame(scene, frame, view_layer)
-            delta = _world_z_shift_in_object_space(move_object, correction)
+            # 不再逐帧 frame_set（任务2）：换算只需要父物体的世界矩阵，而父物体
+            # 不受本物体位置 key 的影响——读取遍里已逐帧记下，结果逐位相同。
+            delta = _world_z_shift_from_parent_rot(
+                parent_rot_inv.get(frame), correction)
             base = original_location[frame]
             for axis in range(3):
                 set_fcurve_value(
