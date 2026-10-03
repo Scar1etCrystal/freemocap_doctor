@@ -293,6 +293,38 @@ check("23c plan_scopes reports a live claim on a task's read range",
       r["data"]["vs_claims"] if r["ok"] else r.get("error"))
 agent_bridge._LEASES.clear()
 
+# ---- read dependencies after the fact: a copy whose source gets edited is marked stale --
+agent_bridge._LEASES.clear()
+rc = call("motion_copy", agent_id="cp", chain="arm.L", src_range=[630, 680], dst_start=1430)
+cid = rc["data"]["op_id"] if rc["ok"] else None
+call("release", agent_id="cp")
+
+
+def row_of(op_id):
+    rows = call("list_ops", op_id=op_id, compact=True)["data"]["fixes"]
+    return rows[0] if rows else {}
+
+
+rw = call("clean_jitter", agent_id="w9", bone="right_hand",
+          frame_range=[640, 670])
+check("24 a write elsewhere (right hand) does not mark the left-arm copy stale",
+      rc["ok"] and rw["ok"] and "stale" not in row_of(cid), row_of(cid).get("stale"))
+rw2 = call("clean_jitter", agent_id="w9", bone="upper_arm_fk.L", frame_range=[640, 670])
+st = row_of(cid).get("stale") or {}
+check("24b a write inside the copy's source (upper_arm_fk.L 640-670) marks it stale",
+      rw2["ok"] and st.get("by") == "w9" and st.get("frames") == [640, 670], st)
+call("release", agent_id="w9")
+rr = call("reapply", agent_id="cp", op_id=cid, overrides={})
+cm = call("compare_motion", op_id=cid)
+check("24c reapply re-copies from the current source and clears the mark",
+      rr["ok"] and "stale" not in row_of(cid) and cm["ok"] and cm["data"]["err_inner_deg"] < 0.05,
+      f"stale={row_of(cid).get('stale')} err_inner={cm.get('data', {}).get('err_inner_deg')}")
+for o in (rw, rw2):
+    if o["ok"]:
+        call("revert", agent_id="w9", op_id=o["data"]["op_id"])
+call("revert", agent_id="cp", op_id=cid)
+agent_bridge._LEASES.clear()
+
 fails = [r for r in RESULTS if not r[1]]
 print(f"\n==== {len(RESULTS) - len(fails)}/{len(RESULTS)} PASS ====")
 for n, _o, d in fails:

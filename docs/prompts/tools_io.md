@@ -113,7 +113,7 @@ ping → 读/探查（确定 scope 和修前基线）→ claim → 写（带 exp
 | `ground_report` | `frame_range` `side` `threshold_mm`(默认 10) `detail` | `contact_height_mm`（这只脚正常着地时脚底关节点的高度，自动标定）、`pen_max_mm`/`pen_frames`（比它低 = 下沉）、`contacts[].floating`（接触期比它高 = 悬空）、`fix_ground_args`（去掉 why 原样用）；`snapshot_diff_max_mm` > 1 = 快照已过时（fix_ground 会算错） |
 | `effect_check` | `op_id` | 在 [A+blend, 中点, B−blend] 三帧上该 op 到底动没动：**写上了 = `moved_any:true`**；`pass` 要求三帧都动，局部修复（重音、跟随、踩实）`pass:false` 是正常的。只答"动了没"，不答"对不对" |
 | `dry_run:true` | 同写工具 | 只算不写，返回 `dry_run:true` + metrics（clean_jitter/hold_pose 给 `pred_rot_change_max_deg`）。**支持的**：hold_pose、clean_jitter、restore_accent 和全部新写工具；其它（fix_ground/solve_pelvis/apply_exemplar）会**直接报错**而不是偷偷写。响应里没有 `dry_run:true` 就说明真写了 |
-| `list_ops` | `owner`（"none"=无主历史） `op_id` `live`（去掉日志里 reverted 的历史） `frames` `bones`（只要写了这些骨的修复） `compact`（只回场景对账行，带 `bones`） | **自查用** `{"agent_id":"<ME>","owner":"<ME>","compact":true}`（只回你的 fixes 行，几百字节）；不带过滤 = 全量（可能 50KB+）。fixes 行用 `op_id`，日志行用 `id` |
+| `list_ops` | `owner`（"none"=无主历史） `op_id` `live`（去掉日志里 reverted 的历史） `frames` `bones`（只要写了这些骨的修复） `compact`（只回场景对账行，带 `bones`；复制类 op 的源被别人改过时行里带 `stale`） | **自查用** `{"agent_id":"<ME>","owner":"<ME>","compact":true}`（只回你的 fixes 行，几百字节）；不带过滤 = 全量（可能 50KB+）。fixes 行用 `op_id`，日志行用 `id` |
 | `list_claims` | – | 租约表 + 每个 agent 名下的 op |
 
 ### 写（全部 preview delta strip，可 revert；除 fix_ground / solve_pelvis / apply_exemplar 外都支持 `dry_run:true` 先看效果）

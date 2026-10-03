@@ -510,6 +510,51 @@ def _stack_warnings(name, ctx, scope, agent_id) -> list:
     return out[:3]
 
 
+def _track_read_dependencies(ctx, scope, written_id, agent_id, name):
+    """复制类 op 读过的源（params.src_bones × src_range）被这次写入改了 → 在 op 日志里给它标
+    `stale`（list_ops 行里看得到）；被 reapply 的 op 重新按当前源算过 → 清掉标记。
+
+    租约只保护"写"：别人在你复制之后改了你的源，副本不会跟着变，以前没人知道（§10-12）。
+    local 空间只看同骨；world 空间连祖先骨也算。只是标记，不自动重算。"""
+    data_dir = ctx.get("data_dir")
+    if not data_dir or not scope:
+        return
+    try:
+        ops = agent_ops._load_oplog(data_dir)
+        anc = _ancestor_fn(ctx["armature"])
+    except Exception:  # noqa: BLE001 - 记账失败绝不影响写入本身
+        return
+    changed = False
+    for o in ops:
+        if o.get("tool") != "motion_copy":
+            continue
+        if o.get("id") == written_id:
+            if name == "reapply" and o.pop("stale", None) is not None:
+                changed = True
+            continue
+        if o.get("status") != "preview":
+            continue
+        p = o.get("params") or {}
+        src, sr = set(p.get("src_bones") or ()), p.get("src_range")
+        if not src or not sr:
+            continue
+        sr = (int(sr[0]), int(sr[1]))
+        world = str(p.get("space", "local")) == "world"
+        for bones, frames in scope:
+            if frames is None or not agent_claims.frames_overlap(sr, frames):
+                continue
+            if bones is agent_claims.ALL or src & set(bones) or (
+                    world and agent_claims._bones_related(set(bones), src, anc)):
+                o["stale"] = {"since_version": _DATA_VERSION, "by": agent_id or "?",
+                              "tool": name, "op": written_id,
+                              "frames": list(agent_claims.frames_intersection(sr, frames)),
+                              "fix": "源被改过：reapply {op_id, overrides:{}} 按当前源重新复制"}
+                changed = True
+                break
+    if changed:
+        agent_ops._save_oplog(data_dir, ops)
+
+
 def _note_write(agent_id, scope, name):
     global _DATA_VERSION
     _DATA_VERSION += 1
@@ -925,7 +970,11 @@ def _tool_list_ops(ctx, owner=None, op_id=None, live=None, frames=None,
     for row in rows:                   # owner 列（只在有 owner 时出现）
         if row.get("op_id") in owners:
             row["owner"] = owners[row["op_id"]]
-    if all(v is None for v in (owner, op_id, live, frames, compact)):
+    stale = {o.get("id"): o.get("stale") for o in ops if o.get("stale")}
+    for row in rows:                   # 复制的源被改过（只在被标记时出现）
+        if row.get("op_id") in stale:
+            row["stale"] = stale[row["op_id"]]
+    if all(v is None for v in (owner, op_id, live, frames, compact, bones)):
         return {"ops": ops, "fixes": rows}
 
     def keep(item, oid, fr, own):
@@ -1454,6 +1503,8 @@ def _dispatch(request: Mapping[str, Any]) -> dict:
         if scope is not None and not (isinstance(result, dict)
                                       and result.get("dry_run")):
             _note_write(agent_id, scope, name)
+            written = (result.get("id") if isinstance(result, dict) else None) or args.get("op_id")
+            _track_read_dependencies(ctx, scope, written, agent_id, name)
         # op dicts (from agent_ops) get the op envelope; _env-shaped dicts
         # pass through; anything else lands under data verbatim
         if isinstance(result, dict) and "summary" in result:

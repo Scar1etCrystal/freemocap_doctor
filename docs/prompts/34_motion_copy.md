@@ -56,7 +56,8 @@
    要逐帧误差加 `"detail":true`（默认不回逐帧数组，帧号只接受整数）。
    自己写 compare_motion 时注意：**a 放目标窗、b 放源窗**（b 会被重采样到 a 的帧上；反过来
    对时间缩放的复制会二次插值，报出假误差）。
-5. `list_ops` → `save` → `release`。
+5. `list_ops` → `save` → `release`。以后在 list_ops 里看到你的复制行带 `stale` = 源被别人改过（行里写着谁、哪段帧），
+   副本还是旧的：`reapply {"op_id":…, "overrides":{}}` 按当前源重新复制，标记自动清除。
 
 ## 改位置/改参数（reapply，op_id 不变）
 

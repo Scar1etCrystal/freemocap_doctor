@@ -67,6 +67,8 @@ scope：<骨/链> × [A,B]。只许写这里。写之前 claim（读、dry_run �
 - 报告里说"层级相关"的，安排对应子骨任务的 agent 复测。改了**父骨**（上臂、脊柱）的任务即使没有租约冲突，也要看一眼
   这段帧上子骨（前臂、手、手指、头）已有的**朝向类**修复——父骨一动它们的世界朝向就变了，需要的话 reapply。
 - 你自己串行执行任务时也一样：每个任务做完就 save（save 很快），别攒到最后。
+- 每批结束后 `list_ops {"agent_id":"coord","live":true,"compact":true}` 扫一眼：带 `stale` 的复制行 = 源被后来的修复改了，
+  让它的 owner（或你自己）`reapply {op_id, overrides:{}}`。
 - 最后协调者自己 `save` 一次，`list_ops` 对账：`fixes` 里没有 `lost` / `unregistered`。
 
 ## 5. 收尾

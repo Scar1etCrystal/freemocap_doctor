@@ -114,7 +114,7 @@ list_ops       确认新 op 在册
 
 | 工具 | 参数 | 干什么 |
 |---|---|---|
-| `list_ops` | — | ops 全量 + fixes 行（status/track/strip/alive/exponent） |
+| `list_ops` | `owner` `op_id` `live` `frames` `bones` `compact`（都可选） | ops 全量 + fixes 行（status/track/strip/alive/exponent；有 owner 时带 owner；复制类 op 的源被改过时带 `stale`） |
 | `effect_check` | `track_name`/`op_id` `bones` `frames` | 该 strip 到底动了没有 |
 | `set_influence` | `value` `op_id`\|`track_name` | delta^value 力度（>1 超量） |
 | `set_preview` | `frame_range` | 设预览帧段 |
