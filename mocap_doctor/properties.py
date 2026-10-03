@@ -1,3 +1,5 @@
+import json
+
 import bpy
 from bpy.props import (
     BoolProperty,
@@ -23,6 +25,151 @@ def _update_mocap_end(settings, context):
     scene = getattr(context, "scene", None)
     if scene is not None and settings.mocap_frame_end >= settings.mocap_frame_start:
         scene.frame_end = int(settings.mocap_frame_end)
+
+
+def _agent_fix_strip(settings, item):
+    """Locate (track, strip) for a fix row - op_id first, track name as backup."""
+    from .core import agent_bridge, agent_ops
+    scene = getattr(bpy.context, "scene", None)
+    rig = agent_bridge._rig_armature(settings, scene)
+    if rig is None:
+        return None, None
+    if item.op_id:
+        for op in agent_ops.list_ops(settings.data_directory or "."):
+            if op["id"] == item.op_id:
+                return agent_ops.find_op_strip(rig, op)
+    anim = getattr(rig, "animation_data", None)
+    if anim is not None and item.track:
+        for tr in anim.nla_tracks:
+            if tr.name == item.track:
+                for s in tr.strips:
+                    if not item.strip or s.name == item.strip:
+                        return tr, s
+    return None, None
+
+
+def _agent_fix_error(exc, what):
+    """Surface drag-time failures in the panel instead of swallowing them."""
+    try:
+        from .core import agent_bridge
+        agent_bridge._STATUS["last_error"] = f"{what}: {exc!r}"
+    except Exception:
+        pass
+
+
+_quiet = False        # 程序化设置带 update 的属性时抑制回调（显示值同步用）
+_batching = False     # 批量拖动时抑制逐条 frame_set（12 条 × 全场景重算会卡死拖动）
+
+
+def set_quietly(settings, prop, value):
+    """设置属性但不触发其 update 回调——同步批量滑块的显示值用，
+    回写会把勾选行各不相同的力度抹平。"""
+    global _quiet
+    _quiet = True
+    try:
+        setattr(settings, prop, value)
+    finally:
+        _quiet = False
+
+
+def _update_fix_index(settings, context):
+    """用户点了另一行 = 退出批量模式（清空勾选）。
+
+    程序化改索引（sync 重建列表）走 set_quietly，不会误清。"""
+    if _quiet:
+        return
+    for item in settings.agent_fixes:
+        if item.selected:
+            item.selected = False
+
+
+def _update_fix_selected(item, context):
+    """勾选变化 → 批量滑块/眼睛的显示值跟上该行当前值（静默，不回写）。"""
+    if _quiet or not item.selected:
+        return
+    settings = getattr(getattr(context, "scene", None), "mocap_doctor", None)
+    if settings is None:
+        return
+    set_quietly(settings, "agent_batch_exponent", item.exponent)
+    set_quietly(settings, "agent_batch_muted", item.muted)
+
+
+def _update_fix_exponent(item, context):
+    """Per-fix strength: rewrite that strip's delta curves to delta^value.
+
+    strip.influence caps at 1.0, so real strength means scaling the rotation
+    angle inside the action - axis-angle scaling keeps direction, adds gain."""
+    try:
+        from .core import agent_ops
+        settings = getattr(getattr(context, "scene", None), "mocap_doctor", None)
+        _track, strip = _agent_fix_strip(settings, item)
+        if strip is None:
+            return
+        agent_ops.set_strip_exponent(strip, float(item.exponent))
+        scene = getattr(context, "scene", None)
+        if scene is not None and not _batching:
+            scene.frame_set(scene.frame_current)
+    except Exception as exc:
+        _agent_fix_error(exc, "力度")
+
+
+def _update_fix_muted(item, context):
+    """Per-fix A/B: mute just this fix's track."""
+    try:
+        settings = getattr(getattr(context, "scene", None), "mocap_doctor", None)
+        track, _strip = _agent_fix_strip(settings, item)
+        if track is None:
+            return
+        track.mute = bool(item.muted)
+        scene = getattr(context, "scene", None)
+        if scene is not None and not _batching:
+            scene.frame_set(scene.frame_current)
+    except Exception as exc:
+        _agent_fix_error(exc, "静音")
+
+
+def _update_batch_exponent(settings, context):
+    """批量力度：一条滑块写进所有勾选行。逐条写曲线，最后只刷一次帧。"""
+    if _quiet:
+        return
+    global _batching
+    _batching = True
+    try:
+        for item in settings.agent_fixes:
+            if item.selected:
+                item.exponent = settings.agent_batch_exponent
+    except Exception as exc:
+        _agent_fix_error(exc, "批量力度")
+    finally:
+        _batching = False
+    scene = getattr(context, "scene", None)
+    if scene is not None:
+        try:
+            scene.frame_set(scene.frame_current)
+        except Exception:
+            pass
+
+
+def _update_batch_muted(settings, context):
+    """批量静音：勾选行的轨一起 mute/unmute。"""
+    if _quiet:
+        return
+    global _batching
+    _batching = True
+    try:
+        for item in settings.agent_fixes:
+            if item.selected:
+                item.muted = settings.agent_batch_muted
+    except Exception as exc:
+        _agent_fix_error(exc, "批量静音")
+    finally:
+        _batching = False
+    scene = getattr(context, "scene", None)
+    if scene is not None:
+        try:
+            scene.frame_set(scene.frame_current)
+        except Exception:
+            pass
 
 
 STEP_STATUS_ITEMS = (
@@ -163,6 +310,126 @@ class MD_PG_StepRecord(PropertyGroup):
     message: StringProperty()
 
 
+class MD_PG_AgentFixItem(PropertyGroup):
+    """One row of the agent fix list - mirrors an op log entry + live NLA state."""
+
+    op_id: StringProperty()
+    label: StringProperty()
+    strip: StringProperty()
+    track: StringProperty()
+    status: StringProperty()      # preview / committed / lost / unregistered
+    frames: StringProperty()
+    alive: BoolProperty(
+        default=True,
+        description="场景里还有对应的 strip；没有时力度/静音都无从施加",
+    )
+    exponent: FloatProperty(
+        name="力度", description="delta^value；>1 超量修正，<1 减弱",
+        default=1.0, min=0.0, max=2.0, precision=2,
+        update=_update_fix_exponent,
+    )
+    muted: BoolProperty(
+        name="静音", description="单独关掉这条修复看对比",
+        default=False, update=_update_fix_muted,
+    )
+    selected: BoolProperty(
+        name="选中", description="勾选后底部滑块/按钮批量作用于所有选中行",
+        default=False, update=_update_fix_selected,
+    )
+
+
+_param_quiet = False    # 同步参数镜像时抑制 update 回调（同 _quiet 的分项版）
+
+
+def _update_param(item, context):
+    """参数控件改动 → 交给 agent_bridge 防抖重写（同轨删旧写新）。"""
+    global _param_quiet
+    if _quiet or _param_quiet:
+        return
+    try:
+        from .core import agent_bridge
+        kind = item.kind
+        if kind == "float":
+            value = float(item.fval)
+        elif kind == "int":
+            value = int(item.ival)
+        elif kind == "range":
+            value = [int(item.ival), int(item.ival2)]
+        elif kind == "choice":
+            value = item.sval
+        elif kind == "object":
+            value = item.obj.name if item.obj else ""
+            if item.sval != value:          # sval 做持久镜像（重载后取回对象）
+                _param_quiet = True
+                try:
+                    item.sval = value
+                finally:
+                    _param_quiet = False
+        else:
+            return
+        agent_bridge.schedule_param_apply(item.op_id, item.key, value)
+    except Exception as exc:
+        _agent_fix_error(exc, "参数")
+
+
+def sync_param_item(item, op_id, spec, value):
+    """quiet-write：把 op params 里的一项刷进镜像条目（tick 同步用）。
+
+    画面板不允许写 ID——本函数只给 fixlist/param 定时器调。"""
+    global _param_quiet
+    _param_quiet = True
+    try:
+        item.op_id = str(op_id)
+        item.key = str(spec["key"])
+        item.kind = str(spec["kind"])
+        item.label = str(spec.get("label") or spec["key"])
+        item.options = json.dumps(spec.get("options") or [])
+        if item.kind == "float":
+            item.fval = float(value) if value is not None else 0.0
+        elif item.kind == "int":
+            item.ival = int(value) if value is not None else 0
+        elif item.kind == "range":
+            pair = list(value or [0, 0])[:2]
+            item.ival = int(pair[0])
+            item.ival2 = int(pair[-1])
+        elif item.kind == "choice":
+            item.sval = "" if value is None else str(value)
+        elif item.kind == "object":
+            item.sval = "" if value is None else str(value)
+            item.obj = bpy.data.objects.get(item.sval) if item.sval else None
+    finally:
+        _param_quiet = False
+
+
+class MD_PG_AgentParam(PropertyGroup):
+    """修复条目展开的一个参数控件镜像（源真值在 op log 的 params）。"""
+
+    pkey: StringProperty()        # "op_id::key" 集合内唯一键
+    op_id: StringProperty()
+    key: StringProperty()
+    kind: StringProperty()        # float / int / choice / object / range
+    label: StringProperty()
+    options: StringProperty()     # JSON list（choice 的候选）
+    fval: FloatProperty(
+        name="值", soft_min=-1000.0, soft_max=1000.0, precision=3,
+        update=_update_param,
+    )
+    ival: IntProperty(
+        name="值", soft_min=-100000, soft_max=100000,
+        update=_update_param,
+    )
+    ival2: IntProperty(
+        name="止", soft_min=-100000, soft_max=100000,
+        update=_update_param,
+    )
+    sval: StringProperty(update=_update_param)
+    obj: PointerProperty(
+        name="方向物体", type=bpy.types.Object,
+        description="mcd_dir_* 箭头=平行于箭头轴(+Z)；mcd_aim_*=指向物体",
+        update=_update_param,
+    )
+
+
 class MD_PG_ProjectSettings(PropertyGroup):
     initialized: BoolProperty(default=False)
     project_uuid: StringProperty()
@@ -207,6 +474,28 @@ class MD_PG_ProjectSettings(PropertyGroup):
     mmd_armature: PointerProperty(type=bpy.types.Object, description=PARAMETER_DESCRIPTIONS["mmd_armature"])
     target_mesh: PointerProperty(type=bpy.types.Object, description=PARAMETER_DESCRIPTIONS["target_mesh"])
     correction_empty: PointerProperty(type=bpy.types.Object, description=PARAMETER_DESCRIPTIONS["correction_empty"])
+
+    agent_fixes: CollectionProperty(type=MD_PG_AgentFixItem)
+    agent_fix_index: IntProperty(default=0, min=0,
+                                  update=_update_fix_index)
+    agent_batch_exponent: FloatProperty(
+        name="批量力度", description="写进所有勾选的修复（delta^value）",
+        default=1.0, min=0.0, max=2.0, precision=2,
+        update=_update_batch_exponent,
+    )
+    agent_batch_muted: BoolProperty(
+        name="批量静音", description="勾选行的轨一起 mute/unmute",
+        default=False, update=_update_batch_muted,
+    )
+    agent_ops_rev: IntProperty(
+        default=0, options={"HIDDEN"},
+        description="op log 版本号：写/commit/revert 时 +1，面板据此重建列表",
+    )
+    agent_fixes_rev: IntProperty(default=-1, options={"HIDDEN"})
+    agent_params: CollectionProperty(
+        type=MD_PG_AgentParam,
+        description="修复条目的可调参数镜像（由 fixlist 定时器从 op log 同步）",
+    )
 
     hand_pkl_strategy: EnumProperty(
         items=(
@@ -438,7 +727,8 @@ class MD_PG_ProjectSettings(PropertyGroup):
     steps: CollectionProperty(type=MD_PG_StepRecord)
 
 
-CLASSES = (MD_PG_StepRecord, MD_PG_ProjectSettings)
+CLASSES = (MD_PG_StepRecord, MD_PG_AgentFixItem, MD_PG_AgentParam,
+           MD_PG_ProjectSettings)
 
 
 def register_properties():

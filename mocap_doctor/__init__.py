@@ -112,6 +112,20 @@ def _register_or_defer_keymaps(preferences):
         bpy.app.timers.register(_deferred_register_keymaps, first_interval=0.1)
 
 
+def _stop_agent_server():
+    """Kill the agent socket server during unregister/quit.
+
+    A live daemon socket thread while bpy tears down its allocators is a
+    plausible source of the tbbmalloc access-violation on save+quit - stop it
+    before anything else tears down."""
+    try:
+        from .core import agent_bridge
+        agent_bridge.stop_server()
+        agent_bridge.stop_fixlist_timer()
+    except Exception:
+        pass
+
+
 def _cancel_deferred_keymaps():
     global _DEFERRED_KEYMAP_ACTIVE
     import bpy
@@ -149,6 +163,13 @@ def register():
         undo.append(lambda: _unregister_classes(preferences.CLASSES))
         _register_or_defer_keymaps(preferences)
         undo.append(preferences.unregister_keymaps)
+        # fixlist 定时器：面板列表的重建/迁移必须发生在 draw 之外
+        # （draw 里写 ID 会报 "Writing to ID classes in this context..."）
+        try:
+            from .core import agent_bridge
+            agent_bridge.start_fixlist_timer()
+        except Exception as exc:
+            print(f"[MoCap Doctor] fixlist timer start failed: {exc}")
     except Exception:
         _cancel_deferred_keymaps()
         for cleanup in reversed(undo):
@@ -166,6 +187,9 @@ def unregister():
 
     _cancel_deferred_keymaps()
     cleanup_steps = (
+        # agent socket server first - a live TCP daemon thread during Blender
+        # teardown is a plausible tbbmalloc access-violation at exit
+        _stop_agent_server,
         planted_indicators.unregister,
         operators.cleanup_annotation_sessions,
         preferences.unregister_keymaps,

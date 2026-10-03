@@ -107,7 +107,18 @@ def ease_reshape(
         direction = 1.0 if v[k - a] >= 0 else -1.0
         vp[i] = v[i] + direction * overshoot * peak * (1.0 - t) ** 2
     rebuilt = seg[0] + np.concatenate([[0.0], np.cumsum(vp[1:])])
-    rebuilt -= np.linspace(0.0, rebuilt[-1] - seg[-1], len(rebuilt))
+    # Pin the span end back to the original value.  The pin must live AFTER
+    # the impact: spreading it over the whole span cancels the arrival boost
+    # (measured on a decelerated rise: gain x2.4 came out as x0.9 - the
+    # correction ate exactly what the ramp added).  Absorbed post-impact it
+    # reads as overshoot-then-settle, which is the shape we want anyway.
+    drift = rebuilt[-1] - seg[-1]
+    j0 = k - a                       # arrival index (delta INTO the impact)
+    tail = b - k                     # values strictly after the arrival
+    if abs(drift) > 1e-12 and tail >= 3:
+        rebuilt[j0 + 1:] -= np.linspace(0.0, drift, tail + 1)[1:]
+    else:
+        rebuilt -= np.linspace(0.0, drift, len(rebuilt))
     w = window_weights(len(seg), blend)
     out[a:b + 1] = seg + (rebuilt - seg) * w
     return out

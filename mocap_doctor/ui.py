@@ -1,9 +1,61 @@
+import json
+
 import bpy
-from bpy.types import Panel
+from bpy.types import Panel, UIList
 
 from . import annotation, project
 from .presets import EXPECTED_FPS
 from .workflow import STEPS, step_at
+
+# fix-row status → (icon, short label)。注意别用眼睛类图标——行首的静音
+# 按钮就是眼睛，状态再画一只会被当成第二个按钮（用户实测踩过）。
+_FIX_STATUS = {
+    "preview": ("NONE", "预览"),
+    "committed": ("CHECKMARK", "已提交"),
+    "lost": ("ERROR", "丢失"),
+    "unregistered": ("QUESTION", "未登记"),
+}
+
+
+class MD_UL_AgentFixes(UIList):
+    """每条 agent 修复一行：静音眼睛 + 区间/工具 + 状态。"""
+
+    def draw_item(self, context, layout, data, item, icon, active_data,
+                  active_propname, index):
+        row = layout.row(align=True)
+        row.scale_x = 1.0
+        # 勾选框（普通复选框渲染；emboss=False 在未勾选时什么都不画）
+        row.prop(item, "selected", text="")
+        # 静音眼睛：单看这条修复贡献了什么
+        mute = row.row(align=True)
+        mute.emboss = "NONE"
+        op = mute.operator(
+            "mocap_doctor.agent_fix_mute",
+            text="",
+            icon="HIDE_ON" if item.muted else "HIDE_OFF",
+        )
+        op.op_id = item.op_id
+        op.track = item.track
+        op.strip = item.strip
+        op.index = index
+
+        status_icon, status_text = _FIX_STATUS.get(
+            item.status, ("DOT", item.status or "?"))
+        label = row.row(align=True)
+        label.label(text=item.label or item.strip or "?")
+        tail = label.row(align=True)
+        tail.alignment = "RIGHT"
+        tail.label(text=status_text, icon=status_icon)
+        if abs(float(item.exponent) - 1.0) > 1e-6:
+            tail.label(text=f"×{item.exponent:.2f}")
+
+    def draw_filter(self, context, layout):
+        pass
+
+    def filter_items(self, context, data, propname):
+        items = getattr(data, propname)
+        flt = [self.bitflag_filter_item] * len(items)
+        return flt, []
 
 
 def _range_count(scene, channels):
@@ -162,6 +214,21 @@ class MD_PT_Main(Panel):
         try:
             from .core import agent_bridge
             st = agent_bridge.status()
+            # draw 上下文禁止写 ID（改轨名/建 strip 会报 "Writing to ID
+            # classes in this context is not allowed"）——重建与迁移全在
+            # fixlist 定时器里做，这里只读。定时器万一没在跑（启动期注册
+            # 丢失等）就从这里拉起：注册定时器不是 ID 写，draw 里允许。
+            stale = (int(settings.agent_fixes_rev) != int(settings.agent_ops_rev)
+                     or (len(settings.agent_fixes) == 0
+                         and agent_bridge._rig_armature(settings, scene)
+                         is not None))
+            if stale:
+                try:
+                    agent_bridge.start_fixlist_timer()
+                except Exception:
+                    pass
+                hint = "" if st.get("fixlist_registered") else "（定时器没在跑，已尝试拉起；还不行点右下刷新）"
+                agent.label(text=f"列表同步中…{hint}", icon="RECOVER_LAST")
             if st["running"]:
                 agent.label(
                     text=f"服务运行中 127.0.0.1:{st['port']}  ·  v{st['version']}  ·  {st['clients']} 客户端",
@@ -171,16 +238,136 @@ class MD_PT_Main(Panel):
                     agent.label(text=f"上次调用 {st['last_tool']}", icon="DOT")
                 if st["last_error"]:
                     agent.label(text=f"错误：{st['last_error']}", icon="ERROR")
-                row = agent.row(align=True)
-                row.operator("mocap_doctor.agent_server_toggle",
-                             text="停止服务", icon="CANCEL")
-                row.operator("mocap_doctor.agent_ab_toggle",
-                             text="A/B 对比", icon="HIDE_OFF")
             else:
                 agent.label(text="未运行（LLM 通过 socket/MCP 连进来）",
                             icon="RADIOBUT_OFF")
-                agent.operator("mocap_doctor.agent_server_toggle",
-                               text="启动 Agent 服务", icon="PLAY")
+                # 错误行不只服务运行时才有意义——fixlist 定时器的异常也走这里
+                if st["last_error"]:
+                    agent.label(text=f"错误：{st['last_error']}", icon="ERROR")
+
+            # ---- 修复列表 ----
+            if settings.agent_fixes:
+                agent.template_list(
+                    "MD_UL_AgentFixes", "", settings, "agent_fixes",
+                    settings, "agent_fix_index", rows=4,
+                )
+                # 选择工具行：全选 / 清空 / 选中同窗（一个发力窗的所有条目）
+                srow = agent.row(align=True)
+                sop = srow.operator("mocap_doctor.agent_fix_sel_all",
+                                    text="全选", icon="CHECKBOX_HLT")
+                sop.select = True
+                sop = srow.operator("mocap_doctor.agent_fix_sel_all",
+                                    text="清空", icon="CHECKBOX_DEHLT")
+                sop.select = False
+                srow.operator("mocap_doctor.agent_fix_sel_window",
+                              text="选中同窗", icon="RESTRICT_SELECT_OFF")
+
+                sel = [i for i in settings.agent_fixes if i.selected]
+                index = min(settings.agent_fix_index,
+                            len(settings.agent_fixes) - 1)
+                item = settings.agent_fixes[index] if index >= 0 else None
+                if sel:
+                    # ---- 批量模式：滑块/眼睛/按钮作用于所有勾选行 ----
+                    n = len(sel)
+                    if any(not i.alive for i in sel):
+                        agent.label(
+                            text=f"选中里有 {sum(1 for i in sel if not i.alive)}"
+                                 " 条场景数据已不在（跳过）", icon="ERROR")
+                    row = agent.row(align=True)
+                    row.label(text=f"力度({n}条)")
+                    row.prop(settings, "agent_batch_exponent",
+                             text="", slider=True)
+                    row.prop(settings, "agent_batch_muted", text="",
+                             icon="HIDE_ON" if settings.agent_batch_muted
+                             else "HIDE_OFF")
+                    buttons = agent.row(align=True)
+                    buttons.operator("mocap_doctor.agent_fix_commit",
+                                     text=f"提交({n})", icon="CHECKMARK")
+                    buttons.operator("mocap_doctor.agent_fix_revert",
+                                     text=f"撤销({n})", icon="LOOP_BACK")
+                    buttons.operator("mocap_doctor.agent_fix_forget",
+                                     text=f"清除({n})", icon="TRASH")
+                elif item is not None:
+                    if item.status in ("lost", "unregistered"):
+                        agent.label(
+                            text="这条修复的场景数据不在了（记录保留）",
+                            icon="ERROR")
+                    row = agent.row(align=True)
+                    row.label(text="力度")
+                    row.prop(item, "exponent", text="", slider=True)
+                    row.prop(item, "muted", text="",
+                             icon="HIDE_ON" if item.muted else "HIDE_OFF")
+                    buttons = agent.row(align=True)
+                    op = buttons.operator("mocap_doctor.agent_fix_commit",
+                                          text="提交", icon="CHECKMARK")
+                    op.op_id = item.op_id
+                    op = buttons.operator("mocap_doctor.agent_fix_revert",
+                                          text="撤销", icon="LOOP_BACK")
+                    op.op_id = item.op_id
+                    op = buttons.operator("mocap_doctor.agent_fix_forget",
+                                          text="清除记录", icon="TRASH")
+                    op.op_id = item.op_id
+                    # ---- 参数控件：AI 把可调的暴露出来，人拖滑块就改 ----
+                    # 连续值防抖 250ms 同轨重写；离散选项/方向物体点完即写。
+                    params = [p for p in settings.agent_params
+                              if p.op_id == item.op_id]
+                    if params:
+                        pbox = agent.box()
+                        pbox.label(text="参数（改完自动重写，不用重聊）",
+                                   icon="PREFERENCES")
+                        for p in params:
+                            prow = pbox.row(align=True)
+                            if p.kind == "float":
+                                prow.prop(p, "fval", text=p.label,
+                                          slider=True)
+                            elif p.kind == "int":
+                                prow.prop(p, "ival", text=p.label)
+                            elif p.kind == "range":
+                                prow.label(text="帧范围")
+                                prow.prop(p, "ival", text="起")
+                                prow.prop(p, "ival2", text="止")
+                            elif p.kind == "object":
+                                prow.prop(p, "obj", text=p.label)
+                                nb = prow.operator(
+                                    "mocap_doctor.agent_dir_create",
+                                    text="", icon="ADD")
+                                nb.kind = "arrow"
+                                nb.assign = p.pkey
+                                nb = prow.operator(
+                                    "mocap_doctor.agent_dir_create",
+                                    text="", icon="TRACKER")
+                                nb.kind = "aim"
+                                nb.assign = p.pkey
+                            elif p.kind == "choice":
+                                prow.label(text=p.label)
+                                try:
+                                    opts = json.loads(p.options or "[]")
+                                except Exception:
+                                    opts = []
+                                for opt in opts:
+                                    chosen = (p.sval == str(opt))
+                                    b = prow.operator(
+                                        "mocap_doctor.agent_param_choice",
+                                        text=str(opt),
+                                        icon=("RADIOBUT_ON" if chosen
+                                              else "RADIOBUT_OFF"))
+                                    b.pkey = p.pkey
+                                    b.value = str(opt)
+                            else:
+                                prow.label(text=f"{p.label}: {p.sval}")
+            else:
+                agent.label(text="暂无修复（agent 写入后会出现在这里）",
+                            icon="INFO")
+
+            row = agent.row(align=True)
+            row.operator("mocap_doctor.agent_server_toggle",
+                         text="停止服务" if st["running"] else "启动服务",
+                         icon="CANCEL" if st["running"] else "PLAY")
+            row.operator("mocap_doctor.agent_ab_toggle",
+                         text="A/B 全部", icon="HIDE_OFF")
+            # 刷新常驻（列表为空时也要能手动触发迁移+重建——定时器失灵的兜底）
+            row.operator("mocap_doctor.agent_fix_refresh",
+                         text="", icon="FILE_REFRESH")
         except Exception as exc:
             agent.label(text=f"Agent 模块加载失败：{exc}", icon="ERROR")
 
@@ -432,7 +619,7 @@ class MD_PT_NLAAnnotation(Panel):
         layout.operator("mocap_doctor.exit_annotation_mode", icon="TIME")
 
 
-CLASSES = (MD_PT_Main, MD_PT_Project, MD_PT_NLAAnnotation)
+CLASSES = (MD_PT_Main, MD_PT_Project, MD_PT_NLAAnnotation, MD_UL_AgentFixes)
 
 
 def register_ui():

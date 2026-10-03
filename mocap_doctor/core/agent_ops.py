@@ -25,9 +25,20 @@ import bpy
 from . import agent_bake, agent_fx
 from .animation import bone_path
 
-AGENT_TRACK_PREFIX = "mcd_agent"
-BASE_TRACK = "mcd_base"          # pushed-down base action lives here
+AGENT_TRACK_PREFIX = "mcd_agent"     # legacy shared committed track
+PREVIEW_TRACK = "AGENT_PREVIEW"      # legacy shared preview track
+BASE_TRACK = "mcd_base"              # pushed-down base action lives here
 OPLOG_NAME = "agent_ops.json"
+
+# Every track the agent layer owns.  Per-op tracks are named after their strip
+# ("agent_hold_505_570"); the two legacy shared names are migrated away but
+# still recognised so an old .blend keeps working.  mcd_base is NOT included -
+# it is the baseline, never part of A/B or per-fix control.
+AGENT_TRACK_PREFIXES = ("agent_", PREVIEW_TRACK, AGENT_TRACK_PREFIX)
+
+
+def is_agent_track_name(name: Any) -> bool:
+    return str(name).startswith(AGENT_TRACK_PREFIXES)
 
 
 # ---------------------------------------------------------------------------
@@ -48,7 +59,18 @@ def ensure_base_on_nla(armature: Any):
     if action is None:
         for tr in anim.nla_tracks:            # already pushed down
             if tr.name == BASE_TRACK and tr.strips:
-                return tr.strips[0].action
+                base_strip = tr.strips[0]
+                # 老文件修复：strip 起点曾被 max(1,f0) 钳过而 action_frame_start
+                # 没同步 → 基底滞后 (frame_start-afs) 帧求值，大角度 delta 直接
+                # 炸出波浪残差。强制 afs=frame_start → sampled_t == f 恒等。
+                if abs(float(base_strip.action_frame_start)
+                       - float(base_strip.frame_start)) > 1e-4:
+                    base_strip.action_frame_end += (
+                        float(base_strip.frame_start)
+                        - float(base_strip.action_frame_start))
+                    base_strip.action_frame_start = \
+                        float(base_strip.frame_start)
+                return base_strip.action
         return None
     # NOTE: Blender 4.x exposes no nla_tracks.move(), so ordering relies on
     # creation order - nla_tracks.new() lands on TOP of the stack (evaluated
@@ -58,19 +80,25 @@ def ensure_base_on_nla(armature: Any):
     track = anim.nla_tracks.new()
     track.name = BASE_TRACK
     f0, f1 = action.frame_range
-    strip = track.strips.new("base", max(1, int(f0)), action)
+    # 关键：action_frame_start 必须等于 frame_start——strip 把
+    # [frame_start,frame_end] 映射到 [afs,afe]，sampled_t = afs+f-frame_start，
+    # afs==frame_start 时恒等；错位则整条基底偏帧求值（曾经的 1 帧滞后 bug）。
+    fs = max(1, int(f0))
+    strip = track.strips.new("base", fs, action)
     strip.blend_type = "REPLACE"
     strip.extrapolation = "HOLD"
-    strip.action_frame_start = float(f0)
-    strip.action_frame_end = float(f1)
+    strip.action_frame_start = float(fs)
+    strip.action_frame_end = float(fs) + (float(f1) - float(f0))
     anim.action = None
     return action
 
 
 def ensure_agent_track(armature: Any, track_name: str | None = None):
-    """Return the named agent track, creating it if needed.
+    """Fetch a named track (creating it on top of the stack if missing).
 
-    New tracks land on top of the NLA stack (evaluated last → wins)."""
+    Only used for explicit/legacy names - per-op writes go through
+    ``_write_strip`` which always makes a fresh track so two fixes can share a
+    frame range (strips may not overlap inside one track)."""
     anim = armature.animation_data or armature.animation_data_create()
     wanted = track_name or AGENT_TRACK_PREFIX
     for tr in anim.nla_tracks:
@@ -95,6 +123,11 @@ def _write_strip(
 
     scalars: {(data_path, index): (T,) delta}
     quats:   {quat data_path: (T,4) delta quat}
+
+    Each write gets its OWN track named after the strip: two fixes on the same
+    frames then stack instead of colliding ("no space to accommodate"), and
+    every fix can be muted / re-tuned on its own.  ``track_name`` forces reuse
+    of an existing track (legacy layout, migration).
     """
     scalars = scalars or {}
     quats = quats or {}
@@ -118,11 +151,22 @@ def _write_strip(
             agent_fx.taper_quat_deltas(dq, blend), group=name,
         )
 
-    track = ensure_agent_track(armature, track_name)
+    anim = armature.animation_data or armature.animation_data_create()
+    track = None
+    if track_name:
+        for tr in anim.nla_tracks:
+            if tr.name == track_name:
+                track = tr
+                break
+    if track is None:
+        track = anim.nla_tracks.new()      # new() lands on top = wins
+        track.name = track_name or name
     strip = track.strips.new(name, int(frame_start), action)
     strip.blend_type = "COMBINE"
     strip.use_auto_blend = True
     strip.extrapolation = "NOTHING"
+    if not track_name:
+        track.name = strip.name    # mirror the uniquified strip name (.001 on clash)
     return track, strip
 
 
@@ -151,13 +195,15 @@ def _save_oplog(data_dir: str | Path, ops: Sequence[Mapping[str, Any]]) -> None:
 
 
 def _new_op(tool: str, params: Mapping[str, Any], frames,
-            strip_name: str, status: str, metrics: Mapping | None) -> dict:
+            strip_name: str, status: str, metrics: Mapping | None,
+            track: str | None = None) -> dict:
     return {
         "id": f"{tool}_{int(time.time() * 1000) % 10**9}",
         "tool": tool,
         "params": dict(params),
         "frames": [int(frames[0]), int(frames[1])],
         "strip": strip_name,
+        "track": track,
         "status": status,
         "metrics": dict(metrics or {}),
         "ts": time.strftime("%Y-%m-%d %H:%M:%S"),
@@ -166,6 +212,15 @@ def _new_op(tool: str, params: Mapping[str, Any], frames,
 
 def _record(data_dir, op) -> dict:
     ops = _load_oplog(data_dir)
+    # op id is the primary key (commit / revert / per-fix strength address it),
+    # and _new_op's millisecond stamp can repeat when two writes land in the
+    # same tick - so uniquify against the log here, not in the generator.
+    existing = {o.get("id") for o in ops}
+    if op.get("id") in existing:
+        n = 2
+        while f"{op['id']}_{n}" in existing:
+            n += 1
+        op["id"] = f"{op['id']}_{n}"
     ops.append(op)
     _save_oplog(data_dir, ops)
     return op
@@ -173,6 +228,191 @@ def _record(data_dir, op) -> dict:
 
 def list_ops(data_dir: str | Path) -> list:
     return _load_oplog(data_dir)
+
+
+def get_op(data_dir: str | Path, op_id: str) -> dict | None:
+    for op in _load_oplog(data_dir):
+        if op.get("id") == op_id:
+            return op
+    return None
+
+
+def base_action_of(armature: Any) -> Any | None:
+    """基底动作：active action，或已压进 mcd_base strip 的那个。"""
+    anim = getattr(armature, "animation_data", None)
+    if anim is None:
+        return None
+    if anim.action is not None:
+        return anim.action
+    for tr in anim.nla_tracks:
+        if tr.name == BASE_TRACK and tr.strips:
+            return tr.strips[0].action
+    return None
+
+
+# 每种写工具暴露给参数面板的可调项：kind = float/int/choice/object/range。
+# 面板只画这里列的 key；bones/values 这类结构参数不给用户调。
+TUNABLE_PARAMS = {
+    "hold_pose": [
+        {"key": "mode", "kind": "choice",
+         "options": ["replace", "clamp", "outlier"]},
+        {"key": "threshold_deg", "kind": "float", "min": 0.5, "max": 60.0,
+         "when": {"mode": ["clamp", "outlier"]}},
+        {"key": "strength", "kind": "float", "min": 0.0, "max": 2.0},
+        {"key": "blend", "kind": "int", "min": 0, "max": 40},
+        {"key": "dir_object", "kind": "object",
+         "when": {"target": ["world_dir"]}},
+        {"key": "dir_mode", "kind": "choice", "options": ["arrow", "aim"],
+         "when": {"target": ["world_dir"], "dir_object": True}},
+        {"key": "frame_range", "kind": "range"},
+    ],
+    "clean_jitter": [
+        {"key": "strength", "kind": "float", "min": 0.0, "max": 2.0},
+        {"key": "width", "kind": "int", "min": 1, "max": 15},
+        {"key": "blend", "kind": "int", "min": 0, "max": 40},
+        {"key": "frame_range", "kind": "range"},
+    ],
+    "restore_accent": [
+        {"key": "strength", "kind": "float", "min": 0.0, "max": 1.0},
+        {"key": "impact_frame", "kind": "int", "min": 0, "max": 100000},
+        {"key": "blend", "kind": "int", "min": 0, "max": 40},
+        {"key": "frame_range", "kind": "range"},
+    ],
+}
+
+
+def _reapply_kwargs(tool: str, params: Mapping[str, Any],
+                    frame_range, status: str) -> dict:
+    """op params → 各工具的求解 kwargs。"""
+    if tool == "hold_pose":
+        return dict(
+            bones=list(params.get("bones") or []),
+            frame_range=frame_range,
+            target=params.get("target", "values"),
+            values=params.get("values"),
+            ref_frame=params.get("ref_frame"),
+            world_dir=params.get("world_dir"),
+            world_axis=params.get("world_axis", "Y"),
+            secondary_axis=params.get("secondary_axis"),
+            dir_object=params.get("dir_object"),
+            dir_mode=params.get("dir_mode", "arrow"),
+            flip_guard_deg=float(params.get("flip_guard_deg", 150.0)),
+            mode=params.get("mode", "replace"),
+            threshold_deg=float(params.get("threshold_deg", 8.0)),
+            strength=float(params.get("strength", 1.0)),
+            blend=int(params.get("blend", 4)),
+            op_mode=status,
+        )
+    if tool == "clean_jitter":
+        return dict(
+            paths=[tuple(p) for p in params.get("paths", [])],
+            frame_range=frame_range,
+            strength=float(params.get("strength", 1.0)),
+            width=int(params.get("width", 5)),
+            blend=int(params.get("blend", 4)),
+            mode=status,
+        )
+    if tool == "restore_accent":
+        if params.get("method") in ("hf_reinject", "refilter"):
+            raise RuntimeError(
+                f"{params.get('method')} 依赖 raw_values（不存 op log），"
+                "该 op 不支持参数重写，请 revert 后重做")
+        return dict(
+            data_path=params["path"], index=params.get("index"),
+            frame_range=frame_range, method=params.get("method"),
+            strength=float(params.get("strength", 0.5)),
+            impact_frame=params.get("impact_frame"),
+            retime_speed=float(params.get("retime_speed", 1.5)),
+            retime_split=float(params.get("retime_split", 0.35)),
+            blend=int(params.get("blend", 4)),
+            op_mode=status,
+        )
+    raise RuntimeError(f"{tool} 不支持参数重写")
+
+
+def reapply(data_dir: str | Path, armature: Any, op_id: str, *,
+            scene: Any | None = None, base_action: Any | None = None,
+            **overrides) -> dict:
+    """同轨重写：用更新后的参数重新解算，删掉旧 strip，在同一 track 写新的。
+
+    修复条目的参数控件走这里：滑块防抖 250ms 后调本函数——任何时刻场景里
+    只有一条 strip，op_id 不变，params/metrics 更新进 log。
+    """
+    ops = _load_oplog(data_dir)
+    op = next((o for o in ops if o.get("id") == op_id), None)
+    if op is None:
+        raise RuntimeError(f"op 不存在：{op_id}")
+    tool = op.get("tool")
+    if tool not in TUNABLE_PARAMS:
+        raise RuntimeError(f"{tool} 不支持参数重写")
+    params = dict(op.get("params") or {})
+    params.update(overrides)
+    frame_range = params.get("frame_range") or op.get("frames")
+    base_action = base_action or base_action_of(armature)
+    if base_action is None:
+        raise RuntimeError("找不到基底动作（active action / mcd_base）")
+
+    kwargs = _reapply_kwargs(tool, params, frame_range, op.get("status"))
+    old_track_name = op.get("track")
+    old_strip_name = op.get("strip")
+
+    # 同轨不允许时间重叠：先把旧 strip 挪出时间窗，新 strip 写成功后删旧的；
+    # 写失败挪回——不会两头丢。
+    anim = armature.animation_data
+    track = None
+    if anim is not None and old_track_name:
+        for tr in anim.nla_tracks:
+            if tr.name == old_track_name:
+                track = tr
+                break
+    old_strip = (track.strips.get(old_strip_name)
+                 if track is not None and old_strip_name else None)
+    _SHIFT = 100000
+    if old_strip is not None:
+        old_strip.frame_start += _SHIFT
+        old_strip.frame_end += _SHIFT
+    res = None
+    try:
+        if tool == "hold_pose":
+            res = hold_pose(armature, base_action, scene=scene, data_dir=None,
+                            record=False, track_name=old_track_name, **kwargs)
+        elif tool == "clean_jitter":
+            res = clean_jitter(armature, base_action, data_dir=None,
+                               track_name=old_track_name, **kwargs)
+        elif tool == "restore_accent":
+            res = restore_accent(armature, base_action, data_dir=None,
+                                 track_name=old_track_name, **kwargs)
+    except Exception:
+        if old_strip is not None:
+            old_strip.frame_start -= _SHIFT
+            old_strip.frame_end -= _SHIFT
+        raise
+    if track is not None:
+        if old_strip is not None:
+            track.strips.remove(old_strip)
+        # 新 strip 让回原 strip 名，保证 op.strip / 列表显示稳定
+        if res is not None:
+            new_strip = None
+            for s in track.strips:
+                if s.name == res.get("strip"):
+                    new_strip = s
+                    break
+            if new_strip is not None and old_strip_name \
+                    and new_strip.name != old_strip_name:
+                try:
+                    new_strip.name = old_strip_name
+                    res["strip"] = new_strip.name
+                except Exception:
+                    pass
+    op["params"] = params
+    op["params"]["frame_range"] = [int(frame_range[0]), int(frame_range[1])]
+    op["frames"] = [int(frame_range[0]), int(frame_range[1])]
+    if res is not None:
+        op["strip"] = res.get("strip", op["strip"])
+        op["metrics"] = res.get("metrics", {})
+    op["ts"] = time.strftime("%Y-%m-%d %H:%M:%S")
+    _save_oplog(data_dir, ops)
+    return op
 
 
 def _find_strip(armature: Any, strip_name: str):
@@ -186,16 +426,61 @@ def _find_strip(armature: Any, strip_name: str):
     return None, None
 
 
+def find_op_strip(armature: Any, op: Mapping[str, Any]):
+    """Locate the (track, strip) a log entry points at.
+
+    Ops with a ``track`` field (per-op-track era) match that track EXACTLY - a
+    miss means the strip is gone, not "fall through to name search": the same
+    strip name can exist on another armature, and the fall-through let
+    source-side ops steal the RIG's strip.  Legacy ops (no track) may only
+    claim strips on the legacy shared tracks, for the same reason - a
+    same-named strip on a per-op track belongs to a newer op."""
+    anim = getattr(armature, "animation_data", None)
+    if anim is None:
+        return None, None
+    tname = op.get("track")
+    sname = op.get("strip")
+    if tname:
+        for tr in anim.nla_tracks:
+            if tr.name != tname:
+                continue
+            for s in tr.strips:
+                if not sname or s.name == sname:
+                    return tr, s
+        return None, None
+    if sname:
+        for tr in anim.nla_tracks:
+            if not (tr.name.startswith(PREVIEW_TRACK)
+                    or tr.name.startswith(AGENT_TRACK_PREFIX)):
+                continue
+            for s in tr.strips:
+                if s.name == sname:
+                    return tr, s
+    return None, None
+
+
+def delete_op_strip(armature: Any, op: Mapping[str, Any]) -> bool:
+    """Remove an op's strip + its now-empty track + its private action."""
+    anim = getattr(armature, "animation_data", None)
+    if anim is None:
+        return False
+    track, strip = find_op_strip(armature, op)
+    if strip is None:
+        return False
+    act = strip.action
+    track.strips.remove(strip)
+    if act is not None and act.users == 0:
+        bpy.data.actions.remove(act)
+    if len(track.strips) == 0:
+        anim.nla_tracks.remove(track)
+    return True
+
+
 def revert(armature: Any, data_dir: str | Path, op_id: str) -> dict:
     ops = _load_oplog(data_dir)
     for op in ops:
         if op["id"] == op_id:
-            _track, strip = _find_strip(armature, op["strip"])
-            if strip is not None:
-                act = strip.action
-                _track.strips.remove(strip)
-                if act is not None:
-                    bpy.data.actions.remove(act)
+            delete_op_strip(armature, op)
             op["status"] = "reverted"
             _save_oplog(data_dir, ops)
             return op
@@ -216,6 +501,227 @@ def set_preview(scene: Any, frame_range: Sequence[int]) -> None:
     scene.use_preview_range = True
     scene.frame_preview_start = int(frame_range[0])
     scene.frame_preview_end = int(frame_range[1])
+
+
+# ---------------------------------------------------------------------------
+# legacy layout migration + reconciliation
+
+def migrate_legacy_tracks(armature: Any, data_dir: str | Path | None = None) -> dict:
+    """Give every strip on a legacy shared track its own per-op track.
+
+    Idempotent: after the first run there are no legacy tracks left, so a
+    second call is a no-op.  Updates the op log's ``track`` field so panel
+    lookups stay exact.
+
+    Every structural NLA edit (new/remove track or strip) invalidates earlier
+    RNA pointers - hence three phases: snapshot by NAME, build the new track
+    under a temp name, then drop the source and rename to the real name.  The
+    strip is created before the source is deleted, so a mid-way failure never
+    loses animation.
+    """
+    anim = getattr(armature, "animation_data", None)
+    if anim is None:
+        return {"moved": 0}
+
+    # ---- phase 1: snapshot (names + settings only)
+    snapshots = []
+    for tr in anim.nla_tracks:
+        if not (tr.name.startswith(PREVIEW_TRACK)
+                or tr.name.startswith(AGENT_TRACK_PREFIX)):
+            continue
+        for s in tr.strips:
+            snapshots.append({
+                "src_track": tr.name,
+                "name": s.name,
+                "action": s.action.name if s.action else None,
+                "frame_start": float(s.frame_start),
+                "frame_end": float(s.frame_end),
+                "action_start": float(s.action_frame_start),
+                "action_end": float(s.action_frame_end),
+                "blend_type": s.blend_type,
+                "auto_blend": bool(s.use_auto_blend),
+                "extrapolation": s.extrapolation,
+                "influence": float(s.influence),
+            })
+    if not snapshots:
+        return {"moved": 0}
+
+    ops = _load_oplog(data_dir) if data_dir else []
+    by_strip = {o.get("strip"): o for o in ops if o.get("strip")}
+    moved = 0
+
+    # ---- phase 2 + 3: build under a temp name, drop the source, rename back
+    for spec in snapshots:
+        action = bpy.data.actions.get(spec["action"]) if spec["action"] else None
+        if action is None:
+            continue
+        temp_track = f"{spec['name']}__migrating"
+        anim.nla_tracks.new().name = temp_track
+        track = None
+        for tr in anim.nla_tracks:
+            if tr.name == temp_track:
+                track = tr
+                break
+        if track is None:
+            continue
+        strip = track.strips.new(spec["name"], int(spec["frame_start"]), action)
+        strip.blend_type = spec["blend_type"]
+        strip.use_auto_blend = spec["auto_blend"]
+        strip.extrapolation = spec["extrapolation"]
+        strip.influence = spec["influence"]
+        strip.action_frame_start = spec["action_start"]
+        strip.action_frame_end = spec["action_end"]
+        strip.frame_end = spec["frame_end"]
+
+        src_track = None
+        for tr in anim.nla_tracks:
+            if tr.name != spec["src_track"]:
+                continue
+            src_track = tr
+            for s in list(tr.strips):
+                if s.action is action and s.name == spec["name"]:
+                    tr.strips.remove(s)
+                    break
+        if src_track is not None and len(src_track.strips) == 0:
+            anim.nla_tracks.remove(src_track)
+
+        final_track = None
+        for tr in anim.nla_tracks:          # pointers went stale - re-fetch
+            if tr.name == temp_track:
+                final_track = tr
+                break
+        if final_track is None:
+            continue
+        if final_track.strips:
+            final_track.strips[0].name = spec["name"]
+        final_track.name = spec["name"]
+        moved += 1
+
+        op = by_strip.get(spec["name"])
+        if op is not None:
+            op["track"] = final_track.name
+
+    if data_dir and moved:
+        _save_oplog(data_dir, ops)
+    return {"moved": moved}
+
+
+def _op_label(op: Mapping[str, Any]) -> str:
+    """Human tag for the fix list: frames + tool + bone (多条同窗 op 的区分)."""
+    p = op.get("params", {}) or {}
+    tag = ""
+    path = str(p.get("path") or "")
+    if '"' in path:
+        tag = path.split('"')[1]
+        tag += "·位置" if path.endswith(".location") else "·旋转"
+    elif p.get("bones"):
+        bl = list(p["bones"])
+        tag = str(bl[0]) + ("…" if len(bl) > 1 else "")
+    fr = op.get("frames")
+    head = f"{fr[0]}-{fr[1]}" if fr else ""
+    return f"{head} {op.get('tool', '')} {tag}".rstrip()
+
+
+def reconcile(armature: Any, data_dir: str | Path) -> list:
+    """Op log vs. live NLA - the scene is the truth about what exists.
+
+    Returns one row per fix: log entries that still have a live strip, entries
+    whose strip vanished (status "lost"), and agent tracks nobody claims
+    ("unregistered").  The panel renders exactly these rows.
+    """
+    ops = _load_oplog(data_dir)
+    rows: list[dict] = []
+    claimed: set[str] = set()
+    for op in ops:
+        if op.get("status") == "reverted":
+            continue
+        track, strip = find_op_strip(armature, op)
+        row = {
+            "op_id": op["id"],
+            "tool": op.get("tool", ""),
+            "status": op.get("status", ""),
+            "frames": op.get("frames"),
+            "label": _op_label(op),
+            "strip": op.get("strip"),
+            "track": track.name if track is not None else op.get("track"),
+            "alive": strip is not None,
+            "exponent": 1.0,
+            "muted": False,
+        }
+        if strip is not None:
+            act = strip.action
+            row["exponent"] = float(act.get("applied_exp", 1.0)) if act else 1.0
+            row["muted"] = bool(track.mute)
+            claimed.add(strip.name)
+        else:
+            row["status"] = "lost"
+        rows.append(row)
+
+    anim = getattr(armature, "animation_data", None)
+    for tr in (anim.nla_tracks if anim else ()):
+        if not is_agent_track_name(tr.name):
+            continue
+        for s in tr.strips:
+            if s.name in claimed:
+                continue
+            act = s.action
+            rows.append({
+                "op_id": "",
+                "tool": "?",
+                "status": "unregistered",
+                "frames": [int(s.frame_start), int(s.frame_end)],
+                "label": s.name,
+                "strip": s.name,
+                "track": tr.name,
+                "alive": True,
+                "exponent": float(act.get("applied_exp", 1.0)) if act else 1.0,
+                "muted": bool(tr.mute),
+            })
+    return rows
+
+
+def set_strip_exponent(strip: Any, exponent: float) -> dict:
+    """力度旋钮：把 strip delta 写成 delta^exponent（>1 = 超量修正）。
+
+    NLA strip.influence 硬上限是 1.0，拖过 1 没用；真正的"力度"是把 delta
+    曲线的旋转角本身放大。轴角缩放保持方向、只加倍数。
+
+    注意：applied_exp 记在 **action** 上——NLA strip 不支持自定义属性
+    （连 .get() 都抛 TypeError），action 是 ID 没有这个限制。
+    """
+    from .pkl_hand import aa_to_quat, quat_to_aa
+
+    action = strip.action
+    if action is None:
+        return {"touched": 0}
+
+    # 收集每骨的 4 条四元数曲线
+    by_bone: dict[str, dict[int, Any]] = {}
+    for fc in action.fcurves:
+        if fc.data_path.endswith(".rotation_quaternion"):
+            by_bone.setdefault(fc.data_path, {})[fc.array_index] = fc
+
+    touched = 0
+    e_prev = float(action.get("applied_exp", 1.0)) or 1.0
+    for path, curves in by_bone.items():
+        if len(curves) != 4:
+            continue
+        n = len(curves[0].keyframe_points)
+        for i in range(n):
+            frame = curves[0].keyframe_points[i].co[0]
+            q = np.array([curves[c].keyframe_points[i].co[1] for c in range(4)])
+            unit_aa = quat_to_aa(q.reshape(1, 4))[0] / e_prev
+            new_q = aa_to_quat((unit_aa * exponent).reshape(1, 3))[0]
+            for c in range(4):
+                kp = curves[c].keyframe_points[i]
+                kp.co = (frame, float(new_q[c]))
+        for fc in curves.values():
+            fc.update()      # 重算贝塞尔手柄，保持原插值类型
+        touched += 1
+
+    action["applied_exp"] = float(exponent)
+    strip.influence = 1.0    # 力度烘进曲线，influence 不再当旋钮
+    return {"touched": touched, "exponent": float(exponent)}
 
 
 def locked_exclusions(data_dir: str | Path) -> list:
@@ -296,7 +802,7 @@ def restore_accent(
     armature: Any,
     base_action: Any,
     data_path: str,
-    index: int,
+    index: int | None,
     frame_range: Sequence[int],
     method: str,
     *,
@@ -310,44 +816,107 @@ def restore_accent(
     data_dir: str | Path | None = None,
     track_name: str | None = None,
 ) -> dict:
-    """Force-feel methods on a delta strip (same math as accent.apply_scalar)."""
+    """Force-feel methods on a delta strip.
+
+    Channel handling (力量感必须整骨同步改时间，不能单分量)：
+    - rotation_quaternion：四个分量同窗同参数重塑 → 归一化 → 写**真四元数
+      delta**（conj(cur) ⊗ new）。COMBINE 对四元数是乘法，按分量差写标量
+      会得到方向错误的旋转——旧实现就是这么错的，脊柱类骨头从没正确生效过。
+    - location：三个轴一条 op 里同步重塑（同一速度增益曲线），时间保持一致。
+    - 其他通道：单 (path, index)，行为同旧版。
+    """
     from . import accent
 
     start, end = int(frame_range[0]), int(frame_range[1])
-    cur = agent_bake.sample_fcurve_values(base_action, data_path, index,
-                                        start, end)
-    if cur is None:
-        raise RuntimeError(f"通道不存在：{data_path}[{index}]")
-    n = len(cur)
-    raw = None if raw_values is None else np.asarray(raw_values)[:n]
-    method = str(method)
-    if method == "hf_reinject":
-        if raw is None:
-            raise RuntimeError("hf_reinject 需要 raw_values")
-        new = accent.hf_reinject(cur, raw, strength=strength, blend=blend)
-    elif method == "ease_reshape":
-        k = (impact_frame or (start + end) // 2) - start
-        new = accent.ease_reshape(cur, k, pre=n // 3, post=n // 3,
-                                 strength=strength, blend=blend)
-    elif method == "retime":
-        new = accent.retime(cur, attack_speed=retime_speed,
-                            split=retime_split, blend=blend)
-    elif method == "refilter":
-        if raw is None:
-            raise RuntimeError("refilter 需要 raw_values")
-        new = accent.refilter(cur, raw, strength=strength, blend=blend)
-    else:
+    path = str(data_path)
+    k = (impact_frame if impact_frame is not None
+         else (start + end) // 2) - start
+
+    def _reshape(values, raw_c=None):
+        values = np.asarray(values, dtype=np.float64)
+        if method == "ease_reshape":
+            return accent.ease_reshape(values, k, pre=len(values) // 3,
+                                       post=len(values) // 3,
+                                       strength=strength, blend=blend)
+        if method == "retime":
+            return accent.retime(values, attack_speed=retime_speed,
+                                 split=retime_split, blend=blend)
+        if method == "hf_reinject":
+            if raw_c is None:
+                raise RuntimeError("hf_reinject 需要 raw_values")
+            return accent.hf_reinject(values, raw_c[:len(values)],
+                                      strength=strength, blend=blend)
+        if method == "refilter":
+            if raw_c is None:
+                raise RuntimeError("refilter 需要 raw_values")
+            return accent.refilter(values, raw_c[:len(values)],
+                                   strength=strength, blend=blend)
         raise RuntimeError(f"未知方式 {method}，可用 {accent.METHODS}")
 
     name = f"agent_accent_{method}_{start}_{end}"
-    _track, strip = _write_strip(
-        armature, name, start, scalars={(data_path, index): new - cur},
-        blend=blend, track_name=track_name)
-    metrics = accent.accent_metrics(cur, new, raw)
+
+    if path.endswith(".rotation_quaternion"):
+        comps = [agent_bake.sample_fcurve_values(base_action, path, i,
+                                                 start, end)
+                 for i in range(4)]
+        if any(c is None for c in comps):
+            raise RuntimeError(f"通道不存在：{path}")
+        cur = np.stack(comps, axis=1)              # (T,4) wxyz
+        cur /= np.linalg.norm(cur, axis=1, keepdims=True)
+        for i in range(1, len(cur)):               # 防 fcurve 符号翻转
+            if float(cur[i] @ cur[i - 1]) < 0:
+                cur[i] = -cur[i]
+        raw4 = None if raw_values is None else np.asarray(raw_values)
+        new = cur.copy()
+        for c in range(4):
+            raw_c = None if raw4 is None else raw4[:, c]
+            new[:, c] = _reshape(cur[:, c], raw_c)
+        new /= np.linalg.norm(new, axis=1, keepdims=True)
+        dq = agent_fx.delta_quat(new, cur)
+        _track, strip = _write_strip(armature, name, start, quats={path: dq},
+                                     blend=blend, track_name=track_name)
+        ang = np.degrees(2 * np.arccos(np.clip(
+            np.abs(np.sum(cur * new, axis=1)), 0.0, 1.0)))
+        metrics = {"max_pose_shift_deg": round(float(ang.max()), 1),
+                   "impact_frame": int(k + start)}
+    elif path.endswith(".location"):
+        comps = [agent_bake.sample_fcurve_values(base_action, path, i,
+                                                 start, end)
+                 for i in range(3)]
+        if any(c is None for c in comps):
+            raise RuntimeError(f"通道不存在：{path}")
+        cur = np.stack(comps, axis=1)              # (T,3)
+        raw3 = None if raw_values is None else np.asarray(raw_values)
+        new = cur.copy()
+        for c in range(3):
+            raw_c = None if raw3 is None else raw3[:, c]
+            new[:, c] = _reshape(cur[:, c], raw_c)
+        _track, strip = _write_strip(
+            armature, name, start,
+            scalars={(path, i): new[:, i] - cur[:, i] for i in range(3)},
+            blend=blend, track_name=track_name)
+        shift = np.linalg.norm(new - cur, axis=1)
+        metrics = {"max_shift_m": round(float(shift.max()), 4),
+                   "impact_frame": int(k + start)}
+    else:
+        cur = agent_bake.sample_fcurve_values(base_action, path,
+                                              int(index), start, end)
+        if cur is None:
+            raise RuntimeError(f"通道不存在：{path}[{index}]")
+        new = _reshape(cur, raw_values)
+        _track, strip = _write_strip(
+            armature, name, start,
+            scalars={(path, int(index)): new - cur},
+            blend=blend, track_name=track_name)
+        metrics = accent.accent_metrics(cur, new, raw_values)
+
     op = _new_op("restore_accent",
-                 {"path": data_path, "index": index, "method": method,
-                  "strength": strength},
-                 (start, end), strip.name, op_mode, metrics)
+                 {"path": path, "index": index, "method": method,
+                  "strength": strength, "impact_frame": impact_frame,
+                  "retime_speed": retime_speed, "retime_split": retime_split,
+                  "blend": blend, "frame_range": [start, end]},
+                 (start, end), strip.name, op_mode, metrics,
+                 track=_track.name)
     return _record(data_dir, op) if data_dir else op
 
 
@@ -384,9 +953,11 @@ def clean_jitter(
                                blend=blend, track_name=track_name)
     op = _new_op("clean_jitter",
                  {"paths": [list(p) for p in paths], "strength": strength,
-                  "width": width},
+                  "width": width, "blend": blend,
+                  "frame_range": [start, end]},
                  (start, end), strip.name, mode,
-                 {"channel_count": len(scalars)})
+                 {"channel_count": len(scalars)},
+                 track=_track.name)
     return _record(data_dir, op) if data_dir else op
 
 
@@ -436,7 +1007,8 @@ def fix_ground(
                  {"loc_path": loc_path, "floor_z": floor_z, "mode": mode,
                   "pin_xy": pin_xy},
                  (start, end), strip.name, op_mode,
-                 {"max_sole_shift": float(np.abs(desired_sole - sole_h).max())})
+                 {"max_sole_shift": float(np.abs(desired_sole - sole_h).max())},
+                 track=_track.name)
     return _record(data_dir, op) if data_dir else op
 
 
@@ -464,7 +1036,8 @@ def solve_pelvis(
     op = _new_op("solve_pelvis",
                  {"pelvis_path": pelvis_path},
                  (start, end), strip.name, op_mode,
-                 {"max_dz": float(np.abs(dz).max())})
+                 {"max_dz": float(np.abs(dz).max())},
+                 track=_track.name)
     return _record(data_dir, op) if data_dir else op
 
 
@@ -494,25 +1067,131 @@ def _best_ref_frame(cur_by_bone: dict, start: int) -> int:
     return start + int(np.argmin(total))
 
 
+_AXIS_VECTORS = {
+    "X": (1.0, 0.0, 0.0), "Y": (0.0, 1.0, 0.0), "Z": (0.0, 0.0, 1.0),
+    "-X": (-1.0, 0.0, 0.0), "-Y": (0.0, -1.0, 0.0), "-Z": (0.0, 0.0, -1.0),
+}
+
+
+def _axis_vec(axis: Any):
+    """world_axis/secondary_axis 参数：'X'/'-Z' 字符串或任意局部向量三元组。"""
+    from mathutils import Vector
+    if axis is None:
+        return None
+    if isinstance(axis, str):
+        key = axis.strip().upper()
+        if key not in _AXIS_VECTORS:
+            raise RuntimeError(f"未知轴 {axis!r}：用 X/Y/Z（可带负号）、三元组"
+                               "或 'probe:<part>.<side>'")
+        return Vector(_AXIS_VECTORS[key])
+    v = Vector(axis)
+    if v.length < 1e-6:
+        raise RuntimeError("轴向量长度为零")
+    return v.normalized()
+
+
+def _probe_axis_fn(axis: Any):
+    """'probe:<part>[.<side>]' → 逐帧世界方向函数；否则 None。
+
+    解剖方向相对控制骨随帧变（手指有自己的动画，实测局部轴散布 71°）——
+    均值轴对齐每帧都留几十度残差。probe 轴让求解器逐帧现推。"""
+    if not (isinstance(axis, str) and axis.startswith("probe:")):
+        return None
+    spec = axis[6:].strip()
+    part, _, side = spec.rpartition(".")
+    from . import agent_anatomy
+    return agent_anatomy.frame_probe_fn(part, side.upper() or None)
+
+
+def _target_fn(scene: Any, armature: Any, pb: Any,
+               world_dir: Any, dir_object: str | None,
+               dir_mode: str):
+    """返回 callable()->Vector，逐帧求目标方向。
+
+    - world_dir 给固定向量：常量目标
+    - dir_object + mode='arrow'：空物体（single-arrow 约定）局部 +Z 轴
+    - dir_object + mode='aim'：骨头发射到物体位置
+    空物体可 k 动画 → 方向随帧变，本就逐帧解算所以免费支持。
+    """
+    from mathutils import Vector
+
+    if dir_object:
+        obj = bpy.data.objects.get(str(dir_object))
+        if obj is None:
+            raise RuntimeError(f"方向物体不存在：{dir_object}")
+        if dir_mode == "aim":
+            def fn():
+                d = (obj.matrix_world.translation
+                     - (armature.matrix_world @ pb.head))
+                return d.normalized() if d.length > 1e-6 else Vector((0, 0, 1))
+        else:                                # arrow：+Z 轴即箭头指向
+            def fn():
+                return (obj.matrix_world.to_quaternion()
+                        @ Vector((0.0, 0.0, 1.0))).normalized()
+        return fn
+    if world_dir is None:
+        raise RuntimeError("world_dir 需要向量或 dir_object")
+    const = Vector(world_dir).normalized()
+
+    def fn():
+        return Vector(const)
+    return fn
+
+
 def _desired_world_dir(
     scene: Any,
     armature: Any,
     bone: str,
     frames: Sequence[int],
-    dir_vec: np.ndarray,
-) -> np.ndarray:
-    """Per-frame basis quat so the bone's world Y axis points along dir_vec.
+    dir_vec: np.ndarray | None,
+    axis: Any = "Y",
+    secondary_axis: Any = None,
+    dir_object: str | None = None,
+    dir_mode: str = "arrow",
+    flip_guard_deg: float = 150.0,
+) -> tuple[np.ndarray, dict]:
+    """Per-frame basis quat so the bone's world `axis` points along the target.
 
-    desired_pose = arm^-1 · align(cur_dir → dir_vec) · cur_world
-    desired_basis = rel_rest^-1 · parent_pose^-1 · desired_pose
+    axis/secondary_axis: "X"/"-Z" 或任意局部向量三元组（probe_anatomy 给的
+    就是后者）。无次轴 = 最小旋转（旧行为）；给次轴 = 双轴解算：主轴转到
+    target，次轴保持"当前指向在 ⊥target 平面上的投影"——扭转被显式钉住，
+    180° 翻转成为绕次轴的干净滚转，不再有 rotation_difference 在近 180°
+    时乱选轴把肢体翻过去的病态。
+
+    无次轴路径加翻转护栏：所需旋转 > flip_guard_deg 的帧不转（近 180° 的
+    最小旋转轴是任意的，硬转几乎必错——历史上"手翻进手里"就是这么来的），
+    计入 metrics.skipped_flip_frames。
+
+    返回 (wxyz 基四元数 (T,4), per-bone metrics)。
     """
-    from mathutils import Matrix, Quaternion, Vector
+    from mathutils import Matrix, Vector
 
     from .animation import preserve_scene_frame, set_scene_frame
 
-    target = Vector(dir_vec).normalized()
-    out = np.zeros((len(frames), 4))
     pb = armature.pose.bones[bone]
+    target = _target_fn(scene, armature, pb, dir_vec, dir_object, dir_mode)
+    lp_fn = _probe_axis_fn(axis)
+    ls_fn = _probe_axis_fn(secondary_axis)
+    lp_static = None if lp_fn else _axis_vec(axis).normalized()
+    ls_static = None if ls_fn else _axis_vec(secondary_axis)
+    dual = ls_static is not None or ls_fn is not None
+    if dual and lp_static is not None:
+        # 静态+静态：局部正交架只建一次（probe 轴逐帧重建，见循环内）
+        ls_o = ls_static - lp_static * ls_static.dot(lp_static)
+        if ls_o.length < 1e-4:
+            raise RuntimeError("secondary_axis 与主轴平行，退化成单轴")
+        Lr_static = Matrix((lp_static, ls_o.normalized(),
+                            lp_static.cross(ls_o.normalized())))
+    else:
+        Lr_static = None
+
+    out = np.zeros((len(frames), 4))
+    mets = {"align_max_deg": 0.0, "align_mean_deg": 0.0,
+            "flipped_frames": 0, "skipped_flip_frames": 0,
+            "secondary_keep_deg": 0.0, "probe_fallback_frames": 0}
+    angles = []
+    lp_prev = None
+    ls_prev = None
     parent = pb.parent
     if parent is not None:
         rel_rest = (parent.bone.matrix_local.inverted()
@@ -524,10 +1203,74 @@ def _desired_world_dir(
         for i, f in enumerate(frames):
             set_scene_frame(scene, int(f))
             cur_world = armature.matrix_world @ pb.matrix
-            cur_dir = (cur_world.to_quaternion() @ Vector((0.0, 1.0, 0.0)))
-            align = cur_dir.rotation_difference(target).to_matrix().to_4x4()
-            desired_world = align @ cur_world
-            desired_pose = arm_inv @ desired_world
+            cur_rot = cur_world.to_quaternion()
+            t = target().normalized()
+            # ---- 逐帧轴解析（probe:* 现推，静态沿用）----
+            if lp_fn is not None:
+                w = lp_fn(armature, scene)
+                if w is None or w.length < 1e-6:
+                    if lp_prev is None:
+                        raise RuntimeError(
+                            f"probe 轴 {axis!r} 在第 {f} 帧推不出方向")
+                    lp = lp_prev
+                    mets["probe_fallback_frames"] += 1
+                else:
+                    lp = (cur_rot.inverted() @ w).normalized()
+                    lp_prev = lp
+            else:
+                lp = lp_static
+            cur_P = cur_rot @ lp
+            dot = max(-1.0, min(1.0, float(cur_P.normalized() @ t)))
+            ang = float(np.degrees(np.arccos(dot)))
+            angles.append(ang)
+            if not dual:
+                if ang > float(flip_guard_deg):
+                    # 近180°最小旋转病态：保持原样，记 skipped
+                    desired_pose = pb.matrix.copy()
+                    mets["skipped_flip_frames"] += 1
+                else:
+                    align = cur_P.rotation_difference(t)
+                    desired_world = \
+                        align.to_matrix().to_4x4() @ cur_world
+                    desired_pose = arm_inv @ desired_world
+            else:
+                if ls_fn is not None:
+                    w2 = ls_fn(armature, scene)
+                    if w2 is None or w2.length < 1e-6:
+                        if ls_prev is None:
+                            raise RuntimeError(
+                                f"probe 次轴 {secondary_axis!r} 在第 {f}"
+                                " 帧推不出方向")
+                        ls = ls_prev
+                        mets["probe_fallback_frames"] += 1
+                    else:
+                        ls = (cur_rot.inverted() @ w2).normalized()
+                        ls_prev = ls
+                else:
+                    ls = ls_static
+                ls_o = ls - lp * ls.dot(lp)
+                if ls_o.length < 1e-4:
+                    raise RuntimeError(
+                        f"第 {f} 帧次轴与主轴平行，双轴解算退化")
+                ls_o.normalize()
+                cur_S = cur_rot @ ls_o
+                s_des = cur_S - t * cur_S.dot(t)
+                if s_des.length < 1e-4:      # 次轴恰好 ∥ 目标：任取 ⊥ 轴
+                    tmp = t.cross(Vector((0.0, 0.0, 1.0)))
+                    if tmp.length < 1e-3:
+                        tmp = t.cross(Vector((0.0, 1.0, 0.0)))
+                    s_des = tmp
+                s_des.normalize()
+                mets["secondary_keep_deg"] = max(
+                    mets["secondary_keep_deg"],
+                    float(np.degrees(np.arccos(max(-1.0, min(
+                        1.0, float(cur_S.normalized() @ s_des)))))))
+                Lr = Matrix((lp, ls_o, lp.cross(ls_o)))
+                W = Matrix((t, s_des, t.cross(s_des)))
+                R = W.transposed() @ Lr      # 世界旋转：L架→W架
+                desired_world = R.to_4x4()
+                desired_world.translation = cur_world.translation
+                desired_pose = arm_inv @ desired_world
             if parent is not None:
                 basis = (rel_rest.inverted()
                          @ pb.parent.matrix.inverted() @ desired_pose)
@@ -535,11 +1278,17 @@ def _desired_world_dir(
                 basis = pb.bone.matrix_local.inverted() @ desired_pose
             q = basis.to_quaternion()
             out[i] = (q.w, q.x, q.y, q.z)
+    if angles:
+        mets["align_max_deg"] = round(max(angles), 1)
+        mets["align_mean_deg"] = round(float(np.mean(angles)), 1)
+        # 需要 >guard 旋转的帧数（双轴路径信息项：发生了大翻转但非病态）
+        mets["flipped_frames"] = int(sum(
+            1 for a in angles if a > float(flip_guard_deg)))
     # sign continuity
     for i in range(1, len(out)):
         if float(np.dot(out[i - 1], out[i])) < 0.0:
             out[i] = -out[i]
-    return out
+    return out, mets
 
 
 def hold_pose(
@@ -552,6 +1301,11 @@ def hold_pose(
     values: Mapping[str, Sequence[float]] | None = None,
     ref_frame: int | str | None = None,
     world_dir: Sequence[float] | None = None,
+    world_axis: Any = "Y",
+    secondary_axis: Any = None,
+    dir_object: str | None = None,
+    dir_mode: str = "arrow",
+    flip_guard_deg: float = 150.0,
     scene: Any | None = None,
     mode: str = "replace",
     threshold_deg: float = 8.0,
@@ -560,16 +1314,25 @@ def hold_pose(
     op_mode: str = "preview",
     data_dir: str | Path | None = None,
     track_name: str | None = None,
+    strip_name: str | None = None,
+    record: bool = True,
 ) -> dict:
     """通用姿态保持：让若干骨骼在帧段内保持某个姿态（delta strip 实现）。
 
     target: "values"   - values={bone: wxyz}，默认 identity（伸直/回零位）
             "from_frame" - ref_frame 帧号或 "auto"（区间内摆动角最小的一帧）
-            "world_dir"  - 每帧反算局部旋转，令骨轴指向 world_dir 向量
+            "world_dir"  - 每帧反算局部旋转，令骨的 world_axis 指向目标
+    world_axis / secondary_axis: "X"/"-Z" 或任意骨局部向量三元组——
+        语义修复用 probe_anatomy 返回的 local_axis/secondary_axis，不猜轴。
+        给 secondary_axis 即双轴解算（主轴对目标、次轴保持当前指向投影），
+        掌心 180° 翻转成为绕次轴的干净滚转。
+    dir_object/dir_mode: 目标方向可绑空物体——"arrow"=空物体 +Z 轴（平行于
+        箭头），"aim"=骨→物体位置（指向它）。空物体 k 动画即逐帧目标。
     mode:   "replace"  - 整段强制设成目标
             "clamp"    - 只把偏离目标 > threshold_deg 的帧压回阈值，保留小抖动
             "outlier"  - 超阈帧判为坏帧，用前后好帧 slerp 补
     strength 落在 strip.influence 上（NLA 属性里可拖滑块实时调）。
+    record=False 时返回未入 log 的 op dict（reapply 用）。
     """
     start, end = int(frame_range[0]), int(frame_range[1])
     n = end - start + 1
@@ -585,6 +1348,7 @@ def hold_pose(
     frames = np.arange(start, end + 1)
     quats: dict[str, np.ndarray] = {}
     metrics = {"bones": {}, "fixed_frames": 0}
+    dir_metrics: dict[str, dict] = {}
     values = values or {}
 
     cur_by_bone = {}
@@ -616,11 +1380,16 @@ def hold_pose(
                 raise RuntimeError(f"{bone} 在 {rf} 帧无数据")
             desired = np.tile(ref[0], (n, 1))
         elif target == "world_dir":
-            if scene is None or world_dir is None:
-                raise RuntimeError("world_dir 需要 scene 与 world_dir 向量")
-            desired = _desired_world_dir(
+            if scene is None or (world_dir is None and not dir_object):
+                raise RuntimeError("world_dir 需要 scene 与向量或 dir_object")
+            desired, dmets = _desired_world_dir(
                 scene, armature, bone, frames,
-                np.asarray(world_dir, dtype=np.float64))
+                np.asarray(world_dir, dtype=np.float64)
+                if world_dir is not None else None,
+                axis=world_axis, secondary_axis=secondary_axis,
+                dir_object=dir_object, dir_mode=dir_mode,
+                flip_guard_deg=flip_guard_deg)
+            dir_metrics[bone] = dmets
         else:
             raise RuntimeError(f"未知 target：{target}")
 
@@ -669,6 +1438,8 @@ def hold_pose(
             "err_max_after_deg": round(float(err_after.max()), 1),
             "fixed_frames": int((err > threshold_deg).sum()),
         }
+        if bone in dir_metrics:
+            metrics["bones"][bone].update(dir_metrics[bone])
         metrics["fixed_frames"] += int((err > threshold_deg).sum())
         quats[path] = agent_fx.delta_quat(final, cur)
         # scale the correction by strength via angle scaling
@@ -677,20 +1448,34 @@ def hold_pose(
             quats[path] = aa_to_quat(
                 quat_to_aa(quats[path]) * float(strength))
 
-    name = f"agent_hold_{start}_{end}"
+    name = strip_name or f"agent_hold_{start}_{end}"
     _track, strip = _write_strip(
         armature, name, start, quats=quats, blend=blend,
         track_name=track_name)
     strip.influence = float(strength)
     op = _new_op(
         "hold_pose",
+        # params 必须覆盖全部求解输入（reapply 靠它重算）
         {"bones": list(bones), "target": target,
+         "values": {k: list(v) for k, v in (values or {}).items()},
          "ref_frame": ref_frame if target == "from_frame" else None,
          "world_dir": list(world_dir) if world_dir is not None else None,
+         "world_axis": (list(world_axis)
+                        if not isinstance(world_axis, str) else world_axis),
+         "secondary_axis": (
+             list(secondary_axis)
+             if secondary_axis is not None
+             and not isinstance(secondary_axis, str) else secondary_axis),
+         "dir_object": dir_object, "dir_mode": dir_mode,
+         "flip_guard_deg": flip_guard_deg,
          "mode": mode, "threshold_deg": threshold_deg,
-         "strength": strength, "blend": blend},
-        (start, end), strip.name, op_mode, metrics)
-    return _record(data_dir, op) if data_dir else op
+         "strength": strength, "blend": blend,
+         "frame_range": [start, end]},
+        (start, end), strip.name, op_mode, metrics,
+        track=_track.name)
+    if data_dir and record:
+        return _record(data_dir, op)
+    return op
 
 
 # ---------------------------------------------------------------------------
@@ -840,7 +1625,8 @@ def apply_exemplar(
                  {"exemplar": exemplar["id"], "yaw_scale": yaw_scale,
                   "mirror": mirror},
                  (start, end), strip.name, op_mode,
-                 {"max_pos_shift": float(np.abs(desired["pos"] - np.asarray(target_pos)).max())})
+                 {"max_pos_shift": float(np.abs(desired["pos"] - np.asarray(target_pos)).max())},
+                 track=_track.name)
     return _record(data_dir, op) if data_dir else op
 
 

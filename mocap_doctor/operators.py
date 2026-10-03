@@ -7,7 +7,7 @@ import mathutils
 
 import bpy
 from bpy.app.handlers import persistent
-from bpy.props import IntProperty, StringProperty
+from bpy.props import BoolProperty, IntProperty, StringProperty
 from bpy.types import Operator
 from bpy_extras.io_utils import ExportHelper
 
@@ -2305,9 +2305,24 @@ class MD_OT_MMDBake(Operator):
             _ensure_no_pending_preview(settings, "mmd_bake")
             armature, rig, foot_ik, constrained = _validate_mmd_constraint_mapping(settings)
             rig_animation = rig.animation_data
-            rig_action = _require_action(rig, "MMR Rig")
-            if rig_animation and len(rig_animation.nla_tracks) > 0:
-                raise RuntimeError("MMR Rig 存在 NLA Track；自动 Bake 只接受单一活动 Action")
+            # agent 修复轨 = 有意的修正，visual_keying 求值 NLA 栈时会被烘进去，
+            # 所以放行；只拦不认识的轨。
+            foreign_tracks = []
+            if rig_animation:
+                from .core import agent_ops
+                foreign_tracks = [
+                    t.name for t in rig_animation.nla_tracks
+                    if not agent_ops.is_agent_track_name(t.name)
+                    and t.name != agent_ops.BASE_TRACK
+                ]
+            if foreign_tracks:
+                raise RuntimeError(
+                    f"MMR Rig 存在陌生的 NLA Track {foreign_tracks}；"
+                    "自动 Bake 只接受单一活动 Action")
+            from .core import agent_bridge
+            rig_action = agent_bridge._base_action(rig)
+            if rig_action is None:
+                raise RuntimeError("MMR Rig 没有可烘焙的 Action（也没有 mcd_base 轨）")
             if not _action_has_range_keys(
                 rig_action, settings.mocap_frame_start, settings.mocap_frame_end
             ):
@@ -2831,25 +2846,307 @@ class MD_OT_AgentServerToggle(Operator):
 
 
 class MD_OT_AgentPreviewToggle(Operator):
-    """A/B：静音/取消静音 AGENT_PREVIEW 轨，对比修复前后"""
+    """A/B：静音/取消静音所有 agent 轨（每条修复各一轨），对比前后"""
     bl_idname = "mocap_doctor.agent_ab_toggle"
     bl_label = "A/B 预览对比"
     bl_options = {"INTERNAL"}
 
     def execute(self, context):
+        from .core import agent_bridge, agent_ops
+        settings = context.scene.mocap_doctor
+        armature = agent_bridge._rig_armature(settings, context.scene)
+        if armature is None:
+            self.report({"ERROR"}, "没有识别到 RIG 骨架")
+            return {"CANCELLED"}
+        anim = getattr(armature, "animation_data", None)
+        agent_tracks = [t for t in (anim.nla_tracks if anim else ())
+                        if agent_ops.is_agent_track_name(t.name)]
+        if not agent_tracks:
+            self.report({"INFO"}, "还没有 agent 轨（尚无预览/提交 op）")
+            return {"CANCELLED"}
+        # 有任何一个还响着 → 全部静音（看修复前）；全静音 → 全部放响（看修复后）
+        new_state = any(not t.mute for t in agent_tracks)
+        for t in agent_tracks:
+            t.mute = new_state
+        for item in settings.agent_fixes:
+            item.muted = new_state
+        agent_bridge._redraw()
+        self.report({"INFO"},
+                    "agent 修复已隐藏" if new_state else "agent 修复可见")
+        return {"FINISHED"}
+
+
+class _AgentFixOp(Operator):
+    """Base: resolve the row the button belongs to."""
+
+    bl_options = {"INTERNAL"}
+
+    op_id: StringProperty(default="")
+    track: StringProperty(default="")
+    strip: StringProperty(default="")
+    index: IntProperty(default=-1)
+
+    def _item(self, context):
+        settings = context.scene.mocap_doctor
+        for item in settings.agent_fixes:
+            if self.op_id and item.op_id == self.op_id:
+                return settings, item
+        if self.track:
+            for item in settings.agent_fixes:
+                if item.track == self.track and (
+                        not self.strip or item.strip == self.strip):
+                    return settings, item
+        return settings, None
+
+
+class MD_OT_AgentFixMute(_AgentFixOp):
+    """单独静音/取消这条修复"""
+
+    bl_idname = "mocap_doctor.agent_fix_mute"
+    bl_label = "单条静音"
+
+    def execute(self, context):
+        from .core import agent_bridge
+        settings, item = self._item(context)
+        if item is None:
+            self.report({"ERROR"}, "找不到这条修复")
+            return {"CANCELLED"}
+        item.muted = not item.muted      # update 回调负责写轨
+        agent_bridge.sync_fixes_list(settings, context.scene)
+        return {"FINISHED"}
+
+
+def _fix_targets(settings):
+    """批量目标：勾选了任何行就用勾选集，否则退回当前选中行。"""
+    sel = [i for i in settings.agent_fixes if i.selected]
+    if sel:
+        return sel
+    idx = settings.agent_fix_index
+    if 0 <= idx < len(settings.agent_fixes):
+        return [settings.agent_fixes[idx]]
+    return []
+
+
+def _sync_batch_display(settings):
+    """选择操作后把批量滑块/眼睛的显示值对齐当前行（静默，不回写）。"""
+    from . import properties as _props
+    idx = settings.agent_fix_index
+    if 0 <= idx < len(settings.agent_fixes):
+        it = settings.agent_fixes[idx]
+        _props.set_quietly(settings, "agent_batch_exponent", it.exponent)
+        _props.set_quietly(settings, "agent_batch_muted", it.muted)
+
+
+class MD_OT_AgentFixSelAll(Operator):
+    """全选 / 清空勾选"""
+
+    bl_idname = "mocap_doctor.agent_fix_sel_all"
+    bl_label = "全选修复"
+    bl_options = {"INTERNAL"}
+
+    select: BoolProperty(default=True)
+
+    def execute(self, context):
+        settings = context.scene.mocap_doctor
+        for item in settings.agent_fixes:
+            item.selected = bool(self.select)
+        if self.select:
+            _sync_batch_display(settings)
+        return {"FINISHED"}
+
+
+class MD_OT_AgentFixSelWindow(Operator):
+    """选中与当前行同一窗口（同帧段）的所有修复——一次点中一个发力窗"""
+
+    bl_idname = "mocap_doctor.agent_fix_sel_window"
+    bl_label = "选中同窗"
+    bl_options = {"INTERNAL"}
+
+    def execute(self, context):
+        settings = context.scene.mocap_doctor
+        idx = settings.agent_fix_index
+        if not (0 <= idx < len(settings.agent_fixes)):
+            self.report({"ERROR"}, "先点一行")
+            return {"CANCELLED"}
+        frames = settings.agent_fixes[idx].frames
+        n = 0
+        for item in settings.agent_fixes:
+            item.selected = (item.frames == frames and frames != "")
+            n += int(item.selected)
+        _sync_batch_display(settings)
+        self.report({"INFO"}, f"选中 {n} 条")
+        return {"FINISHED"}
+
+
+class MD_OT_AgentFixCommit(_AgentFixOp):
+    """提交修复（勾选了多条就批量；不搬轨，仍可调力度/静音）"""
+
+    bl_idname = "mocap_doctor.agent_fix_commit"
+    bl_label = "提交修复"
+
+    def execute(self, context):
+        from .core import agent_bridge, agent_ops
+        settings = context.scene.mocap_doctor
+        targets = [i for i in _fix_targets(settings) if i.op_id]
+        if not targets:
+            self.report({"ERROR"}, "没有可提交的记录")
+            return {"CANCELLED"}
+        for item in targets:
+            agent_ops.commit(settings.data_directory or ".", item.op_id)
+        agent_bridge._bump_ops_rev_from(settings)
+        agent_bridge.sync_fixes_list(settings, context.scene)
+        agent_bridge._redraw()
+        self.report({"INFO"}, f"已提交 {len(targets)} 条（仍可继续调力度）")
+        return {"FINISHED"}
+
+
+class MD_OT_AgentFixRevert(_AgentFixOp):
+    """撤销修复：删 strip + action + 空轨（勾选了多条就批量）"""
+
+    bl_idname = "mocap_doctor.agent_fix_revert"
+    bl_label = "撤销修复"
+
+    def execute(self, context):
+        from .core import agent_bridge, agent_ops
+        settings = context.scene.mocap_doctor
+        targets = _fix_targets(settings)
+        if not targets:
+            self.report({"ERROR"}, "没有可撤销的修复")
+            return {"CANCELLED"}
+        rig = agent_bridge._rig_armature(settings, context.scene)
+        n = 0
+        for item in targets:
+            if item.op_id:
+                agent_ops.revert(rig, settings.data_directory or ".",
+                                 item.op_id)
+            elif item.strip and rig is not None:   # 孤儿行：直接删 strip
+                agent_ops.delete_op_strip(rig, {"strip": item.strip,
+                                                "track": item.track})
+            else:
+                continue
+            n += 1
+        agent_bridge._bump_ops_rev_from(settings)
+        agent_bridge.sync_fixes_list(settings, context.scene)
+        agent_bridge._redraw()
+        self.report({"INFO"}, f"已撤销 {n} 条")
+        return {"FINISHED"}
+
+
+class MD_OT_AgentFixForget(_AgentFixOp):
+    """清掉记录：丢失的删 log 条目，孤儿 strip 直接删（勾选批量）"""
+
+    bl_idname = "mocap_doctor.agent_fix_forget"
+    bl_label = "清除记录"
+
+    def execute(self, context):
+        from .core import agent_bridge, agent_ops
+        settings = context.scene.mocap_doctor
+        targets = _fix_targets(settings)
+        if not targets:
+            self.report({"ERROR"}, "没有可清除的记录")
+            return {"CANCELLED"}
+        rig = agent_bridge._rig_armature(settings, context.scene)
+        data_dir = settings.data_directory or "."
+        drop_ids = set()
+        n = 0
+        for item in targets:
+            if item.op_id:
+                op = None
+                for cand in agent_ops.list_ops(data_dir):
+                    if cand["id"] == item.op_id:
+                        op = cand
+                        break
+                if op is not None:
+                    if rig is not None:
+                        agent_ops.delete_op_strip(rig, op)
+                    drop_ids.add(item.op_id)
+                    n += 1
+            elif rig is not None and item.strip:
+                agent_ops.delete_op_strip(rig, {"strip": item.strip,
+                                                "track": item.track})
+                n += 1
+        if drop_ids:
+            ops = [o for o in agent_ops.list_ops(data_dir)
+                   if o["id"] not in drop_ids]
+            agent_ops._save_oplog(data_dir, ops)
+        agent_bridge._bump_ops_rev_from(settings)
+        agent_bridge.sync_fixes_list(settings, context.scene)
+        agent_bridge._redraw()
+        self.report({"INFO"}, f"已清除 {n} 条")
+        return {"FINISHED"}
+
+
+class MD_OT_AgentFixRefresh(Operator):
+    """重新对账：迁移旧轨 + op log ↔ 场景 NLA（定时器失灵时的手动兜底）"""
+
+    bl_idname = "mocap_doctor.agent_fix_refresh"
+    bl_label = "刷新修复列表"
+    bl_options = {"INTERNAL"}
+
+    def execute(self, context):
         from .core import agent_bridge
         settings = context.scene.mocap_doctor
-        armature = agent_bridge._source_armature(settings)
-        if armature is None:
-            self.report({"ERROR"}, "没有识别到源骨架")
-            return {"CANCELLED"}
-        track = agent_bridge._track_by_name(armature, agent_bridge.PREVIEW_TRACK)
-        if track is None:
-            self.report({"INFO"}, "还没有 AGENT_PREVIEW 轨（尚无预览 op）")
-            return {"CANCELLED"}
-        track.mute = not track.mute
+        res = agent_bridge.ensure_layout(settings, context.scene)
         agent_bridge._redraw()
-        self.report({"INFO"}, "预览轨已静音" if track.mute else "预览轨可见")
+        self.report({"INFO"},
+                    f"{res.get('rows', 0)} 条修复"
+                    + (f"，迁移 {res.get('migrated')} 条" if res.get("migrated") else ""))
+        return {"FINISHED"}
+
+
+class MD_OT_AgentParamChoice(Operator):
+    """choice 型参数按钮：写值 → update 回调排队防抖重写"""
+
+    bl_idname = "mocap_doctor.agent_param_choice"
+    bl_label = "选参数值"
+    bl_options = {"INTERNAL"}
+
+    pkey: StringProperty(default="")
+    value: StringProperty(default="")
+
+    def execute(self, context):
+        settings = context.scene.mocap_doctor
+        item = next((p for p in settings.agent_params
+                     if p.pkey == self.pkey), None)
+        if item is None:
+            self.report({"ERROR"}, "参数条目不在了（刷新后再试）")
+            return {"CANCELLED"}
+        item.sval = self.value          # update 回调 → schedule_param_apply
+        return {"FINISHED"}
+
+
+class MD_OT_AgentDirCreate(Operator):
+    """新建方向空物体：arrow=单箭头(平行于箭头轴 +Z)，aim=指向点(骨指向它)。
+    可 k 动画做随帧变化的方向目标。assign 指定参数条目时自动绑定。"""
+
+    bl_idname = "mocap_doctor.agent_dir_create"
+    bl_label = "新建方向物体"
+    bl_options = {"INTERNAL"}
+
+    kind: StringProperty(default="arrow")   # arrow / aim
+    assign: StringProperty(default="")      # agent_params 条目的 pkey
+
+    def execute(self, context):
+        scene = context.scene
+        base = "mcd_aim" if self.kind == "aim" else "mcd_dir"
+        obj = bpy.data.objects.new(base, None)
+        obj.empty_display_type = "SPHERE" if self.kind == "aim" else "SINGLE_ARROW"
+        obj.empty_display_size = 0.05 if self.kind == "aim" else 0.15
+        obj.location = scene.cursor.location.copy()
+        scene.collection.objects.link(obj)
+        bpy.ops.object.select_all(action="DESELECT")
+        obj.select_set(True)
+        context.view_layer.objects.active = obj
+        if self.assign:
+            settings = scene.mocap_doctor
+            item = next((p for p in settings.agent_params
+                         if p.pkey == self.assign), None)
+            if item is not None:
+                item.obj = obj          # update 回调 → 排队重写
+        self.report({"INFO"},
+                    f"已建 {obj.name}（"
+                    + ("摆到指向位置" if self.kind == "aim"
+                       else "旋转它，箭头轴即方向") + "）")
         return {"FINISHED"}
 
 
@@ -2880,6 +3177,15 @@ CLASSES = (
     MD_OT_PrepareReceiverTemplate,
     MD_OT_AgentServerToggle,
     MD_OT_AgentPreviewToggle,
+    MD_OT_AgentFixMute,
+    MD_OT_AgentFixSelAll,
+    MD_OT_AgentFixSelWindow,
+    MD_OT_AgentFixCommit,
+    MD_OT_AgentFixRevert,
+    MD_OT_AgentFixForget,
+    MD_OT_AgentFixRefresh,
+    MD_OT_AgentParamChoice,
+    MD_OT_AgentDirCreate,
 )
 
 

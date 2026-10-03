@@ -1,0 +1,55 @@
+问题描述：Blender 4.5 里 NLA delta strip 已确认参与求值、matrix_basis 确实改变，但视口看不到任何姿态变化
+
+=== 背景 ===
+
+我们做的是一个 Blender 4.5 扩展（动捕后处理工具）。场景里有多个骨架，关键是：
+
+- `Armature`（58 根骨，名字前缀 f_avg_*）——GVHMR 动捕的 SMPL 源骨架，base action 上带着全部动作曲线
+- `Armature.001`（65 骨）、`arue式重音テトver 2.01_arm`（226 骨，MMD/Teto 模型）、`RIG-...`（723 骨）——重定向链路后续骨架
+- 工作文件是动捕数据清理到一半的中间产物
+
+我们在 Blender 进程内跑了一个 socket 工具服务器（127.0.0.1:6211，JSON-lines），外部 agent 进程通过它调用工具修动画。写入工具的实现方式是：
+
+- 不动 base action，而是新建一个小 Action 装「delta 四元数」（basis 空间：delta = desired ⊗ conj(cur)），放到源骨架的 NLA 轨道 `AGENT_PREVIEW` 上，blend_type=COMBINE，extrapolation=NOTHING，influence=1.0
+- 这样原始数据零破坏，mute 轨道就是 A/B 对比，删 strip 就是 revert
+
+=== 正在做的事 ===
+
+任务：第 505-570 帧（工作文件帧号）左手食指应该保持伸直竖直朝上，但原始数据里这三节指骨（f_avg_L_Index1/2/3）全程弯着（局部姿态和目标差最多 156°）。
+
+工具调用 hold_pose(bones=[三节指骨], frame_range=[505,570], target=world_dir[0,0,1], mode=replace) 成功执行，数学上确认：
+- 修正前每节指骨 basis 四元数与目标的测地距离最大 156°/137°/137°
+- 写入 strip 后每节 ≤0.2°
+
+=== 问题 ===
+
+用户在 Blender 视口播放 505-570 这段时，看不到任何变化——不管看源骨架还是 Teto 模型。即使把源骨架 Armature 手动设为可见也没用。
+
+=== 已排除的因素 ===
+
+通过工具直接读场景状态，确认：
+
+1. NLA 轨道正常：AGENT_PREVIEW 轨存在、未静音（track.mute=False、is_solo=False），strip agent_hold_505_570 覆盖 505-570、COMBINE、NOTHING、influence=1.0、strip.mute=False
+2. strip 确实参与求值：第 565 帧 evaluated pose 的 matrix_basis 四元数 (0.9205, 0.3245, -0.0603, -0.2091) 与 base action fcurve 原始值 (0.9289, 0.3140, -0.0701, -0.1837) 不同——delta 进来了
+3. strip delta 不小：第 565 帧 strip action 里 Index1 的 delta 四元数 (0.7507, -0.4868, -0.1513, 0.4202)≈82.5° 旋转，不该看不见
+4. 骨骼无约束：f_avg_L_Index1/3 的 constraints 列表为空，没有驱动器压过 matrix_basis
+5. 骨架可见性：armature.visible_get()=True、hide_viewport=False、所在集合未隐藏、对象就在原点附近（食指尖世界坐标约 (-0.94, -1.02, 1.29)）
+6. 活跃 action 正确：armature.animation_data.action = 修正后的 base action（MD_source_floor_...）
+
+=== 疑点/可能的解释（待验证）===
+
+A. 一次「mute 轨道后指尖世界坐标没变」的测试可能有 flaw：那次 toggle 后没有 scene.frame_set 强制重求值，读到的 matrix 可能是缓存。需要「mute → frame_set 重求值 → 读位置 → unmute → frame_set → 再读」的干净对比
+B. 四元数 delta 的 COMBINE 顺序：delta = desired ⊗ conj(cur)，如果 Blender NLA 组合顺序是 cur ⊗ delta（而不是 delta ⊗ cur），效果会偏但不应该完全没变化
+C. 骨骼在隐藏 bone collection 里没画出来（数据层可见但视口不画）
+D. 用户观察的时间窗口恰好 strip 不存在（这版 strip 是临时写在内存里的，.blend 没存就没持久化）
+E. delta 应用了但方向/语义不对——修正量太小不足以改变视觉效果（不太可能，82° 的 delta）
+
+=== 另一个架构层面的问题 ===
+
+这套 agent 流程的定位是：13 步向导全跑完之后的后期精修。但修的是源骨架 f_avg_*，而最终导出物是 Teto/MMD 骨架上的烘焙动作。如果手指问题要在最终 VMD 上修，应该在重定向后的目标骨架上改，而不是在源数据上改——改源骨架要等重定向重新烘焙才流到目标。这可能是真正的设计错位（不只是视口看不到）。
+
+=== 求助 ===
+
+1. 在 Blender 4.5 里，什么情况下 NLA COMBINE strip 会「matrix_basis 变了但 matrix 不变」或者「参与求值但视口不更新」？
+2. 有没有可靠的程序化验证方法确认「这个 strip 对最终渲染姿态真的有影响」？
+3. 从设计角度：修手指这种细节，应该在源骨架（数据源侧）还是目标骨架（交付侧）做？

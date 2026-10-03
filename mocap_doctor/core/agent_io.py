@@ -73,6 +73,79 @@ def source_bake_spec(
     return {"bones": bones, "points": points, "maps": maps}
 
 
+# ---------------------------------------------------------------------------
+# MMR RIG spec（agent 协作层的目标骨架）
+# 角色名与源骨架 spec 完全一致（signals/查询层不变），骨名换成 MMR 控制骨。
+# RIG-* 骨架是 Rigify 风格：控制骨无前缀、机制骨 MCH-、形变骨 DEF-、原始 ORG-。
+_RIG_ROLES = {
+    "hips": "torso_root",
+    "root": "root",
+    "spine1": "spine_fk",
+    "spine2": "spine_fk.001",
+    "spine3": "spine_fk.003",
+    "neck": "neck",
+    "head": "head",
+    "left_shoulder": "shoulder.L",
+    "right_shoulder": "shoulder.R",
+    "left_upper_arm": "upper_arm_fk.L",
+    "right_upper_arm": "upper_arm_fk.R",
+    "left_forearm": "forearm_fk.L",
+    "right_forearm": "forearm_fk.R",
+    "left_hand": "hand_fk.L",
+    "right_hand": "hand_fk.R",
+    "left_hip": "thigh_fk.L",
+    "right_hip": "thigh_fk.R",
+    "left_knee": "shin_fk.L",
+    "right_knee": "shin_fk.R",
+    "left_ankle": "shin_fk.L",     # foot_ik 是控制柄；踝位置近似用小腿尾
+    "right_ankle": "shin_fk.R",
+    "left_foot": "foot_ik.L",
+    "right_foot": "foot_ik.R",
+    "left_heel": "DEF-foot.L",
+    "right_heel": "DEF-foot.R",
+}
+# MMR 手指控制骨名：index/middle/ring/pinky 带 f_ 前缀，thumb 不带
+_RIG_FINGER_STEMS = {"index": "f_index", "middle": "f_middle",
+                     "ring": "f_ring", "pinky": "f_pinky", "thumb": "thumb"}
+
+
+def rig_bake_spec(armature: Any) -> dict[str, Any]:
+    """RIG（MMR 控制架）的 bake spec：{bones, points, maps}，角色名不变。"""
+    existing = {b.name for b in armature.data.bones}
+    bones = {role: name for role, name in _RIG_ROLES.items()
+             if name in existing}
+    for side in ("L", "R"):
+        for finger, stem in _RIG_FINGER_STEMS.items():
+            for i in (1, 2, 3):
+                name = f"{stem}.0{i}.{side}"
+                if name in existing:
+                    bones[f"finger_{side.lower()}_{finger}{i}"] = name
+    points = {}
+    # 足底三点：DEF-foot 头/尾（踝头/前掌）+ DEF-toe 尾（脚尖）——与 SMPL 的
+    # Ankle-head/Ankle-tail/Foot-tail 三点同义
+    for side in ("L", "R"):
+        foot = f"DEF-foot.{side}"
+        if foot in existing:
+            points[f"foot.{side}.heel"] = (foot, "head")
+            points[f"foot.{side}.ball"] = (foot, "tail")
+        toe = f"DEF-toe.{side}"
+        if toe in existing:
+            points[f"foot.{side}.toe"] = (toe, "tail")
+        for finger, stem in _RIG_FINGER_STEMS.items():
+            r1 = f"finger_{side.lower()}_{finger}1"
+            r3 = f"finger_{side.lower()}_{finger}3"
+            if r1 in bones and r3 in bones:
+                points[f"finger.{side}.{finger}.root"] = (bones[r1], "head")
+                points[f"finger.{side}.{finger}.tip"] = (bones[r3], "tail")
+    return {"bones": bones, "points": points,
+            "maps": {"profile": "MMR_RIG", "prefix": None, "bones": bones,
+                     "foot_points": {s: [points[f"foot.{s}.heel"],
+                                         points[f"foot.{s}.ball"],
+                                         points[f"foot.{s}.toe"]]
+                                     for s in ("L", "R")
+                                     if f"foot.{s}.toe" in points}}}
+
+
 def scene_intervals(scene: Any) -> dict[str, list]:
     """Pull the wizard's reliable ranges into agent interval items."""
 
@@ -102,10 +175,12 @@ def build_store_for_scene(
     use_cache: bool = True,
     tag: str = "",
     raw_quat: Mapping[str, Any] | None = None,
+    spec: dict[str, Any] | None = None,
 ) -> agent_query.DataStore:
-    """Bake (or load cached) the source rig and assemble the query store."""
+    """Bake (or load cached) the rig and assemble the query store."""
 
-    spec = source_bake_spec(armature, settings)
+    if spec is None:
+        spec = source_bake_spec(armature, settings)
     start = int(getattr(settings, "mocap_frame_start", 0) or 0) or None
     end = int(getattr(settings, "mocap_frame_end", 0) or 0) or None
 
