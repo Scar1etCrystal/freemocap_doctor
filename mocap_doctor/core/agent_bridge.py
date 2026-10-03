@@ -1338,6 +1338,24 @@ def _ctx():
     return ctx
 
 
+def _reject_swallowed(name, tool, args):
+    """旧工具的包装用 `**_` 吞掉未知参数——拼错的参数被静默忽略、按默认值执行
+    （§7-11 的 dry_run 漏写就是这么来的）。按它们的签名统一拒绝，并提示最接近的
+    合法参数名；对合法调用零影响。插件工具（`**args` / `**unknown`）自己校验。"""
+    import inspect
+    from . import agent_pose
+    try:
+        params = inspect.signature(tool).parameters
+    except (TypeError, ValueError):
+        return
+    var_kw = [p for p in params.values() if p.kind is p.VAR_KEYWORD]
+    if not var_kw or var_kw[0].name != "_":
+        return
+    # expect_version / dry_run 由桥自己处理（版本校验、dry_run 支持表）
+    agent_pose.reject_unknown_args(name, tool, args, internal=("ctx",),
+                                   extra_allowed=("expect_version", "dry_run"))
+
+
 def _dispatch(request: Mapping[str, Any]) -> dict:
     global _LAST_TOOL, _IN_TOOL
     name = str(request.get("tool", ""))
@@ -1361,6 +1379,7 @@ def _dispatch(request: Mapping[str, Any]) -> dict:
                 f"{name} 不支持 dry_run", code="E_SCOPE",
                 fix=f"支持 dry_run 的：{', '.join(sorted(_dry_run_tools()))}；"
                     "其它写工具直接写（preview，可 revert/reapply）")
+        _reject_swallowed(name, tool, args)
         ctx = _ctx()
         ctx["agent_id"] = agent_id
         scope = _write_scope(name, ctx, args, agent_id, force)

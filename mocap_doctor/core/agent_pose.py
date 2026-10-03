@@ -589,7 +589,8 @@ _INTERNAL_ARGS = frozenset({"ctx", "scene", "armature", "bones", "chain", "data_
                             "record", "track_name", "baseline_tracks"})
 
 
-def reject_unknown_args(tool: str, fn, args: Mapping[str, Any], extra_allowed=()) -> None:
+def reject_unknown_args(tool: str, fn, args: Mapping[str, Any], extra_allowed=(),
+                        internal=None) -> None:
     """拼错的参数直接报错，并给出最接近的合法参数名（§10-7）。
 
     以前这些工具只在 warnings / metrics.ignored_args 里提一句，然后按默认值照常执行
@@ -599,7 +600,9 @@ def reject_unknown_args(tool: str, fn, args: Mapping[str, Any], extra_allowed=()
     import inspect
     sig = inspect.signature(fn)
     allowed = {n for n, p in sig.parameters.items()
-               if p.kind not in (p.VAR_KEYWORD, p.VAR_POSITIONAL)} - _INTERNAL_ARGS
+               if p.kind not in (p.VAR_KEYWORD, p.VAR_POSITIONAL)
+               and not n.startswith("_")} - \
+        (_INTERNAL_ARGS if internal is None else frozenset(internal))
     allowed |= set(extra_allowed)
     bad = sorted(k for k in args if k not in allowed)
     if not bad:

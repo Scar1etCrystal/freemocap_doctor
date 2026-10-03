@@ -313,6 +313,17 @@ check("10d analyze_motion brief drops the speed series; jitter_top_frames presen
       am["ok"] and "speed_series" not in am["data"] and len(row.get("jitter_top_frames", [])) == 5,
       row.get("jitter_top_frames"))
 
+# ---- 12: old tools no longer swallow misspelled parameters (**_) ------------------------
+r = call("hold_pose", bones=["left_hand"], frame_range=[A, B], target="values", stregth=0.5)
+check("12 hold_pose(stregth=…) → rejected with the closest name (was silently strength=1)",
+      not r["ok"] and "strength" in r["error"]["message"], r.get("error", {}).get("message", "")[:140])
+r = call("clean_jitter", bone="left_hand", frame_range=[A, B], widht=5)
+check("12b clean_jitter(widht=…) → rejected, suggests width",
+      not r["ok"] and "width" in r["error"]["message"], r.get("error", {}).get("message", "")[:140])
+r = call("describe", target=[A, B], max_items=3)
+check("12c read tools too (describe(max_items=…) → rejected, lists what it takes)",
+      not r["ok"] and "不认识参数" in r["error"]["message"], r.get("error", {}).get("message", "")[:140])
+
 fails = [r for r in RESULTS if not r[1]]
 print(f"\n==== {len(RESULTS) - len(fails)}/{len(RESULTS)} PASS ====")
 for n, _o, d in fails:
