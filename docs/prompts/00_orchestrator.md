@@ -6,7 +6,7 @@
 K=/home/sb/remote_kit_1.7.1
 bash $K/tools/mcd.sh status                     # 内存、Blender 锁
 bash $K/tools/mcd.sh server-start <工作文件.blend>  # 起 headless 服务（占用唯一的 Blender 名额）
-python3 $K/tools/agent_client.py ping --pretty  # 工具表里要有 claim / plan_scopes / 你要用的工具
+/home/sb/remote_kit_1.7.1/tools/agent ping '{}'  # 工具表里要有 claim / plan_scopes / 你要用的工具
 ```
 - 机器只有 ~8GB：**同时只能有 1 个 Blender**。服务开着时不能跑 e2e（mcd.sh 会排队等）。
 - 先 `list_ops` 看文件里已有的修复（别让 agent 在用户已有修复上乱叠）。
@@ -30,10 +30,10 @@ python3 $K/tools/agent_client.py ping --pretty  # 工具表里要有 claim / pla
 ## 2. 派单前体检（让 agent 天然避开同一段关键帧）
 
 ```bash
-python3 $K/tools/agent_client.py plan_scopes '{"tasks":[
+/home/sb/remote_kit_1.7.1/tools/agent plan_scopes '{"tasks":[
   {"name":"左臂预备","chain":"arm_nofingers.L","frames":[550,603]},
   {"name":"右脚脚滑","bones":["right_foot"],"frames":[790,853]},
-  {"name":"脊柱去抖","chain":"spine_head","frames":[500,620]}]}' --pretty
+  {"name":"脊柱去抖","chain":"spine_head","frames":[500,620]}]}'
 ```
 - `data.waves`：建议批次。**同一批内并行派**（≤5 个），下一批等上一批 release。
 - 规则：同骨 + 帧重叠 = hard，必须不同批；父子骨（脊柱 vs 手臂、前臂 vs 手）= related，

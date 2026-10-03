@@ -12,8 +12,8 @@
 ## 第 1 步永远是 analyze_motion（输入工具）
 
 ```
-$C analyze_motion '{"agent_id":"'$ME'","chain":"arm_nofingers.R","frame_range":[550,603],
-  "main_bone":"upper_arm_fk.R"}' --pretty
+/home/sb/remote_kit_1.7.1/tools/agent analyze_motion '{"agent_id":"<ME>","chain":"arm_nofingers.R","frame_range":[550,603],
+  "main_bone":"upper_arm_fk.R"}'
 ```
 - **显式给 `main_bone`**（主通道 = 动作的主角骨）。不给时自动选峰速最大的骨——这份数据是舞蹈，
   手几乎一直在转，自动选到手往往不对。挥臂类选 `upper_arm_fk.*`，甩小臂选 `forearm_fk.*`。
@@ -53,7 +53,7 @@ $C analyze_motion '{"agent_id":"'$ME'","chain":"arm_nofingers.R","frame_range":[
 ## 调参
 
 ```
-$C reapply '{"agent_id":"'$ME'","op_id":"<id>","overrides":{"amount":0.10}}' --pretty
+/home/sb/remote_kit_1.7.1/tools/agent reapply '{"agent_id":"<ME>","op_id":"<id>","overrides":{"amount":0.10}}'
 ```
 然后按第 3 步同样复测。太夸张 → amount 降；看不出来 → amount 升（上限 0.5）。
 

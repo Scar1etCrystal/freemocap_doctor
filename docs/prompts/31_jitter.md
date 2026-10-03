@@ -4,19 +4,16 @@
 
 ## 步骤
 
-```
-C="python3 /home/sb/remote_kit_1.7.1/tools/agent_client.py"; ME=<你的 agent_id>
-```
 1. **量修前抖动**（实时工具，读的是当前可见姿态）：
    ```
-   $C analyze_motion '{"agent_id":"'$ME'","bones":["left_hand"],"frame_range":[A,B]}' --pretty
+   /home/sb/remote_kit_1.7.1/tools/agent analyze_motion '{"agent_id":"<ME>","bones":["left_hand"],"frame_range":[A,B]}'
    ```
    记 `data.bones.<骨>.jitter_deg`（每帧偏离前后两帧中点的平均角度，度；匀速转动≈0，越小越稳）和 `version`。
 2. `claim` 该骨 × [A,B]（`granted=false` 就停，报告冲突）。
 3. **写入**：
    ```
-   $C clean_jitter '{"agent_id":"'$ME'","frame_range":[A,B],"bone":"left_hand",
-     "strength":1.0,"width":5,"blend":4,"expect_version":<version>}' --pretty
+   /home/sb/remote_kit_1.7.1/tools/agent clean_jitter '{"agent_id":"<ME>","frame_range":[A,B],"bone":"left_hand",
+     "strength":1.0,"width":5,"blend":4,"expect_version":<version>}'
    ```
 4. **复测**：第 1 步原样再调 → `jitter_deg` 应明显下降（通常降到 30–70%）。
    同时看 `peak_speed_deg`：降得比 jitter 还多 = 你把动作本身抹平了（width 太大）→

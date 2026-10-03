@@ -2,14 +2,19 @@
 
 ## 1. 连接与身份
 
-```bash
-C="python3 /home/sb/remote_kit_1.7.1/tools/agent_client.py"   # 任何目录都能跑
-ME="<你的 agent_id>"                                            # 协调者给的名字，全程不变
-$C ping '{"agent_id":"'$ME'"}' --pretty                         # 第一步：确认服务在、工具在册
+**每个工具调用都是一条完整的命令**（照抄格式，把 `<ME>` 换成你的 agent_id 字面量）：
 ```
-- **每个调用都带 `"agent_id":"$ME"`**。不带 = 匿名，会被别人的 claim 挡住，写的 op 也没有 owner。
+/home/sb/remote_kit_1.7.1/tools/agent ping '{"agent_id":"<ME>"}'
+/home/sb/remote_kit_1.7.1/tools/agent probe_anatomy '{"agent_id":"<ME>","part":"palm","side":"L","frame_range":[300,360]}'
+```
+- **不要用 shell 变量**（`ME=…`、`C=…`、`$C …`）：每条命令都在新 shell 里跑，变量不保留 →
+  agent_id 会变成空字符串（匿名写入、没有 owner）；本机 shell 是 zsh，带空格的 `$C` 还会直接
+  报 "no such file"。JSON 用**单引号**包住；JSON 里骨名的双引号写成 `\"`（例：
+  `"data_path":"pose.bones[\"hand_fk.R\"].rotation_quaternion"`）。
+- 每个调用都带 `"agent_id":"<ME>"`。不带 = 匿名，会被别人的 claim 挡住，写的 op 也没有 owner。
 - `ping` 的 `data.tools` 里没有你要的工具 → 服务没重启/代码没部署：停下报告，别绕路。
-- 服务是 headless Blender（没人看视口）。**验收只看数字。**
+- 服务是 headless Blender（没人看视口）。**验收只看数字。不要启动 Blender、不要跑 mcd.sh**
+  （内存只够 1 个 Blender，服务已经占着）。
 
 ## 2. 响应与错误码
 

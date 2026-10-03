@@ -18,10 +18,10 @@
    | 位置（torso_root、foot_ik） | `pose.bones["torso_root"].location` | 不传（三轴整体） |
 
    ```
-   $C restore_accent '{"agent_id":"'$ME'","frame_range":[A,B],
+   /home/sb/remote_kit_1.7.1/tools/agent restore_accent '{"agent_id":"<ME>","frame_range":[A,B],
      "data_path":"pose.bones[\"hand_fk.R\"].rotation_quaternion",
      "method":"ease_reshape","strength":0.5,"impact_frame":<冲击帧>,"blend":4,
-     "expect_version":<version>}' --pretty
+     "expect_version":<version>}'
    ```
    注意 JSON 里骨名的双引号要转义成 `\"`。
 4. **复测**：`analyze_motion` 同参数 → 冲击帧附近 `peak_speed_deg` 应上升（典型 +20–60%），

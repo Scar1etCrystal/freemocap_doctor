@@ -1,11 +1,17 @@
 # MoCap Doctor · Agent 工具手册（subagent 提示词用）
 
 socket 服务：`127.0.0.1:6211`，JSON-lines，一问一答。客户端：
-`python tools/agent_client.py <tool> '<json-args>'`（`--pretty` 格式化）。
-**先 `ping`**——服务默认不开，没开就让用户去 N 面板 → Agent 协作 → 启动服务。
+`/home/sb/remote_kit_1.7.1/tools/agent <tool> '<json-args>'`（远程套件，任何 shell/目录可用，
+自带 `--pretty`）或 `python tools/agent_client.py <tool> '<json-args>' --pretty`。
+**先 `ping`**——服务默认不开，没开就让用户去 N 面板 → Agent 协作 → 启动服务
+（远程：`bash tools/mcd.sh server-start <blend>`）。
+**每个调用带 `"agent_id":"<你的名字>"`**（多 agent 协作的身份；见"并发协议"）。
+子 agent 的任务提示词在 `docs/prompts/`（`tools_io.md` + 剧本 30–36）。
 
 返回包络：`{ok, tool, version, summary, data, warnings, truncated, hint, error:{code,message,fix}}`。
-错误码：`E_STALE`（数据版本过期，重读再写）`E_SCOPE`（超界）`E_UNKNOWN`（名字不存在）`E_RANGE`（帧范围非法）`E_TOOL`（执行异常）。
+错误码：`E_STALE`（你读之后别人改了与你范围相交的骨/祖先骨/帧，重读再写）`E_CLAIMED`（该骨×帧被别的
+agent 认领）`E_OWNER`（改别人的 op）`E_SCOPE`（超界）`E_UNKNOWN`（名字不存在）`E_RANGE`（帧范围非法）
+`E_TOOL`（执行异常；message 里常带"建议 frame_range=[a,b]"）。
 
 ## 铁律（违反即失败）
 
@@ -94,7 +100,7 @@ list_ops       确认新 op 在册
 
 | 工具 | 关键参数 | 干什么 |
 |---|---|---|
-| `hold_pose` | `bones` `frame_range` `target`+`values`/`ref_frame`/`world_dir` `world_axis` `secondary_axis` `dir_object` `dir_mode`(arrow/aim) `flip_guard_deg` `mode`(replace/clamp/outlier) `threshold_deg` `strength` `blend` `op_mode` `track_name` | 姿态保持/方向对齐 |
+| `hold_pose` | `bones` `frame_range` `target`+`values`/`ref_frame`/`world_dir` `world_axis` `secondary_axis` `dir_object` `dir_mode`(arrow/aim) `flip_guard_deg` `mode`(replace/clamp/outlier) `threshold_deg` `strength` `blend` `op_mode` `track_name` | 姿态保持/方向对齐（四元数骨与 Euler 手臂骨都支持；strength 只作用一次，0.5=一半，>1 超量） |
 | `reapply` | `op_id` `overrides`（params 局部覆盖 dict） | 同轨重写该 op：删旧 strip 写新的，op_id 不变 |
 | `clean_jitter` | `frame_range` `bone`\|`paths` `strength` `width` `blend` | 零相位平滑 |
 | `restore_accent` | `frame_range` `data_path` `index` `method`(ease_reshape/retime/hf_reinject/refilter) `strength` `impact_frame` `retime_speed` `retime_split` `raw_action` `blend` | 力量感（quat 四分量整体重塑） |
@@ -114,6 +120,48 @@ list_ops       确认新 op 在册
 | `ab_toggle` | — | 全部 agent 轨静音/放响 |
 | `revert` | `op_id` | 删 strip+action+轨+记录 |
 | `commit` | `op_id` | 标记已提交（**别调，用户的事**） |
+
+### 读工具：快照类 vs 实时类（2026-10-03 补）
+
+| 类别 | 工具 | 数据来源 |
+|---|---|---|
+| 快照类 | describe / get_series / find_events / compare / snapshot / bake_range / get_joint_angles / list_intervals / validate / get_overview | 最初烘焙的 npz（原始动作），**修复后不变** |
+| 实时类 | probe_anatomy / analyze_motion / compare_motion / chain_lag / slide_report / effect_check | 当前可见姿态（含全部修复）——**修后复测只用这些** |
+
+### 新工具（2026-10-03）
+
+| 工具 | 类型 | 关键参数 | 干什么 / 验收看什么 |
+|---|---|---|---|
+| `analyze_motion` | 读 | `bones`/`chain` `frame_range` `main_bone` `onset_frame` `stop_frame` `baseline_op` | 主通道 onset/peak/stop、幅度、反向位移、过冲、每骨 `jitter_deg`；`suggest.<工具>.args` 可直接用 |
+| `compare_motion` | 读 | `a:{bones/chain,frame_range}` `b:{…}` `mirror` `bone_map` `space` `trim` | 两段动作逐帧角差 `err_inner_deg`（复制/镜像验收；a 放目标窗） |
+| `chain_lag` | 读 | `bones`/`chain` `frame_range` `max_lag` `signal` | 每骨相对链内父骨的滞后帧数（只信 `reliable=true`） |
+| `slide_report` | 读 | `side` `frame_range` `threshold_mm` | 每段接触 foot_ik 水平漂移 `drift_mm`（**毫米**），flagged 行带 foot_lock 参数 |
+| `motion_copy` | 写 | `bones`/`chain` `src_range` `dst_start`/`dst_range`/`time_scale` `mirror` `bone_map` `space`(local/world) `channels`(rot/rot+loc) `mode`(replace/add) | 动作搬到别的时间/另一侧/别的部位；镜像用 rest 标定的 F=Rest_src⁻¹·S·Rest_dst |
+| `anticipation` | 写 | `bones`/`chain` `frame_range` `main_bone` `amount` `lead` `delay` | 发力前反向小动 + 起点后移 + 时间重映射补回总时长 |
+| `follow_through` | 写 | 同上 + `stop_frame` `amount` `period` `decay` `cycles` `propagate` | 停止点后衰减振荡 |
+| `overshoot` | 写 | 同上 + `amount` `peak_after` `settle` | 停太急 → 冲过头一点再回位（单瓣） |
+| `overlap` | 写 | `bones`/`chain` `frame_range` `delay` `max_delay` `depths` | 骨链错时：子骨取 t−lag 的局部旋转，lag=min(深度×delay,max_delay) |
+| `time_warp` | 写 | `bones`/`chain` `frame_range` `map` 或 `speed`+`pivot` `ease` | 时间重映射，窗口两端恒等 |
+| `foot_lock` | 写 | `interval`("contact.R:7") 或 `side`+`frame_range`, `lock`(xy/xy+rot/pos/pos+rot) `ref` | foot_ik 在接触段钉在参考帧世界位置（xy 默认保留高度） |
+| `claim` / `release` / `list_claims` | 管理 | `bones`/`chain` `frames` `ttl_s` `strict` `check_only` | 并发租约（见下） |
+| `plan_scopes` | 读 | `tasks:[{name, bones/chain, frames}]` | 派单前体检：两两冲突 + 建议并行批次 |
+
+所有新写工具：只写 `frame_range`（motion_copy 是目标窗）以内；支持 `dry_run:true`；参数全录可
+`reapply`；四元数骨与 Euler 骨都支持。
+
+### 并发协议（任务1，2026-10-03）
+
+- **claim**（咨询性租约，不是锁）：`{"agent_id","bones"|"chain","frames":[a,b],"ttl_s":900}`。
+  同骨 + 帧重叠的别人 → 不批（`granted=false` + `conflicts`）；父子骨重叠 → 批但给 related
+  警告（`strict:true` 则不批）；`check_only:true` 只查不占。15 分钟无活动自动过期；你的每次
+  claim/写入都续期。
+- **写入**：落在别人 claim 里 → `E_CLAIMED`；你没 claim 但范围空闲 → 自动认领（warnings 提示）。
+- **expect_version**：写工具按 scope 判定——期间只有别人改了**同骨或其祖先骨、帧重叠**的东西
+  （或 GUI 里的外部编辑）才 `E_STALE`；别人在别处写会放行。读工具仍严格。读工具（工具内部的
+  frame_set）不再推高版本号。
+- **owner**：op 记录写它的 agent_id；别人 revert/reapply/set_influence → `E_OWNER`。
+  `ab_toggle` 带 agent_id 只拨自己的轨。
+- **plan_scopes**：协调者派单前把计划的 scope 过一遍，按 `waves` 分批（父骨任务先做）。
 
 ## RIG 角色名 → 骨名（`bones` 参数用角色名或字面骨名皆可）
 
@@ -144,3 +192,19 @@ finger_{l,r}_thumb{1..3}→thumb.0N.{L,R}`（thumb 无 f_ 前缀）
   或 `"aim"`（骨指向物体位置）；物体可 k 帧 → 逐帧目标
 - 力量感只认"已滤波后的曲线"：源数据的高频找不回来，用 ease_reshape
 - 修完一定 re-probe 报 err 数值 + 告诉用户看哪几帧；"看到才算数"
+
+### 2026-10-03 实测补充（骨架事实 + 已修复的 bug）
+
+- **旋转模式不统一**：`upper_arm_fk/forearm_fk` = Euler XYZ，`shoulder` = Euler YXZ，其余控制骨是四元数。
+  COMBINE 下四元数 delta 右乘、Euler/位置 delta 相加。restore_accent 对 Euler 骨用
+  `rotation_euler` + `index`（逐分量）。
+- **腿是 IK**（thigh_parent["IK_FK"]=0）：有效腿部控制骨只有 `foot_ik.L/R`，`thigh_fk/shin_fk/foot_fk`
+  写了看不见。手臂是 FK。
+- **手指不是 hand_fk 的子骨**（中间是 MCH-*_drv ← ORG-hand，ORG-hand 复制 hand_fk）；上臂也不是
+  shoulder 的子骨。链深度/祖先关系用"语义父骨"（agent_pose.semantic_parent）。
+- 已修复：clean_jitter 对四元数骨写分量差（会把骨转 150°+，抖动反增 20–120 倍）；clean_jitter 对
+  Euler 骨漏掉旋转；hold_pose strength 被作用两次；hold_pose 拒绝 Euler 骨；set_influence 不缩放
+  Euler/位置 delta；**NLA auto-blend**（部分重叠的两条修复会互相削弱：实测旧修复偏 16°、新修复
+  差 53°——现在所有 strip 的 blend 恒为 0，写入前后快照还原）；effect_check 默认采样落在 taper
+  端点（必报"1/3 帧有变化"）；Linux 上 `F:/…` 数据目录被当成相对路径（op 日志写进怪名目录，
+  blend 里的修复全变"未登记"）。

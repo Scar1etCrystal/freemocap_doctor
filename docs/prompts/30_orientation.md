@@ -5,14 +5,9 @@
 
 ## 你要做的事（按顺序，别跳步）
 
-```
-C="python3 /home/sb/remote_kit_1.7.1/tools/agent_client.py"
-ME=<你的 agent_id>
-```
-
 1. **探查（修前基线）**
    ```
-   $C probe_anatomy '{"agent_id":"'$ME'","part":"palm","side":"L","frame_range":[A,B],"toward":[0,-1,0]}' --pretty
+   /home/sb/remote_kit_1.7.1/tools/agent probe_anatomy '{"agent_id":"<ME>","part":"palm","side":"L","frame_range":[A,B],"toward":[0,-1,0]}'
    ```
    记下：`data.err_inner_deg`（修前误差）、`data.owner_bone`、`data.confidence`、
    `data.secondary_axis`、响应顶层 `version`。
@@ -22,16 +17,16 @@ ME=<你的 agent_id>
 
 2. **认领**
    ```
-   $C claim '{"agent_id":"'$ME'","bones":["<owner_bone>"],"frames":[A,B]}' --pretty
+   /home/sb/remote_kit_1.7.1/tools/agent claim '{"agent_id":"<ME>","bones":["<owner_bone>"],"frames":[A,B]}'
    ```
    `data.granted=false` → 有人在改，报告冲突对象（`data.conflicts`），结束。不要 force。
 
 3. **写入**（world_dir + 逐帧 probe 轴 + 双轴）
    ```
-   $C hold_pose '{"agent_id":"'$ME'","bones":["<owner_bone>"],"frame_range":[A,B],
+   /home/sb/remote_kit_1.7.1/tools/agent hold_pose '{"agent_id":"<ME>","bones":["<owner_bone>"],"frame_range":[A,B],
      "target":"world_dir","world_dir":[0,-1,0],
      "world_axis":"probe:palm.L","secondary_axis":"probe:finger_dir.L",
-     "mode":"replace","blend":4,"expect_version":<version>}' --pretty
+     "mode":"replace","blend":4,"expect_version":<version>}'
    ```
    主轴/次轴对照表（**照抄，别自己发明**）：
 
@@ -47,13 +42,13 @@ ME=<你的 agent_id>
 
 4. **复测（必须独立）**：把第 1 步原样再调一遍 → `err_inner_deg`（修后）。
    目标 < 5°。若 5–15°：`reapply` 调参（见下），**不要再叠一个 hold_pose**。
-5. **自查**：`$C list_ops '{"agent_id":"'$ME'"}'` → 你的 op 在 `fixes` 里、`status=preview`、`alive=true`、`owner=$ME`。
-6. **存盘 + 释放**：`$C save '{"agent_id":"'$ME'"}'`，`$C release '{"agent_id":"'$ME'"}'`。
+5. **自查**：`/home/sb/remote_kit_1.7.1/tools/agent list_ops '{"agent_id":"<ME>"}'` → 你的 op 在 `fixes` 里、`status=preview`、`alive=true`、`owner=<ME>`。
+6. **存盘 + 释放**：`/home/sb/remote_kit_1.7.1/tools/agent save '{"agent_id":"<ME>"}'`，`/home/sb/remote_kit_1.7.1/tools/agent release '{"agent_id":"<ME>"}'`。
 
 ## 调参（reapply，op_id 不变）
 
 ```
-$C reapply '{"agent_id":"'$ME'","op_id":"<op_id>","overrides":{"blend":8}}' --pretty
+/home/sb/remote_kit_1.7.1/tools/agent reapply '{"agent_id":"<ME>","op_id":"<op_id>","overrides":{"blend":8}}'
 ```
 - 两端过渡太生硬 → `blend` 加大（4→8）。
 - 只想压住偶发的坏帧、保留原动作 → `{"mode":"clamp","threshold_deg":10}` 或 `{"mode":"outlier","threshold_deg":15}`。

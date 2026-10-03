@@ -18,13 +18,10 @@
 
 ## 步骤
 
-```
-C="python3 /home/sb/remote_kit_1.7.1/tools/agent_client.py"; ME=<你的 agent_id>
-```
 1. **dry_run 预演**（不写任何东西）：
    ```
-   $C motion_copy '{"agent_id":"'$ME'","chain":"arm.L","src_range":[405,450],
-     "dst_start":405,"mirror":true,"dry_run":true}' --pretty
+   /home/sb/remote_kit_1.7.1/tools/agent motion_copy '{"agent_id":"<ME>","chain":"arm.L","src_range":[405,450],
+     "dst_start":405,"mirror":true,"dry_run":true}'
    ```
    看 `data.metrics.mirror_map`（实际 源→目标 映射）、`time_scale`、`notes`（警告，比如 IK 腿）。
    映射不对就改 `bone_map`，别硬写。
@@ -42,7 +39,7 @@ C="python3 /home/sb/remote_kit_1.7.1/tools/agent_client.py"; ME=<你的 agent_id
    跨部位：`"bone_map":{"spine_fk":"neck"}`（复制的是相同的关节局部旋转值）。
 4. **验收**：把返回的 `data.metrics.verify.args` **原样**传给 `compare_motion`：
    ```
-   $C compare_motion '<verify.args 的 JSON>' --pretty
+   /home/sb/remote_kit_1.7.1/tools/agent compare_motion '<verify.args 的 JSON>'
    ```
    `err_inner_deg < 0.05` = 到位（四元数骨有 ~0.005–0.03° 的 float32 噪声，正常）。
    自己写 compare_motion 时注意：**a 放目标窗、b 放源窗**（b 会被重采样到 a 的帧上；反过来
@@ -52,7 +49,7 @@ C="python3 /home/sb/remote_kit_1.7.1/tools/agent_client.py"; ME=<你的 agent_id
 ## 改位置/改参数（reapply，op_id 不变）
 
 ```
-$C reapply '{"agent_id":"'$ME'","op_id":"<op_id>","overrides":{"dst_start":760}}' --pretty
+/home/sb/remote_kit_1.7.1/tools/agent reapply '{"agent_id":"<ME>","op_id":"<op_id>","overrides":{"dst_start":760}}'
 ```
 也可以改 `frame_range`（= 目标窗，长度不同就自动时间缩放）、`mode`、`space`、`strength`、`blend`。
 

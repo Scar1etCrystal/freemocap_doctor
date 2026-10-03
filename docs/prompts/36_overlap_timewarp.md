@@ -8,18 +8,15 @@
 做法：每根骨在 t 帧取"原动作在 t − lag 帧"的**局部**旋转，lag = min(深度×delay, max_delay)，
 链根不动。小数 delay 用 slerp 插值。
 
-```
-C="python3 /home/sb/remote_kit_1.7.1/tools/agent_client.py"; ME=<你的 agent_id>
-```
 1. **dry_run 拿内段**（不写）：
    ```
-   $C overlap '{"agent_id":"'$ME'","chain":"arm.R","frame_range":[20,110],"delay":1.0,
-     "max_delay":3.0,"blend":4,"dry_run":true}' --pretty
+   /home/sb/remote_kit_1.7.1/tools/agent overlap '{"agent_id":"<ME>","chain":"arm.R","frame_range":[20,110],"delay":1.0,
+     "max_delay":3.0,"blend":4,"dry_run":true}'
    ```
    记 `data.metrics.inner_frames`（= 有效区）、每骨 `lag_frames`、`skipped_bones`、`warnings`。
 2. **修前测滞后**：
    ```
-   $C chain_lag '{"agent_id":"'$ME'","chain":"arm.R","frame_range":<inner_frames>}' --pretty
+   /home/sb/remote_kit_1.7.1/tools/agent chain_lag '{"agent_id":"<ME>","chain":"arm.R","frame_range":<inner_frames>}'
    ```
    记每级 `levels[*].lag_frames` 和 `reliable`。
 3. `claim` 链 × [A,B]，然后去掉 dry_run、加 expect_version 写入。

@@ -7,7 +7,7 @@
 
 1. **体检**：
    ```
-   $C slide_report '{"agent_id":"'$ME'","side":"R","threshold_mm":10}' --pretty
+   /home/sb/remote_kit_1.7.1/tools/agent slide_report '{"agent_id":"<ME>","side":"R","threshold_mm":10}'
    ```
    `data.rows` 按漂移从大到小排；每行有 `interval`（如 `contact.R:17`）、`frames`、
    `drift_mm`（水平漂移，**毫米**）、`flagged`、`foot_lock_args`。只处理 `flagged=true` 的行，
@@ -15,7 +15,7 @@
 2. `claim bones=["foot_ik.R"] frames=[a−blend, b+blend]`（interval 模式会向两侧各扩 blend 帧写入）。
 3. **踩实**：
    ```
-   $C foot_lock '{"agent_id":"'$ME'","interval":"contact.R:17","lock":"xy","expect_version":<v>}' --pretty
+   /home/sb/remote_kit_1.7.1/tools/agent foot_lock '{"agent_id":"<ME>","interval":"contact.R:17","lock":"xy","expect_version":<v>}'
    ```
    - `lock="xy"`（默认）：只钉水平位置，**保留高度**——脚跟抬起、脚尖滚动不受影响。首选。
    - `"xy+rot"`：再钉住脚的朝向（脚在地上拧来拧去时用）。
