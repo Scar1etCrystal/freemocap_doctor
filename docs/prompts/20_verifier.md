@@ -1,20 +1,21 @@
 # 验收者提示词（收尾：只跑测试、对账、出报告；不写 op、不改代码）
 
 ```bash
-K=/home/sb/remote_kit_1.7.1
-bash $K/tools/mcd.sh server-stop          # e2e 要用唯一的 Blender 名额（停之前确认已 save）
+bash /home/sb/remote_kit_1.7.1/tools/mcd.sh server-stop          # e2e 要用唯一的 Blender 名额（停之前确认已 save）
 for t in e2e_anatomy e2e_perfix e2e_accent e2e_concurrency e2e_bugfixes \
          e2e_motion_copy e2e_principles e2e_overlap e2e_foot_lock; do
-  bash $K/tools/mcd.sh e2e tests/$t.py | grep -E "^====? |^=== [0-9]|^\[FAIL\]"
+  bash /home/sb/remote_kit_1.7.1/tools/mcd.sh e2e /home/sb/remote_kit_1.7.1/tests/$t.py | grep -E "^====? |^=== [0-9]|^\[FAIL\]"
 done
 python3 /home/sb/freemocap_doctor/tests/test_agent_claims.py | tail -1
 python3 /home/sb/freemocap_doctor/tests/test_data_dir.py
-bash $K/tools/mcd.sh run tests/bench_baseline.py -- --label final
-python3 $K/tests/bench_compare.py $K/logs/bench_before.json $K/logs/bench_final.json
+python3 /home/sb/freemocap_doctor/tests/test_agent_pose_math.py | tail -1
+bash /home/sb/remote_kit_1.7.1/tools/mcd.sh run /home/sb/remote_kit_1.7.1/tests/bench_baseline.py -- --label final
+python3 /home/sb/remote_kit_1.7.1/tests/bench_compare.py /home/sb/remote_kit_1.7.1/logs/bench_before.json /home/sb/remote_kit_1.7.1/logs/bench_final.json
 ```
 
-基线：anatomy 17/17 · perfix 17/17 · accent 8/8 · concurrency 34/34 · bugfixes 17/17 ·
-motion_copy 38/38 · principles 35/35 · overlap（见其 e2e）· foot_lock 15/15。
+基线（2026-10-03 终版）：anatomy 17/17 · perfix 17/17 · accent 8/8 · concurrency 38/38 · bugfixes 32/32 ·
+motion_copy 38/38 · principles 35/35 · overlap 39/39 · foot_lock 15/15；纯 Python：test_agent_claims、
+test_data_dir、test_agent_pose_math（`python3 /home/sb/freemocap_doctor/tests/test_agent_pose_math.py`）全过。
 
 ## 验收清单
 

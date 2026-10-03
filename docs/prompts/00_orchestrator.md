@@ -3,9 +3,8 @@
 ## 0. 开工前
 
 ```bash
-K=/home/sb/remote_kit_1.7.1
-bash $K/tools/mcd.sh status                     # 内存、Blender 锁
-bash $K/tools/mcd.sh server-start <工作文件.blend>  # 起 headless 服务（占用唯一的 Blender 名额）
+bash /home/sb/remote_kit_1.7.1/tools/mcd.sh status                     # 内存、Blender 锁
+bash /home/sb/remote_kit_1.7.1/tools/mcd.sh server-start <工作文件.blend>  # 起 headless 服务（占用唯一的 Blender 名额）
 /home/sb/remote_kit_1.7.1/tools/agent ping '{}'  # 工具表里要有 claim / plan_scopes / 你要用的工具
 ```
 - 机器只有 ~8GB：**同时只能有 1 个 Blender**。服务开着时不能跑 e2e（mcd.sh 会排队等）。
@@ -66,4 +65,4 @@ scope：<骨/链> × [A,B]。只许写这里。先 claim。
 ## 5. 收尾
 
 **等所有 agent 的报告都到了**（不是只看它 release 了——有的 agent release 后还会再复测一次）
-再 `bash $K/tools/mcd.sh server-stop`（之前先 save！）→ 需要回归时跑 `20_verifier.md`。
+再 `bash /home/sb/remote_kit_1.7.1/tools/mcd.sh server-stop`（之前先 save！）→ 需要回归时跑 `20_verifier.md`。
