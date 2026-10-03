@@ -1316,7 +1316,7 @@ def ensure_layout(settings=None, scene=None) -> dict:
     rig = _rig_armature(settings, scene)
     if rig is None:
         return {"migrated": 0, "rows": 0, "rig": None}
-    mig = agent_ops.migrate_legacy_tracks(rig, settings.data_directory or None)
+    mig = agent_ops.migrate_legacy_tracks(rig, _data_dir(settings) or None)
     if mig.get("moved"):
         _bump_ops_rev_from(settings)
     rows = sync_fixes_list(settings, scene)

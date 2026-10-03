@@ -162,12 +162,26 @@ def project_data_dir(work_filepath):
     return work.parent / ".mocap_doctor" / _safe_name(work.stem)
 
 
+def _usable_data_dir(path_text) -> bool:
+    """存的目录只有"在本系统上是绝对路径且存在"才算数。
+
+    Windows 写进 .blend 的 ``F:/...`` 在 Linux 上是**相对**路径：is_dir() 会按
+    当前工作目录解析——只要哪段代码曾按原样 mkdir 过（向导步骤写报告/
+    检查点就会），它就"存在"了，自愈从此失效：op 日志去了 CWD 下的怪名
+    目录，blend 里的 agent strip 全变成"未登记"孤儿（2026-10-03 在远程
+    套件上实测复现）。"""
+    if not path_text:
+        return False
+    p = Path(str(path_text))
+    return p.is_absolute() and p.is_dir()
+
+
 def resolve_data_dir(settings):
     """settings.data_directory 存的是绝对路径——工作文件挪到别的机器/盘符
     后它就是死路径（Linux 上 ``F:\\...`` 只会变成怪名目录）。还在就用；
     不在就按当前 blend 位置重推并回写自愈。"""
     stored = settings.data_directory or ""
-    if stored and Path(stored).is_dir():
+    if _usable_data_dir(stored):
         return stored
     fp = bpy.data.filepath or getattr(settings, "work_filepath", "") or ""
     if fp:
@@ -179,7 +193,7 @@ def resolve_data_dir(settings):
 
 
 def ensure_project_directories(settings):
-    root = Path(settings.data_directory)
+    root = Path(resolve_data_dir(settings))
     for name in ("checkpoints", "reports", "recovery", "logs", "tmp"):
         (root / name).mkdir(parents=True, exist_ok=True)
     return root
@@ -217,7 +231,7 @@ def save_manifest(scene):
     if not settings.initialized or not settings.data_directory:
         return
     atomic_write_json(
-        Path(settings.data_directory) / "project.json",
+        Path(resolve_data_dir(settings)) / "project.json",
         {
             "schema_version": "mocap_doctor_project_v1",
             "state_authority": "blend_scene",
