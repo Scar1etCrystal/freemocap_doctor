@@ -1312,6 +1312,158 @@ def _desired_world_dir(
     return out, mets
 
 
+def _desired_world_dir_multi(
+    scene: Any,
+    armature: Any,
+    bones: Sequence[str],
+    frames: Sequence[int],
+    dir_vec: np.ndarray | None,
+    axis: Any = "Y",
+    secondary_axis: Any = None,
+    dir_object: str | None = None,
+    dir_mode: str = "arrow",
+    flip_guard_deg: float = 150.0,
+) -> dict:
+    """_desired_world_dir for several bones in ONE frame sweep (任务2).
+
+    Every bone's per-frame math is the single-bone body verbatim; the frame is
+    evaluated once and shared, and the probe-axis directions (functions of the
+    evaluated scene only, not of the bone) are computed once per frame.
+    Output is bit-identical to calling _desired_world_dir per bone.
+    Returns {bone: (wxyz (T,4), metrics)}.
+    """
+    from mathutils import Matrix, Vector
+
+    from .animation import preserve_scene_frame, set_scene_frame
+
+    lp_fn = _probe_axis_fn(axis)
+    ls_fn = _probe_axis_fn(secondary_axis)
+    lp_static = None if lp_fn else _axis_vec(axis).normalized()
+    ls_static = None if ls_fn else _axis_vec(secondary_axis)
+    dual = ls_static is not None or ls_fn is not None
+    if dual and lp_static is not None:
+        ls_o = ls_static - lp_static * ls_static.dot(lp_static)
+        if ls_o.length < 1e-4:
+            raise RuntimeError("secondary_axis 与主轴平行，退化成单轴")
+    st = {}
+    for bone in bones:
+        pb = armature.pose.bones[bone]
+        parent = pb.parent
+        st[bone] = {
+            "pb": pb,
+            "target": _target_fn(scene, armature, pb, dir_vec, dir_object,
+                                 dir_mode),
+            "out": np.zeros((len(frames), 4)),
+            "mets": {"align_max_deg": 0.0, "align_mean_deg": 0.0,
+                     "flipped_frames": 0, "skipped_flip_frames": 0,
+                     "secondary_keep_deg": 0.0, "probe_fallback_frames": 0},
+            "angles": [], "lp_prev": None, "ls_prev": None,
+            "parent": parent,
+            "rel_rest": ((parent.bone.matrix_local.inverted()
+                          @ pb.bone.matrix_local) if parent is not None
+                         else pb.bone.matrix_local.copy()),
+        }
+    arm_inv = armature.matrix_world.inverted()
+    with preserve_scene_frame(scene):
+        for i, f in enumerate(frames):
+            set_scene_frame(scene, int(f))
+            w_p = lp_fn(armature, scene) if lp_fn is not None else None
+            w_s = ls_fn(armature, scene) if (dual and ls_fn is not None) \
+                else None
+            for bone in bones:
+                b = st[bone]
+                pb = b["pb"]
+                mets = b["mets"]
+                cur_world = armature.matrix_world @ pb.matrix
+                cur_rot = cur_world.to_quaternion()
+                t = b["target"]().normalized()
+                if lp_fn is not None:
+                    w = w_p
+                    if w is None or w.length < 1e-6:
+                        if b["lp_prev"] is None:
+                            raise RuntimeError(
+                                f"probe 轴 {axis!r} 在第 {f} 帧推不出方向")
+                        lp = b["lp_prev"]
+                        mets["probe_fallback_frames"] += 1
+                    else:
+                        lp = (cur_rot.inverted() @ w).normalized()
+                        b["lp_prev"] = lp
+                else:
+                    lp = lp_static
+                cur_P = cur_rot @ lp
+                dot = max(-1.0, min(1.0, float(cur_P.normalized() @ t)))
+                ang = float(np.degrees(np.arccos(dot)))
+                b["angles"].append(ang)
+                if not dual:
+                    if ang > float(flip_guard_deg):
+                        desired_pose = pb.matrix.copy()
+                        mets["skipped_flip_frames"] += 1
+                    else:
+                        align = cur_P.rotation_difference(t)
+                        desired_world = \
+                            align.to_matrix().to_4x4() @ cur_world
+                        desired_pose = arm_inv @ desired_world
+                else:
+                    if ls_fn is not None:
+                        w2 = w_s
+                        if w2 is None or w2.length < 1e-6:
+                            if b["ls_prev"] is None:
+                                raise RuntimeError(
+                                    f"probe 次轴 {secondary_axis!r} 在第 {f}"
+                                    " 帧推不出方向")
+                            ls = b["ls_prev"]
+                            mets["probe_fallback_frames"] += 1
+                        else:
+                            ls = (cur_rot.inverted() @ w2).normalized()
+                            b["ls_prev"] = ls
+                    else:
+                        ls = ls_static
+                    ls_o = ls - lp * ls.dot(lp)
+                    if ls_o.length < 1e-4:
+                        raise RuntimeError(
+                            f"第 {f} 帧次轴与主轴平行，双轴解算退化")
+                    ls_o.normalize()
+                    cur_S = cur_rot @ ls_o
+                    s_des = cur_S - t * cur_S.dot(t)
+                    if s_des.length < 1e-4:
+                        tmp = t.cross(Vector((0.0, 0.0, 1.0)))
+                        if tmp.length < 1e-3:
+                            tmp = t.cross(Vector((0.0, 1.0, 0.0)))
+                        s_des = tmp
+                    s_des.normalize()
+                    mets["secondary_keep_deg"] = max(
+                        mets["secondary_keep_deg"],
+                        float(np.degrees(np.arccos(max(-1.0, min(
+                            1.0, float(cur_S.normalized() @ s_des)))))))
+                    Lr = Matrix((lp, ls_o, lp.cross(ls_o)))
+                    W = Matrix((t, s_des, t.cross(s_des)))
+                    R = W.transposed() @ Lr
+                    desired_world = R.to_4x4()
+                    desired_world.translation = cur_world.translation
+                    desired_pose = arm_inv @ desired_world
+                if b["parent"] is not None:
+                    basis = (b["rel_rest"].inverted()
+                             @ pb.parent.matrix.inverted() @ desired_pose)
+                else:
+                    basis = pb.bone.matrix_local.inverted() @ desired_pose
+                q = basis.to_quaternion()
+                b["out"][i] = (q.w, q.x, q.y, q.z)
+    res = {}
+    for bone in bones:
+        b = st[bone]
+        out, mets, angles = b["out"], b["mets"], b["angles"]
+        if angles:
+            mets["align_max_deg"] = round(max(angles), 1)
+            mets["align_mean_deg"] = round(float(np.mean(angles)), 1)
+            mets["flipped_frames"] = int(sum(
+                1 for a in angles if a > float(flip_guard_deg)))
+        for i in range(1, len(out)):
+            if float(np.dot(out[i - 1], out[i])) < 0.0:
+                out[i] = -out[i]
+        res[bone] = (out, mets)
+    return res
+
+
 def hold_pose(
     armature: Any,
     base_action: Any,
@@ -1383,6 +1535,18 @@ def hold_pose(
     if target == "from_frame" and ref_frame in (None, "auto"):
         ref_frame = _best_ref_frame(cur_by_bone, start)
 
+    world_multi = None
+    if target == "world_dir":
+        if scene is None or (world_dir is None and not dir_object):
+            raise RuntimeError("world_dir 需要 scene 与向量或 dir_object")
+        world_multi = _desired_world_dir_multi(
+            scene, armature, list(bones), frames,
+            np.asarray(world_dir, dtype=np.float64)
+            if world_dir is not None else None,
+            axis=world_axis, secondary_axis=secondary_axis,
+            dir_object=dir_object, dir_mode=dir_mode,
+            flip_guard_deg=flip_guard_deg)
+
     for bone in bones:
         cur = cur_by_bone[bone]
         path = bone_path(bone, "rotation_quaternion")
@@ -1401,15 +1565,7 @@ def hold_pose(
                 raise RuntimeError(f"{bone} 在 {rf} 帧无数据")
             desired = np.tile(ref[0], (n, 1))
         elif target == "world_dir":
-            if scene is None or (world_dir is None and not dir_object):
-                raise RuntimeError("world_dir 需要 scene 与向量或 dir_object")
-            desired, dmets = _desired_world_dir(
-                scene, armature, bone, frames,
-                np.asarray(world_dir, dtype=np.float64)
-                if world_dir is not None else None,
-                axis=world_axis, secondary_axis=secondary_axis,
-                dir_object=dir_object, dir_mode=dir_mode,
-                flip_guard_deg=flip_guard_deg)
+            desired, dmets = world_multi[bone]
             dir_metrics[bone] = dmets
         else:
             raise RuntimeError(f"未知 target：{target}")

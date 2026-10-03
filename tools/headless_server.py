@@ -33,7 +33,10 @@ def main():
     print(f"[headless] server={info} scene={scene.name} "
           f"frames={scene.frame_start}-{scene.frame_end}", flush=True)
     print("[headless] pumping... (kill 本进程即停)", flush=True)
-    while True:
+    loop = getattr(ab, "headless_pump_loop", None)
+    if loop is not None:          # 事件驱动：请求一到立刻处理（无 70ms 轮询延迟）
+        loop()
+    while True:                   # 旧扩展回退
         ab._pump()
         time.sleep(ab.TIMER_INTERVAL)
 

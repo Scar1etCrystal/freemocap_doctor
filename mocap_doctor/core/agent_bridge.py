@@ -36,6 +36,8 @@ from . import (agent_anatomy, agent_bake, agent_claims, agent_fx, agent_io,
 HOST = "127.0.0.1"
 PORT = 6211
 TIMER_INTERVAL = 0.07
+BUSY_INTERVAL = 0.005     # GUI timer: re-poll quickly right after serving
+_PUMP_BUSY = False
 WATCHDOG_INTERVAL = 2.0   # how often we check the pump is still ticking
 PREVIEW_TRACK = agent_ops.PREVIEW_TRACK   # legacy shared preview track
 COMMIT_TRACK = agent_ops.AGENT_TRACK_PREFIX
@@ -64,6 +66,11 @@ _JOURNAL = agent_claims.WriteJournal()
 _IN_TOOL = False            # True while a tool runs: its own frame_set must not bump
 _LAST_FRAME_SEEN = None     # frame-only depsgraph updates (scrub/playback) ≠ edits
 _ANC_CACHE: dict = {}       # armature name → {bone: ancestors(actual ∪ semantic)}
+# 任务2：信号库的输入是 npz 缓存 + 标注区间 + 设置，agent 写 delta 动不了其中
+# 任何一样——所以只有外部改动（GUI 里用户编辑）才让它失效，agent 写入不再
+# 触发 220ms 的重建（重建结果本来就逐位相同）。
+_STORE_EPOCH = 0
+_WAKE = threading.Event()   # socket 线程收到请求就叫醒 headless 主循环
 
 
 # ---------------------------------------------------------------------------
@@ -136,7 +143,8 @@ def get_store(force: bool = False):
     if armature is None:
         raise RuntimeError("没有识别到 RIG 骨架（settings.mmr_rig 为空，"
                            "且场景里没有 RIG-* 骨架）")
-    key = (armature.name, scene.frame_start, scene.frame_end, _DATA_VERSION)
+    key = (armature.name, scene.frame_start, scene.frame_end, _STORE_EPOCH,
+           str(_data_dir(settings)))
     if force or _STORE is None or _STORE_KEY != key:
         _STORE = agent_io.build_store_for_scene(
             scene, armature, settings,
@@ -176,8 +184,10 @@ def _bump_version(scene=None, depsgraph=None):
     now = time.monotonic()
     if now - _LAST_BUMP < 0.3:
         return
+    global _STORE_EPOCH
     _LAST_BUMP = now
     _DATA_VERSION += 1
+    _STORE_EPOCH += 1
     _JOURNAL.note(_DATA_VERSION, None, agent_claims.ALL, None, "external")
 
 
@@ -1179,14 +1189,16 @@ def _pump():
     callback silently unregisters it (that's the "server died" bug) - every
     failure path must return the interval so the pump keeps ticking.
     """
-    global _LAST_PUMP
+    global _LAST_PUMP, _PUMP_BUSY
     _LAST_PUMP = time.time()
+    _PUMP_BUSY = False
     try:
         while True:
             try:
                 sock_file, request = _requests.get_nowait()
             except queue.Empty:
                 break
+            _PUMP_BUSY = True
             try:
                 response = _dispatch(request)
                 response["id"] = request.get("id")
@@ -1198,7 +1210,23 @@ def _pump():
                 _STATUS["last_error"] = f"pump: {exc!r}"
     except Exception as exc:  # noqa: BLE001 - never propagate out of a timer
         _STATUS["last_error"] = f"pump-loop: {exc!r}"
-    return TIMER_INTERVAL if _running else None
+    if not _running:
+        return None
+    # 刚处理过请求 → 很快再看一眼（agent 常连发），空闲才回到常规间隔
+    return BUSY_INTERVAL if _PUMP_BUSY else TIMER_INTERVAL
+
+
+def headless_pump_loop(until=None):
+    """Background-mode main loop (tools/headless_server.py): sleep until the
+    socket thread enqueues a request, then drain immediately.  Replaces the
+    fixed 70 ms poll, so a tool call no longer waits up to a full tick before
+    it even starts.  ``until()`` lets tests stop the loop."""
+    while True:
+        _WAKE.wait(TIMER_INTERVAL)
+        _WAKE.clear()
+        _pump()
+        if until is not None and until():
+            return
 
 
 def _watchdog():
@@ -1223,6 +1251,7 @@ class _Handler(socketserver.StreamRequestHandler):
                 except json.JSONDecodeError:
                     continue
                 _requests.put((self.wfile, request))
+                _WAKE.set()
         finally:
             _STATUS["clients"] -= 1
 

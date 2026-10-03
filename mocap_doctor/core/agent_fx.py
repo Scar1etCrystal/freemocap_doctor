@@ -39,6 +39,22 @@ def _qconj(q):
     return out
 
 
+def _qmul_rows(a, b):
+    """Row-wise _qmul over (T,4) arrays.  Same expression, same evaluation
+    order, IEEE float64 elementwise → bit-identical to looping _qmul (numpy
+    ufuncs never fuse mul/sub into FMA), ~100× faster on long series."""
+    a = np.asarray(a, dtype=np.float64)
+    b = np.asarray(b, dtype=np.float64)
+    w1, x1, y1, z1 = a[:, 0], a[:, 1], a[:, 2], a[:, 3]
+    w2, x2, y2, z2 = b[:, 0], b[:, 1], b[:, 2], b[:, 3]
+    return np.stack([
+        w1 * w2 - x1 * x2 - y1 * y2 - z1 * z2,
+        w1 * x2 + x1 * w2 + y1 * z2 - z1 * y2,
+        w1 * y2 - x1 * z2 + y1 * w2 + z1 * x2,
+        w1 * z2 + x1 * y2 - y1 * x2 + z1 * w2,
+    ], axis=1)
+
+
 def delta_quat(desired: np.ndarray, base: np.ndarray) -> np.ndarray:
     """Per-frame relative rotation  conj(base) ⊗ desired  (wxyz, sign-continuous).
 
@@ -50,7 +66,10 @@ def delta_quat(desired: np.ndarray, base: np.ndarray) -> np.ndarray:
     base = np.asarray(base, dtype=np.float64)
     desired = desired / np.linalg.norm(desired, axis=1, keepdims=True)
     base = base / np.linalg.norm(base, axis=1, keepdims=True)
-    out = np.asarray([_qmul(_qconj(base[i]), desired[i]) for i in range(len(desired))])
+    conj = base.copy()
+    conj[:, 1:] = -conj[:, 1:]
+    out = (_qmul_rows(conj, desired) if len(desired)
+           else np.zeros((0, 4)))
     out = out / np.linalg.norm(out, axis=1, keepdims=True)
     for i in range(1, len(out)):
         if float(np.dot(out[i - 1], out[i])) < 0.0:
@@ -209,7 +228,7 @@ def swing_twist_deg(basis_quats: np.ndarray, axis: int = 1):
     # swing = q ⊗ conj(twist)
     tconj = t.copy()
     tconj[:, 1:] = -tconj[:, 1:]
-    sw = np.asarray([_qmul(q[i], tconj[i]) for i in range(len(q))])
+    sw = _qmul_rows(q, tconj) if len(q) else np.zeros((0, 4))
     sw = sw / np.linalg.norm(sw, axis=1, keepdims=True)
     ang = np.degrees(2.0 * np.arccos(np.clip(sw[:, 0], -1, 1)))
     # swing axis = (x,z) plane components (axis component is ~0)
