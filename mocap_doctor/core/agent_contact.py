@@ -255,12 +255,16 @@ def ground_report(scene, armature, *, frame_range, floor_z, side=None,
             if not idx:
                 continue
             r_c = rel[idx]
+            partial = ca < a or cb > b       # 只量到这段接触的一部分：不下结论、不给建议
             row = {"interval": f"contact.{s}:{k}", "frames": [ca, cb],
                    "measured": [frames[idx[0]], frames[idx[-1]]],
                    "rel_min_mm": round(float(r_c.min()), 1),
                    "rel_max_mm": round(float(r_c.max()), 1),
-                   "floating": bool(r_c.min() > thr),
-                   "sunk": bool(r_c.min() < -thr)}
+                   "floating": bool(r_c.min() > thr) and not partial,
+                   "sunk": bool(r_c.min() < -thr) and not partial}
+            if partial:
+                row["partial"] = True
+                row["note"] = f"帧段只盖住 {row['measured']}，要判断这段接触就把 frame_range 扩到 [{ca},{cb}]"
             contacts.append(row)
             if row["floating"]:
                 suggest.append({"frame_range": [max(lo_clip, ca - int(blend)),
