@@ -86,6 +86,11 @@ for step in STEPS:
         no_rb = "--no-rb" in ARGV and rbw is not None and rbw.enabled
         if no_rb:                       # experiment: physics suspended during the step
             rbw.enabled = False
+        prof = None
+        if "--profile" in ARGV and ARGV[ARGV.index("--profile") + 1] == step:
+            import cProfile
+            prof = cProfile.Profile()
+            prof.enable()
         t0 = time.perf_counter()
         try:
             r = bpy.ops.mocap_doctor.run_step(step_id=step)
@@ -93,6 +98,13 @@ for step in STEPS:
         except Exception as exc:  # noqa: BLE001
             r, msg = f"EXC {exc!r}"[:160], ""
         times.append(time.perf_counter() - t0)
+        if prof is not None:
+            import io
+            import pstats
+            prof.disable()
+            buf = io.StringIO()
+            pstats.Stats(prof, stream=buf).sort_stats("cumulative").print_stats(35)
+            print("PROFILE " + step + "\n" + buf.getvalue(), flush=True)
         if no_rb:
             rbw.enabled = True
         outs.append((str(r), msg[:100], digest(), obj_digest()))
