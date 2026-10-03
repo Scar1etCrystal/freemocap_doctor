@@ -37,6 +37,12 @@ def main():
     before = json.load(open(sys.argv[1], encoding="utf-8"))
     after = json.load(open(sys.argv[2], encoding="utf-8"))
     diffs = []
+    # 工具表增减不是数值输出：单独报告，不算 golden 差异
+    tb_ = (before["golden"].get("ping") or {}).pop("tools", None)
+    ta_ = (after["golden"].get("ping") or {}).pop("tools", None)
+    if tb_ is not None and ta_ is not None and tb_ != ta_:
+        print(f"INFO tools added={sorted(set(ta_) - set(tb_))} "
+              f"removed={sorted(set(tb_) - set(ta_))}")
     walk(before["golden"], after["golden"], "golden", diffs)
     tb, ta = before["timings"], after["timings"]
     print(f"{'benchmark':<40s} {'before ms':>11s} {'after ms':>11s} {'speedup':>8s}")

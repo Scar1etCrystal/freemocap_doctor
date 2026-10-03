@@ -30,8 +30,8 @@ from typing import Any, Mapping, Sequence
 import bpy
 import numpy as np
 
-from . import (agent_anatomy, agent_bake, agent_fx, agent_io, agent_ops,
-             agent_query)
+from . import (agent_anatomy, agent_bake, agent_claims, agent_fx, agent_io,
+             agent_ops, agent_query)
 
 HOST = "127.0.0.1"
 PORT = 6211
@@ -57,6 +57,13 @@ _STORE_KEY = None
 _LAST_TOOL = ""
 _LAST_PUMP = 0.0          # wall-clock of last successful _pump tick
 _STATUS = {"clients": 0, "last_tool": "", "last_error": ""}
+
+# ---- 并发（任务1）：租约 + 写入日志 + 工具执行期不让 depsgraph 抖版本 ----
+_LEASES = agent_claims.LeaseTable()
+_JOURNAL = agent_claims.WriteJournal()
+_IN_TOOL = False            # True while a tool runs: its own frame_set must not bump
+_LAST_FRAME_SEEN = None     # frame-only depsgraph updates (scrub/playback) ≠ edits
+_ANC_CACHE: dict = {}       # armature name → {bone: ancestors(actual ∪ semantic)}
 
 
 # ---------------------------------------------------------------------------
@@ -145,16 +152,41 @@ def data_version() -> int:
     return _DATA_VERSION
 
 
-def _bump_version(scene=None, _d=None):
+def _bump_version(scene=None, depsgraph=None):
     """depsgraph_update_post fires on EVERY depsgraph event - frame scrub,
     influence drag, cursor blink.  Throttle so the version still means
-    'something changed' instead of 'wall clock moved'."""
-    global _DATA_VERSION, _LAST_BUMP
+    'something changed' instead of 'wall clock moved'.
+
+    Not counted (任务1): updates caused by a tool's own frame_set while it
+    runs (reads must not invalidate other agents' versions - writes bump
+    explicitly via _note_write), and pure frame changes (scrub / playback)
+    that carry no Action edit.  What is left is an EXTERNAL change (the user
+    edited something) → journal row with unscoped bones = stale for all."""
+    global _DATA_VERSION, _LAST_BUMP, _LAST_FRAME_SEEN
+    if _IN_TOOL:
+        return
+    try:
+        frame = int(scene.frame_current) if scene is not None else None
+    except Exception:
+        frame = None
+    frame_moved = frame is not None and frame != _LAST_FRAME_SEEN
+    _LAST_FRAME_SEEN = frame
+    if frame_moved and not _has_action_update(depsgraph):
+        return
     now = time.monotonic()
     if now - _LAST_BUMP < 0.3:
         return
     _LAST_BUMP = now
     _DATA_VERSION += 1
+    _JOURNAL.note(_DATA_VERSION, None, agent_claims.ALL, None, "external")
+
+
+def _has_action_update(depsgraph) -> bool:
+    try:
+        return any(isinstance(u.id, bpy.types.Action)
+                   for u in depsgraph.updates)
+    except Exception:
+        return False
 
 
 def _redraw():
@@ -211,12 +243,210 @@ def _track_by_name(armature, name):
 # ---------------------------------------------------------------------------
 # tool registry
 
-def _check_version(args):
+def _check_version(args, scope=None, agent_id=None, ctx=None, notes=None):
+    """expect_version 校验。读工具（scope=None）保持严格：版本不等即过期。
+    写工具按 scope 判定：期间只有"别人改了与我范围相交的骨（含祖先骨）/帧"
+    或外部改动才算过期——别的 agent 在别处写不会误伤你。"""
     expect = args.pop("expect_version", None)
-    if expect is not None and int(expect) != _DATA_VERSION:
+    if expect is None or int(expect) == _DATA_VERSION:
+        return
+    if scope is None:
         raise agent_query.AgentQueryError(
             f"场景已变（期望 v{expect}，当前 v{_DATA_VERSION}）",
             code="E_STALE", fix="重新调用读工具拿新数据")
+    anc = _ancestor_fn(ctx["armature"]) if ctx else (lambda b: set())
+    why = _JOURNAL.stale_against(int(expect), _DATA_VERSION, agent_id,
+                                 scope, anc)
+    if why is not None:
+        raise agent_query.AgentQueryError(
+            f"场景已变（期望 v{expect}，当前 v{_DATA_VERSION}）：{why['why']}"
+            + (f" {why.get('changes')}" if why.get("changes") else ""),
+            code="E_STALE",
+            fix="重读你的骨/帧段（probe/describe/sample）拿新版本号后再写")
+    if notes is not None:
+        notes.append(f"版本 v{expect}→v{_DATA_VERSION}：期间改动与你的范围无关，已放行")
+
+
+# ---------------------------------------------------------------------------
+# concurrency scope helpers (任务1)
+
+_OP_TOOLS = ("reapply", "revert", "set_influence")
+
+
+def _ancestor_fn(armature):
+    """bone → ancestors (real bone tree ∪ Rigify semantic parents), cached."""
+    if armature is None:
+        return lambda b: set()
+    cache = _ANC_CACHE.setdefault(armature.name, {})
+
+    def fn(bone):
+        hit = cache.get(bone)
+        if hit is not None:
+            return hit
+        out = set()
+        db = armature.data.bones.get(bone)
+        p = db.parent if db is not None else None
+        while p is not None:
+            out.add(p.name)
+            p = p.parent
+        if db is not None:
+            try:
+                from . import agent_pose
+                out |= set(agent_pose.semantic_ancestors(armature, bone))
+            except Exception:
+                pass
+        cache[bone] = out
+        return out
+    return fn
+
+
+def _bone_of_path(path) -> str | None:
+    path = str(path or "")
+    if path.startswith('pose.bones["'):
+        return path.split('"')[1]
+    return None
+
+
+def _frames_of(args, key="frame_range"):
+    fr = args.get(key)
+    if fr is None:
+        return None
+    return (int(fr[0]), int(fr[1]))
+
+
+def _legacy_scope(name, ctx, args):
+    arm = ctx["armature"]
+    frames = _frames_of(args)
+    bones: set = set()
+    if name == "hold_pose":
+        bones = set(_resolve_bones(arm, list(args.get("bones") or [])))
+    elif name == "clean_jitter":
+        if args.get("bone"):
+            bones = set(_resolve_bones(arm, [args["bone"]]))
+        for p in args.get("paths") or []:
+            b = _bone_of_path(p[0] if isinstance(p, (list, tuple)) else p)
+            if b:
+                bones.add(b)
+    elif name == "fix_ground":
+        bones = {_bone_of_path(args.get("loc_path"))}
+    elif name == "restore_accent":
+        bones = {_bone_of_path(args.get("data_path"))}
+    elif name == "solve_pelvis":
+        bones = {_bone_of_path(args.get("pelvis_path"))}
+    elif name == "apply_exemplar":
+        bones = {_bone_of_path(args.get("loc_path")),
+                 _bone_of_path(args.get("quat_path"))}
+    bones.discard(None)
+    return [(bones or agent_claims.ALL, frames)]
+
+
+_LEGACY_WRITES = ("hold_pose", "clean_jitter", "fix_ground", "restore_accent",
+                  "solve_pelvis", "apply_exemplar")
+
+
+def _strip_bones(armature, op) -> set:
+    """Bones an op's strip really writes (its delta action's fcurves)."""
+    try:
+        _tr, strip = agent_ops.find_op_strip(armature, op)
+        act = strip.action if strip is not None else None
+        return {b for b in (_bone_of_path(fc.data_path)
+                            for fc in (act.fcurves if act else ())) if b}
+    except Exception:
+        return set()
+
+
+def _op_scope(ctx, op, overrides=None) -> list:
+    arm = ctx["armature"]
+    params = dict(op.get("params") or {})
+    params.update(overrides or {})
+    frames = _frames_of(params) or (tuple(op["frames"]) if op.get("frames") else None)
+    bones = _strip_bones(arm, op)
+    tool = op.get("tool")
+    try:
+        if tool in WRITE_SCOPES:
+            for bs, _fr in WRITE_SCOPES[tool](ctx, params):
+                bones |= set(bs or ())
+        elif tool in _LEGACY_WRITES:
+            p2 = dict(params)
+            if tool == "restore_accent":
+                p2["data_path"] = params.get("path")
+            for bs, _fr in _legacy_scope(tool, ctx, p2):
+                if bs is not agent_claims.ALL:
+                    bones |= set(bs)
+    except Exception:
+        pass
+    return [(bones or agent_claims.ALL, frames)]
+
+
+def _write_scope(name, ctx, args, agent_id, force):
+    """None = read-only call.  Otherwise [(bones|ALL, (a,b)|None), ...].
+    Raises E_OWNER for op-addressed writes on someone else's op."""
+    if args.get("dry_run"):
+        return None
+    if name in _OP_TOOLS:
+        op_id = args.get("op_id")
+        if not op_id:                      # set_influence(track_name=...) 旧布局
+            return [(agent_claims.ALL, None)]
+        op = _op_by_id(ctx, op_id)
+        owner = op.get("owner")
+        if agent_id and not force and owner != agent_id:
+            who = owner or "用户/旧版（无 owner）"
+            raise agent_query.AgentQueryError(
+                f"{op_id} 属于 {who}，不是你（{agent_id}）",
+                code="E_OWNER",
+                fix="只改你自己写的 op（list_ops 看 owner）；别人的修复找协调者")
+        return _op_scope(ctx, op, args.get("overrides"))
+    if name == "ab_toggle":
+        if not agent_id:
+            return [(agent_claims.ALL, None)]
+        mine = [o for o in agent_ops.list_ops(ctx["data_dir"])
+                if o.get("owner") == agent_id
+                and o.get("status") in ("preview", "committed")]
+        return [sc for o in mine for sc in _op_scope(ctx, o)] or []
+    if name in _LEGACY_WRITES:
+        return _legacy_scope(name, ctx, args)
+    if name in WRITE_SCOPES:
+        return [(set(b) if b is not agent_claims.ALL else b,
+                 None if f is None else (int(f[0]), int(f[1])))
+                for b, f in WRITE_SCOPES[name](ctx, args)]
+    return None
+
+
+def _enforce_claims(name, ctx, scope, agent_id, force, notes):
+    anc = _ancestor_fn(ctx["armature"])
+    who = agent_id or "__anonymous__"
+    for bones, frames in scope:
+        hard, soft = _LEASES.conflicts(who, bones, frames, anc)
+        if hard and not force:
+            h = hard[0]
+            raise agent_query.AgentQueryError(
+                f"scope 被占用：{h['agent_id']} 持有 {h['bones']} @ {h['frames']}"
+                f"（{h['claim_id']}，还剩 {h['ttl_left_s']}s）",
+                code="E_CLAIMED",
+                fix="换骨骼或帧段（list_claims 看谁占了哪里），或等对方 release；"
+                    "不要 force")
+        for r in soft[:2]:
+            notes.append(f"层级相关：{r['agent_id']} 占着 {r['pairs']} @ {r['frames']}"
+                         "——父骨改动会带动子骨世界朝向，写完提醒对方复测")
+    if agent_id:
+        for bones, frames in scope:
+            if bones != agent_claims.ALL and not bones:
+                continue
+            if not _LEASES.covering(agent_id, bones, frames):
+                r = _LEASES.claim(agent_id, bones, frames, ancestors=anc,
+                                  auto=True, note=f"auto:{name}")
+                if r.get("claim_id"):
+                    notes.append(f"已自动认领 {r['claim_id']}（{name} 的写入范围）"
+                                 "——建议写前先 claim")
+
+
+def _note_write(agent_id, scope, name):
+    global _DATA_VERSION
+    _DATA_VERSION += 1
+    for bones, frames in scope or [(agent_claims.ALL, None)]:
+        _JOURNAL.note(_DATA_VERSION, agent_id, bones, frames, name)
+    if agent_id:
+        _LEASES.renew(agent_id)
 
 
 def _op_envelope(op: dict, tool: str) -> dict:
@@ -573,7 +803,12 @@ def _tool_list_ops(ctx, **_):
     see exactly what is on the rig without guessing."""
     armature = ctx["armature"]
     rows = agent_ops.reconcile(armature, ctx["data_dir"])
-    return {"ops": agent_ops.list_ops(ctx["data_dir"]), "fixes": rows}
+    ops = agent_ops.list_ops(ctx["data_dir"])
+    owners = {o.get("id"): o.get("owner") for o in ops if o.get("owner")}
+    for row in rows:                   # owner 列（只在有 owner 时出现）
+        if row.get("op_id") in owners:
+            row["owner"] = owners[row["op_id"]]
+    return {"ops": ops, "fixes": rows}
 
 
 def _tool_commit(ctx, op_id, **_):
@@ -639,6 +874,10 @@ def _tool_ab_toggle(ctx, **_):
     anim = getattr(armature, "animation_data", None)
     agent_tracks = [t for t in (anim.nla_tracks if anim else ())
                     if agent_ops.is_agent_track_name(t.name)]
+    if ctx.get("agent_id"):            # 多 agent：只拨自己的轨，别动别人的
+        mine = {o.get("track") for o in agent_ops.list_ops(ctx["data_dir"])
+                if o.get("owner") == ctx["agent_id"]}
+        agent_tracks = [t for t in agent_tracks if t.name in mine]
     if not agent_tracks:
         return {"muted": None, "note": "没有 agent 轨"}
     # 以"是否有未静音轨"决定方向：有一个还响着 → 全部静音
@@ -699,7 +938,84 @@ def _tool_save(ctx, filepath=None, **_):
     return {"saved": bpy.data.filepath}
 
 
+def _claim_bones(ctx, bones, chain):
+    if chain:
+        from . import agent_pose
+        return set(agent_pose.chain_preset(chain, ctx["armature"]))
+    names = list(bones or [])
+    if not names or names in (["*"], ["ALL"], ["all"]):
+        return agent_claims.ALL
+    return set(_resolve_bones(ctx["armature"], names))
+
+
+def _need_agent(ctx, tool):
+    if not ctx.get("agent_id"):
+        raise agent_query.AgentQueryError(
+            f"{tool} 需要 agent_id", code="E_SCOPE",
+            fix='每个调用都带 "agent_id":"<你的名字>"（全程同一个）')
+    return ctx["agent_id"]
+
+
+def _tool_claim(ctx, bones=None, chain=None, frames=None, frame_range=None,
+                ttl_s=agent_claims.DEFAULT_TTL_S, note="", strict=False,
+                check_only=False, **_):
+    """咨询性租约：声明"我要改这些骨的这段帧"。同骨帧段重叠的别人 → 不批；
+    父子骨重叠 → 批但给 related 警告（strict=true 则不批）。TTL 到期自动失效，
+    你的每次 claim/写入都会续期。check_only=true 只查不占。"""
+    agent_id = _need_agent(ctx, "claim")
+    fr = frames if frames is not None else frame_range
+    bset = _claim_bones(ctx, bones, chain)
+    res = _LEASES.claim(agent_id, bset,
+                        None if fr is None else (int(fr[0]), int(fr[1])),
+                        ancestors=_ancestor_fn(ctx["armature"]),
+                        ttl_s=float(ttl_s), note=str(note or ""),
+                        strict=bool(strict), check_only=bool(check_only))
+    warnings = [f"层级相关：{r['agent_id']} 占着 {r['pairs']} @ {r['frames']}"
+                for r in res["related"][:3]]
+    scope_txt = ("ALL" if bset is agent_claims.ALL else
+                 ",".join(sorted(bset)[:4]) + ("…" if len(bset) > 4 else ""))
+    if res["granted"]:
+        summary = (f"{'可认领（未占用）' if check_only else '已认领 ' + str(res['claim_id'])}"
+                   f"：{scope_txt} @ {list(fr) if fr is not None else 'ALL'}")
+    else:
+        c = res["conflicts"][0] if res["conflicts"] else res["related"][0]
+        summary = (f"未获批：{c['agent_id']} 占着 "
+                   f"{c.get('bones') or c.get('pairs')} @ {c['frames']}——换 scope 或等")
+    res["your_claims"] = _LEASES.of(agent_id)
+    res["version"] = _DATA_VERSION
+    return {"summary": summary, "data": res, "warnings": warnings,
+            "truncated": False,
+            "hint": "" if res["granted"] else "list_claims 看全表；别 force"}
+
+
+def _tool_release(ctx, claim_id=None, **_):
+    agent_id = _need_agent(ctx, "release")
+    try:
+        ids = _LEASES.release(agent_id, claim_id)
+    except PermissionError as exc:
+        raise agent_query.AgentQueryError(str(exc), code="E_OWNER",
+                                          fix="只能 release 自己的 claim")
+    return {"summary": f"已释放 {ids or '（无）'}",
+            "data": {"released": ids, "your_claims": _LEASES.of(agent_id)},
+            "warnings": [], "truncated": False, "hint": ""}
+
+
+def _tool_list_claims(ctx, **_):
+    rows = _LEASES.table()
+    by_agent: dict = {}
+    for o in agent_ops.list_ops(ctx["data_dir"]):
+        if o.get("owner") and o.get("status") in ("preview", "committed"):
+            by_agent.setdefault(o["owner"], []).append(o["id"])
+    return {"summary": f"{len(rows)} 条租约，{len(by_agent)} 个 agent 有在册修复",
+            "data": {"claims": rows, "ops_by_owner": by_agent,
+                     "version": _DATA_VERSION},
+            "warnings": [], "truncated": False, "hint": ""}
+
+
 TOOLS = {
+    "claim": _tool_claim,
+    "release": _tool_release,
+    "list_claims": _tool_list_claims,
     "ping": _tool_ping,
     "get_overview": _tool_overview,
     "list_intervals": _tool_list_intervals,
@@ -786,19 +1102,38 @@ def _ctx():
 
 
 def _dispatch(request: Mapping[str, Any]) -> dict:
-    global _LAST_TOOL
+    global _LAST_TOOL, _IN_TOOL
     name = str(request.get("tool", ""))
     args = dict(request.get("args") or {})
+    agent_id = args.pop("agent_id", None)
+    agent_id = str(agent_id) if agent_id not in (None, "") else None
+    force = bool(args.pop("force", False))
+    notes: list = []
     try:
-        _check_version(args)
         tool = TOOLS.get(name)
         if tool is None:
+            args.pop("expect_version", None)
             raise agent_query.AgentQueryError(
                 f"未知工具 {name!r}", code="E_UNKNOWN",
                 fix=f"可用：{', '.join(sorted(TOOLS))}")
+        ctx = _ctx()
+        ctx["agent_id"] = agent_id
+        scope = _write_scope(name, ctx, args, agent_id, force)
+        _check_version(args, scope, agent_id, ctx, notes)
+        if scope is not None:
+            _enforce_claims(name, ctx, scope, agent_id, force, notes)
         _LAST_TOOL = name
         _STATUS["last_tool"] = name
-        result = tool(_ctx(), **args)
+        _IN_TOOL = True
+        agent_ops.CURRENT_OWNER = agent_id if scope is not None else None
+        try:
+            result = tool(ctx, **args)
+        finally:
+            _IN_TOOL = False
+            agent_ops.CURRENT_OWNER = None
+        if scope is not None and not (isinstance(result, dict)
+                                      and result.get("dry_run")):
+            _note_write(agent_id, scope, name)
         # op dicts (from agent_ops) get the op envelope; _env-shaped dicts
         # pass through; anything else lands under data verbatim
         if isinstance(result, dict) and "summary" in result:
@@ -810,6 +1145,9 @@ def _dispatch(request: Mapping[str, Any]) -> dict:
         else:
             payload = {"summary": f"{name} 完成", "data": result,
                        "warnings": [], "truncated": False, "hint": ""}
+        if notes:
+            payload = dict(payload)
+            payload["warnings"] = list(payload.get("warnings") or []) + notes
         return {"ok": True, "tool": name, "version": _DATA_VERSION,
                 **payload}
     except agent_query.AgentQueryError as exc:
