@@ -194,6 +194,33 @@ def _write_strip(
     return track, strip
 
 
+def _maybe_write_strip(dry_run, *args, **kwargs):
+    """dry_run=True → 什么都不写，返回 (None, None)。"""
+    if dry_run:
+        return None, None
+    return _write_strip(*args, **kwargs)
+
+
+def _pred_change(scalars=None, quats=None) -> dict:
+    """dry_run 用：delta 的最大旋转（度）/ 位移（米），在 taper 之前量。"""
+    rot = 0.0
+    loc = 0.0
+    for dq in (quats or {}).values():
+        w = np.clip(np.abs(np.asarray(dq)[:, 0]), 0.0, 1.0)
+        if len(w):
+            rot = max(rot, float(np.degrees(2.0 * np.arccos(w)).max()))
+    for (path, _i), d in (scalars or {}).items():
+        d = np.abs(np.asarray(d, dtype=np.float64))
+        if not len(d):
+            continue
+        if str(path).endswith(".rotation_euler"):
+            rot = max(rot, float(np.degrees(d.max())))
+        elif str(path).endswith(".location"):
+            loc = max(loc, float(d.max()))
+    return {"pred_rot_change_max_deg": round(rot, 2),
+            "pred_loc_change_max_m": round(loc, 4)}
+
+
 def _blend_snapshot(anim) -> list:
     out = []
     for tr in anim.nla_tracks:
@@ -440,6 +467,12 @@ def reapply(data_dir: str | Path, armature: Any, op_id: str, *,
                 break
     old_strip = (track.strips.get(old_strip_name)
                  if track is not None and old_strip_name else None)
+    old_exp = 1.0                  # set_influence 的力度：重写后要保留
+    try:
+        if old_strip is not None and old_strip.action is not None:
+            old_exp = float(old_strip.action.get("applied_exp", 1.0) or 1.0)
+    except Exception:
+        old_exp = 1.0
     _SHIFT = 100000
     if old_strip is not None:
         old_strip.frame_start += _SHIFT
@@ -481,6 +514,8 @@ def reapply(data_dir: str | Path, armature: Any, op_id: str, *,
                     res["strip"] = new_strip.name
                 except Exception:
                     pass
+            if new_strip is not None and abs(old_exp - 1.0) > 1e-9:
+                set_strip_exponent(new_strip, old_exp)
     op["params"] = params
     op["params"]["frame_range"] = [int(frame_range[0]), int(frame_range[1])]
     op["frames"] = [int(frame_range[0]), int(frame_range[1])]
@@ -892,6 +927,8 @@ def effect_check(
     return {"track": track_name,
             "verdict": f"{hits}/{len(per_frame)} 帧有变化",
             "pass": hits == len(per_frame),
+            # 局部修复（重音/跟随/踩实）前后段本来就不动：写上没写上看 moved_any
+            "moved_any": hits > 0,
             "per_frame": per_frame}
 
 
@@ -912,6 +949,7 @@ def restore_accent(
     op_mode: str = "preview",
     data_dir: str | Path | None = None,
     track_name: str | None = None,
+    dry_run: bool = False,
 ) -> dict:
     """Force-feel methods on a delta strip.
 
@@ -970,7 +1008,7 @@ def restore_accent(
             new[:, c] = _reshape(cur[:, c], raw_c)
         new /= np.linalg.norm(new, axis=1, keepdims=True)
         dq = agent_fx.delta_quat(new, cur)
-        _track, strip = _write_strip(armature, name, start, quats={path: dq},
+        _track, strip = _maybe_write_strip(dry_run, armature, name, start, quats={path: dq},
                                      blend=blend, track_name=track_name)
         ang = np.degrees(2 * np.arccos(np.clip(
             np.abs(np.sum(cur * new, axis=1)), 0.0, 1.0)))
@@ -988,7 +1026,7 @@ def restore_accent(
         for c in range(3):
             raw_c = None if raw3 is None else raw3[:, c]
             new[:, c] = _reshape(cur[:, c], raw_c)
-        _track, strip = _write_strip(
+        _track, strip = _maybe_write_strip(dry_run, 
             armature, name, start,
             scalars={(path, i): new[:, i] - cur[:, i] for i in range(3)},
             blend=blend, track_name=track_name)
@@ -1001,17 +1039,20 @@ def restore_accent(
         if cur is None:
             raise RuntimeError(f"通道不存在：{path}[{index}]")
         new = _reshape(cur, raw_values)
-        _track, strip = _write_strip(
+        _track, strip = _maybe_write_strip(dry_run, 
             armature, name, start,
             scalars={(path, int(index)): new - cur},
             blend=blend, track_name=track_name)
         metrics = accent.accent_metrics(cur, new, raw_values)
 
-    op = _new_op("restore_accent",
-                 {"path": path, "index": index, "method": method,
-                  "strength": strength, "impact_frame": impact_frame,
-                  "retime_speed": retime_speed, "retime_split": retime_split,
-                  "blend": blend, "frame_range": [start, end]},
+    params = {"path": path, "index": index, "method": method,
+              "strength": strength, "impact_frame": impact_frame,
+              "retime_speed": retime_speed, "retime_split": retime_split,
+              "blend": blend, "frame_range": [start, end]}
+    if dry_run:
+        return {"dry_run": True, "tool": "restore_accent", "frames": [start, end],
+                "params": params, "metrics": metrics}
+    op = _new_op("restore_accent", params,
                  (start, end), strip.name, op_mode, metrics,
                  track=_track.name)
     return _record(data_dir, op) if data_dir else op
@@ -1032,6 +1073,7 @@ def clean_jitter(
     mode: str = "preview",
     data_dir: str | Path | None = None,
     track_name: str | None = None,
+    dry_run: bool = False,
 ) -> dict:
     """Zero-phase smooth each channel inside the window; write deltas.
 
@@ -1077,6 +1119,13 @@ def clean_jitter(
         quats[path] = agent_fx.delta_quat(new, cur)
     if not scalars and not quats:
         raise RuntimeError("没有任何通道在动作里")
+    if dry_run:
+        return {"dry_run": True, "tool": "clean_jitter", "frames": [start, end],
+                "params": {"paths": [list(p) for p in paths], "strength": strength,
+                           "width": width, "blend": blend,
+                           "frame_range": [start, end]},
+                "metrics": {"channel_count": len(scalars) + 4 * len(quats),
+                            **_pred_change(scalars, quats)}}
     name = f"agent_jitter_{start}_{end}"
     _track, strip = _write_strip(armature, name, start, scalars=scalars,
                                quats=quats, blend=blend,
@@ -1633,6 +1682,7 @@ def hold_pose(
     track_name: str | None = None,
     strip_name: str | None = None,
     record: bool = True,
+    dry_run: bool = False,
 ) -> dict:
     """通用姿态保持：让若干骨骼在帧段内保持某个姿态（delta strip 实现）。
 
@@ -1796,6 +1846,16 @@ def hold_pose(
             quats[path] = aa_to_quat(
                 quat_to_aa(quats[path]) * float(strength))
 
+    if dry_run:
+        return {"dry_run": True, "tool": "hold_pose", "frames": [start, end],
+                "params": {"bones": list(bones), "target": target,
+                           "world_dir": list(world_dir) if world_dir is not None else None,
+                           "world_axis": world_axis if isinstance(world_axis, str)
+                           else list(world_axis),
+                           "mode": mode, "threshold_deg": threshold_deg,
+                           "strength": strength, "blend": blend,
+                           "frame_range": [start, end]},
+                "metrics": {**metrics, **_pred_change(scalars, quats)}}
     name = strip_name or f"agent_hold_{start}_{end}"
     _track, strip = _write_strip(
         armature, name, start, scalars=scalars, quats=quats, blend=blend,

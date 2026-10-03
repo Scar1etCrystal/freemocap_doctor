@@ -71,7 +71,9 @@ ping → 读/探查（确定 scope 和修前基线）→ claim → 写（带 exp
    （会在 warnings 里看到"已放行"）。
 4. 你没 claim 就写也行——会**自动认领**（warnings 提示），但别人先占了就 `E_CLAIMED`。
 5. 租约 15 分钟没动静自动过期；你的每次 claim/写入都会续期。干完 `release`。
-6. 只碰自己的 op：`reapply`/`revert`/`set_influence` 别人的 op → `E_OWNER`。
+6. 只碰自己的 op：`reapply`/`revert`/`set_influence` 别人的 op → `E_OWNER`。**无 owner 的 op**（用户或旧版写的）
+   也受保护——遇到挡路的无主 op，报告协调者处理，别绕。
+   写入响应 warnings 里出现"同骨同帧已有同类修复"= 你刚刚叠了第二层：不该叠就 revert 你这条并报告。
 7. `ab_toggle` 带 agent_id 只静音/恢复**你自己的**修复（它算写操作：会按你的 op 范围自动认领）；
    不带会动所有人的（别人有 claim 时被拒）。A/B 完一定再调一次恢复。
 8. **段落完成必须 `save`**（`{"agent_id":"<ME>"}`，不用别的参数）——headless 进程一关，没存盘的全丢。
@@ -97,13 +99,13 @@ ping → 读/探查（确定 scope 和修前基线）→ claim → 写（带 exp
 | 工具 | 关键参数 | 看什么 |
 |---|---|---|
 | `probe_anatomy` | `part` `side` `frame_range` `toward` (`bone`/`finger`) `max_frames`(默认 9) | `err_inner_deg` `owner_bone` `confidence` `secondary_axis`；均匀采样 max_frames 帧、掐头去尾算 inner——长段/快动作复测时把 max_frames 调到 31 |
-| `analyze_motion` | `bones`/`chain` `frame_range` `main_bone` (`onset_frame` `stop_frame` `baseline_op`) | `data.main`: onset/peak/stop 帧、`peak_speed`(°/帧)、`amplitude_deg`、`counter_move_deg`；每骨 `jitter_deg`；`data.suggest.<工具>.args` 可直接用（帧段若超出你的 scope 见 §4 第 10 条）。`truncated:true` 只表示速度序列按 max_points 抽样，数字不受影响 |
+| `analyze_motion` | `bones`/`chain` `frame_range` `main_bone` (`onset_frame` `stop_frame` `baseline_op`=你的某个 op_id，结果多一节 `vs_baseline`=修后−该 op 之前) | `data.main`: onset/peak/stop 帧、`peak_speed`(°/帧)、`amplitude_deg`、`counter_move_deg`；每骨 `jitter_deg`；`data.suggest.<工具>.args` 可直接用（帧段若超出你的 scope 见 §4 第 10 条）。`truncated:true` 只表示速度序列按 max_points 抽样，数字不受影响 |
 | `compare_motion` | `a:{bones/chain, frame_range}` `b:{…}` `mirror` `bone_map` `space` `trim` | `err_inner_deg`（复制/镜像是否到位） |
 | `chain_lag` | `bones`/`chain` `frame_range` | 每骨相对链内父骨的滞后帧数 |
 | `slide_report` | `side` `frame_range` `threshold_mm` | 每段接触的 `drift_mm`、`flagged`、`foot_lock_args` |
-| `effect_check` | `op_id` | 该 op 在内段采样帧上到底动没动（只答"动了没"，不答"对不对"） |
-| `dry_run:true`（所有新写工具） | 同写工具 | 只算不写，返回 metrics；可带 expect_version（无害） |
-| `list_ops` | `owner` `op_id` `live` `frames` `compact` | **自查用** `{"agent_id":"<ME>","owner":"<ME>","compact":true}`（只回你的 fixes 行，几百字节）；不带过滤 = 全量（可能 50KB+）。fixes 行用 `op_id`，日志行用 `id` |
+| `effect_check` | `op_id` | 在 [A+blend, 中点, B−blend] 三帧上该 op 到底动没动：**写上了 = `moved_any:true`**；`pass` 要求三帧都动，局部修复（重音、跟随、踩实）`pass:false` 是正常的。只答"动了没"，不答"对不对" |
+| `dry_run:true` | 同写工具 | 只算不写，返回 `dry_run:true` + metrics（clean_jitter/hold_pose 给 `pred_rot_change_max_deg`）。**支持的**：hold_pose、clean_jitter、restore_accent 和全部新写工具；其它（fix_ground/solve_pelvis/apply_exemplar）会**直接报错**而不是偷偷写。响应里没有 `dry_run:true` 就说明真写了 |
+| `list_ops` | `owner`（"none"=无主历史） `op_id` `live`（去掉日志里 reverted 的历史） `frames` `compact`（只回场景对账行，带 `bones`） | **自查用** `{"agent_id":"<ME>","owner":"<ME>","compact":true}`（只回你的 fixes 行，几百字节）；不带过滤 = 全量（可能 50KB+）。fixes 行用 `op_id`，日志行用 `id` |
 | `list_claims` | – | 租约表 + 每个 agent 名下的 op |
 
 ### 写（全部 preview delta strip，可 reapply / revert，都支持 `dry_run:true` 先看效果）
@@ -151,5 +153,7 @@ ping → 读/探查（确定 scope 和修前基线）→ claim → 写（带 exp
 遗留：<无 / 没做完的、低置信度、超出 scope 的段、层级冲突要谁复测>
 ```
 - "修前 X" = 写入前最后一次同口径实时读数；"修后 Y" = 同一工具同参数复测。
-- "看 a–b 帧" = 有效区：`[A+blend, B−blend]`（工具返回里有 `inner_frames` 就用它）。
+- "看 a–b 帧" = 有效区：`[A+blend, B−blend]`（工具返回里有 `inner_frames`/`changed_frames` 就用它）。
+- 没写（被租约挡住、发现别人已有同类修复、超出 scope）也要报告：第一行写
+  `<工具> @[A,B] <骨>：未写入（<原因>）`，把你量到的数字和建议写在"遗留"里。
 看不到数字 = 没验成。报数字，不报感觉。最后附"提示词反馈"（若任务块要求）。

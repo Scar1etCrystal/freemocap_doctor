@@ -16,8 +16,11 @@
      "strength":1.0,"width":5,"blend":4,"expect_version":<version>}'
    ```
 4. **复测**：第 1 步原样再调 → `jitter_deg` 应明显下降（通常降到 30–70%）。
-   同时看 `peak_speed_deg`：降得比 jitter 还多 = 你把动作本身抹平了（width 太大）→
-   `reapply` 把 width 调小。
+   同时看 `peak_speed`（°/帧，在 `data.bones.<骨>` 里）：降得比 jitter 还多 = 你把动作本身抹平了
+   （width 太大）→ `reapply` 把 width 调小。**变差了**（jitter 不降反升）：先
+   `list_ops {"frames":[A,B],"live":true,"compact":true}` 看这根骨上是不是叠着别的同类修复（写入响应的
+   warnings 也会提示"同类修复"）——是就 revert 你自己的、停手报告；不是就 reapply 降 strength 试一次，
+   还不行就 revert 自己的 op → save → release → 报告"未达标"。
 5. `list_ops` 自查 → `save` → `release`。
 
 ## 参数怎么选
@@ -27,9 +30,11 @@
 | 细碎高频抖（手指、手腕） | 5 | 1.0 |
 | 明显的跳帧/毛刺 | 7 | 1.0 |
 | 想保留爆发力（出拳、甩手） | 3–5 | 0.6–0.8 |
+| 窗口里**既有**细碎抖动**又有**真实的快速甩动（常见） | 3–5 | 0.6–0.8，或把 frame_range 缩到抖的那几段 |
 
-- 只在抖的那一段做，别整条动作一把抹（会削掉所有峰值）。找抖的段：`analyze_motion` 看
-  `jitter_deg` 高的骨、或用户给的帧段。
+- 只在抖的那一段做，别整条动作一把抹（会削掉所有峰值）。找抖的段：`analyze_motion` 的
+  `bones.<骨>.jitter_top_frames`（最抖的 5 帧及其抖动角）；加 `"brief":true` 可省掉速度序列。
+  注意：真实的快速甩手本身也会让 jitter_deg 偏高（曲率大），别把它当抖动抹掉。
 - 手臂 Euler 骨（`upper_arm_fk/forearm_fk/shoulder`）与四元数骨都支持（`bone=` 会自动
   选对的旋转通道）。腿是 IK：抖的腿改 `foot_ik.L/R`。
 - **已修复的历史 bug**：2026-10-03 前 clean_jitter 对四元数骨（手、脊柱）写的是

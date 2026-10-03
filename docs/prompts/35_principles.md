@@ -54,6 +54,13 @@ scope 时**：把它缩到 scope 内，`"dry_run":true` 试一次——报错就
 
 为什么要钉：跟随/过冲本身改变了停下时的速度曲线，不钉的话重新检测出的 stop 会被挪走。
 
+- 复测的 `frame_range` = **第 1 步 analyze_motion 用的那个**（不是写入用的 frame_range）。
+- 跟随/过冲修后**别看**：`data.main.overshoot_deg`、`post_stop_*`、各骨 `bones.<骨>.stop_frame`——
+  它们是"原动作 + 修复"的合成读数、检测点也被挪了；只看 `vs_baseline`。
+- 报告里"看 a–b 帧"：anticipation 用写入返回的有效区；跟随/过冲用 `vs_baseline.bones[主骨].changed_frames`
+  （或写入返回的 `metrics.changed_frames`）。
+- `chain` 会把整条链**都写上**（每骨按自身幅度等比）。任务只想动一根骨时用 `bones:["right_forearm"]`。
+
 ## 调参
 
 ```

@@ -662,6 +662,8 @@ def _bone_report(q, sp, a, *, o, p, s, onset_frac, stop_frac, axis_frames,
         jit = P.qangle_deg(q[1:-1], P.slerp(q[:-2], q[2:], 0.5))
         row["jitter_deg"] = _r(float(jit.mean()))
         row["jitter_max_deg"] = _r(float(jit.max()))
+        top = np.argsort(jit)[::-1][:5]          # 最抖的 5 帧（帧号, 度）
+        row["jitter_top_frames"] = [[int(a + 1 + i), _r(float(jit[i]))] for i in top]
     # counter-move: earlier poses that sit AHEAD (along +axis) of the onset
     # pose = the bone came BACK (−axis) before launching.  ≈ amount×amplitude
     # after anticipation, ≈0 on a plain start.
@@ -904,6 +906,7 @@ def _tool_analyze_motion(ctx, **args):
     """读工具：调 anticipation / follow_through / overshoot 之前第一步，修后复测也用它。"""
     names, rest = _norm_args(ctx, args)
     baseline_op = rest.pop("baseline_op", None)
+    brief = bool(rest.pop("brief", False))      # 只要数字：去掉速度序列（~6KB）
     tracks = None
     if baseline_op:
         op = agent_ops.get_op(ctx["data_dir"], str(baseline_op))
@@ -930,6 +933,9 @@ def _tool_analyze_motion(ctx, **args):
         summary += (f"；vs {baseline_op}：最大差 {vb['max_diff_deg']}°，接近轴峰 "
                     f"{vb['approach_peak_deg']}° @ {vb['approach_peak_frame']}，"
                     f"{vb['approach_sign_changes']} 次变号，改动帧 {vb['changed_frames']}")
+    if brief:
+        res.pop("speed_series", None)
+        res.pop("speed_series_bone", None)
     return {"summary": summary, "data": res, "warnings": warnings,
             "truncated": bool(trunc),
             "hint": "照 data.suggest.<工具>.args 直接调写工具；修后按 retest 复测"}

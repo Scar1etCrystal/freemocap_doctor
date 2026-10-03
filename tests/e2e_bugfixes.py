@@ -249,6 +249,70 @@ check("8d reapply (GUI param path) also settles before re-solving",
       f"err_inner={cm['data']['err_inner_deg']}")
 call("revert", op_id=op8)
 
+# ---- 9: dry_run must never write (legacy tools used to swallow it via **_) ----------
+def n_agent_strips():
+    return sum(len(t.strips) for t in rig.animation_data.nla_tracks
+               if agent_ops.is_agent_track_name(t.name))
+n0, ops0 = n_agent_strips(), len(agent_ops.list_ops(data_dir))
+rj = call("clean_jitter", frame_range=[1000, 1060], bone="right_hand", dry_run=True)
+rh = call("hold_pose", bones=["left_hand"], frame_range=[A, B], target="values", dry_run=True)
+rr = call("restore_accent", frame_range=[A, B],
+          data_path='pose.bones["hand_fk.L"].rotation_quaternion', dry_run=True)
+check("9 dry_run on clean_jitter / hold_pose / restore_accent writes nothing",
+      all(x["ok"] and x["data"].get("dry_run") for x in (rj, rh, rr))
+      and n_agent_strips() == n0 and len(agent_ops.list_ops(data_dir)) == ops0,
+      f"strips {n0}->{n_agent_strips()} ops {ops0}->{len(agent_ops.list_ops(data_dir))}")
+check("9b clean_jitter dry_run predicts the change",
+      rj["ok"] and rj["data"]["metrics"].get("pred_rot_change_max_deg", 0) > 0,
+      rj.get("data", {}).get("metrics"))
+rf = call("fix_ground", frame_range=[A, B], side="L",
+          loc_path='pose.bones["foot_ik.L"].location', dry_run=True)
+check("9c unsupported dry_run is refused (no silent write)",
+      not rf["ok"] and rf["error"]["code"] == "E_SCOPE" and n_agent_strips() == n0,
+      rf.get("error"))
+v0 = call("ping")["version"]
+rw = call("hold_pose", agent_id="other9", bones=["head"], frame_range=[700, 720], target="values")
+rd = call("clean_jitter", agent_id="me9", frame_range=[1000, 1060], bone="right_hand",
+          dry_run=True, expect_version=v0)
+check("9d dry_run gets the scoped staleness check (unrelated write → no E_STALE)",
+      rw["ok"] and rd["ok"], rd.get("error"))
+lo = call("list_ops", owner="other9", compact=True)
+check("9e compact list_ops rows carry the written bones",
+      lo["ok"] and lo["data"]["fixes"] and lo["data"]["fixes"][0].get("bones") == ["head"],
+      lo["data"]["fixes"][:1] if lo["ok"] else lo.get("error"))
+call("revert", agent_id="other9", op_id=rw["data"]["op_id"])
+
+# ---- 10: stacking warning / set_influence envelope / reapply keeps strength ------------
+r1 = call("clean_jitter", agent_id="s1", frame_range=[1000, 1060], bone="right_hand")
+call("release", agent_id="s1")
+r2 = call("clean_jitter", agent_id="s2", frame_range=[1010, 1050], bone="right_hand")
+check("10 second same-kind fix on the same bone/frames warns about stacking",
+      r2["ok"] and any("同类修复" in w for w in r2["warnings"]), r2.get("warnings"))
+call("revert", agent_id="s2", op_id=r2["data"]["op_id"])
+call("release", agent_id="s2")
+r = call("hold_pose", agent_id="s3", bones=["left_hand"], frame_range=[A, B], target="values")
+oid = r["data"]["op_id"]
+before = P.sample_visible(scene, rig, ["hand_fk.L"], FR)["quat"]["hand_fk.L"]
+si = call("set_influence", agent_id="s3", op_id=oid, value=0.5)
+check("10b set_influence answers with its own envelope (not '0-0 帧')",
+      si["ok"] and si["data"].get("op_id") == oid and "力度" in si["summary"], si.get("summary"))
+half = P.sample_visible(scene, rig, ["hand_fk.L"], FR)["quat"]["hand_fk.L"]
+call("reapply", agent_id="s3", op_id=oid, overrides={"blend": 5})
+after_re = P.sample_visible(scene, rig, ["hand_fk.L"], FR)["quat"]["hand_fk.L"]
+_t, st10 = agent_ops.find_op_strip(rig, agent_ops.get_op(data_dir, oid))
+check("10c reapply keeps the set_influence strength",
+      abs(float(st10.action.get("applied_exp", 1.0)) - 0.5) < 1e-9
+      and P.qangle_deg(half[INNER], after_re[INNER]).max() < 0.5,
+      f"applied_exp={st10.action.get('applied_exp')} "
+      f"inner diff vs pre-reapply={P.qangle_deg(half[INNER], after_re[INNER]).max():.3f}°")
+call("revert", agent_id="s3", op_id=oid)
+call("revert", agent_id="s1", op_id=r1["data"]["op_id"])
+am = call("analyze_motion", bones=["right_hand"], frame_range=[1000, 1060], brief=True)
+row = (am.get("data") or {}).get("bones", {}).get("hand_fk.R", {})
+check("10d analyze_motion brief drops the speed series; jitter_top_frames present",
+      am["ok"] and "speed_series" not in am["data"] and len(row.get("jitter_top_frames", [])) == 5,
+      row.get("jitter_top_frames"))
+
 fails = [r for r in RESULTS if not r[1]]
 print(f"\n==== {len(RESULTS) - len(fails)}/{len(RESULTS)} PASS ====")
 for n, _o, d in fails:

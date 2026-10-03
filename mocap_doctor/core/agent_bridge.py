@@ -281,6 +281,13 @@ def _check_version(args, scope=None, agent_id=None, ctx=None, notes=None):
 # concurrency scope helpers (任务1)
 
 _OP_TOOLS = ("reapply", "revert", "set_influence")
+_LEGACY_DRY_RUN = ("hold_pose", "clean_jitter", "restore_accent")
+
+
+def _dry_run_tools() -> set:
+    """Write tools that really honour dry_run: the three legacy tools that
+    implement it + every plugin write tool (plugin contract requires it)."""
+    return set(_LEGACY_DRY_RUN) | set(WRITE_SCOPES)
 
 
 def _ancestor_fn(armature):
@@ -411,8 +418,6 @@ def _op_scope(ctx, op, overrides=None) -> list:
 def _write_scope(name, ctx, args, agent_id, force):
     """None = read-only call.  Otherwise [(bones|ALL, (a,b)|None), ...].
     Raises E_OWNER for op-addressed writes on someone else's op."""
-    if args.get("dry_run"):
-        return None
     if name in _OP_TOOLS:
         op_id = args.get("op_id")
         if not op_id:                      # set_influence(track_name=...) 旧布局
@@ -468,6 +473,38 @@ def _enforce_claims(name, ctx, scope, agent_id, force, notes):
                 if r.get("claim_id"):
                     notes.append(f"已自动认领 {r['claim_id']}（{name} 的写入范围）"
                                  "——建议写前先 claim")
+
+
+def _stack_warnings(name, ctx, scope, agent_id) -> list:
+    """Same tool already alive on the same bone × overlapping frames → warn.
+    Stacking two identical fixes over-corrects (verification: 3 stacked
+    clean_jitter strips pushed jitter to 152% of the untouched baseline)."""
+    out = []
+    try:
+        ops = [o for o in agent_ops.list_ops(ctx["data_dir"])
+               if o.get("tool") == name and o.get("status") in ("preview", "committed")]
+        if not ops:
+            return out
+        arm = ctx["armature"]
+        for o in ops:
+            ob = _strip_bones(arm, o)
+            if not ob:
+                continue
+            for bones, frames in scope:
+                if frames is not None and o.get("frames") and not \
+                        agent_claims.frames_overlap(frames, o["frames"]):
+                    continue
+                shared = ob if bones is agent_claims.ALL else (ob & set(bones))
+                if shared:
+                    who = o.get("owner") or "无主/旧版"
+                    mine = agent_id and o.get("owner") == agent_id
+                    out.append(f"同骨同帧已有同类修复 {o['id']}（owner={who}，骨 "
+                               f"{sorted(shared)[:3]}，帧 {o.get('frames')}）——叠加会过度修正；"
+                               + ("改参数请 reapply 那条" if mine else "不该叠就 revert 你这条并报告"))
+                    break
+    except Exception:
+        pass
+    return out[:3]
 
 
 def _note_write(agent_id, scope, name):
@@ -660,6 +697,7 @@ def _tool_effect_check(ctx, track_name=None, op_id=None, bones=None,
         hits = sum(1 for r in merged["per_frame"] if r["moved"])
         merged["verdict"] = f"{hits}/{len(merged['per_frame'])} 帧有变化"
         merged["pass"] = hits == len(merged["per_frame"])
+        merged["moved_any"] = hits > 0
         merged["track"] = "all"
         res = merged
         label = f"全部 agent 轨({len(names)})"
@@ -678,7 +716,8 @@ def _tool_hold_pose(ctx, bones, frame_range, target="values",
                     dir_object=None, dir_mode="arrow",
                     flip_guard_deg=150.0,
                     mode="replace", threshold_deg=8.0, strength=1.0,
-                    blend=4, op_mode="preview", track_name=None, **_):
+                    blend=4, op_mode="preview", track_name=None,
+                    dry_run=False, **_):
     armature = ctx["armature"]
     if armature is None:
         raise RuntimeError("没有识别到 RIG 骨架")
@@ -693,8 +732,10 @@ def _tool_hold_pose(ctx, bones, frame_range, target="values",
         scene=ctx["scene"],
         mode=mode, threshold_deg=float(threshold_deg),
         strength=float(strength), blend=int(blend), op_mode=op_mode,
-        data_dir=ctx["data_dir"], track_name=track_name)
-    _write_common(ctx, armature, frame_range)
+        data_dir=ctx["data_dir"], track_name=track_name,
+        dry_run=bool(dry_run))
+    if not op.get("dry_run"):
+        _write_common(ctx, armature, frame_range)
     return op
 
 
@@ -742,7 +783,8 @@ def _write_common(ctx, armature, frame_range):
 
 
 def _tool_clean_jitter(ctx, frame_range, bone=None, paths=None,
-                       strength=1.0, width=5, blend=4, mode="preview", **_):
+                       strength=1.0, width=5, blend=4, mode="preview",
+                       dry_run=False, **_):
     armature = ctx["armature"]
     if paths is None and bone:
         bone = _resolve_bones(armature, [bone])[0]
@@ -760,8 +802,9 @@ def _tool_clean_jitter(ctx, frame_range, bone=None, paths=None,
         armature, _base_action(armature),
         [tuple(p) for p in paths], frame_range,
         strength=float(strength), width=int(width), blend=int(blend),
-        mode=mode, data_dir=ctx["data_dir"])
-    _write_common(ctx, armature, frame_range)
+        mode=mode, data_dir=ctx["data_dir"], dry_run=bool(dry_run))
+    if not op.get("dry_run"):
+        _write_common(ctx, armature, frame_range)
     return op
 
 
@@ -787,7 +830,8 @@ def _tool_fix_ground(ctx, frame_range, side, loc_path,
 def _tool_restore_accent(ctx, frame_range, data_path, index=None, method="ease_reshape",
                          strength=0.5, impact_frame=None,
                          retime_speed=1.5, retime_split=0.35,
-                         raw_action=None, blend=4, op_mode="preview", **_):
+                         raw_action=None, blend=4, op_mode="preview",
+                         dry_run=False, **_):
     """data_path 指到 .rotation_quaternion / .location 时四分量/三轴整体
     重塑（index 忽略）；其他通道才需要 index 选分量。"""
     armature = ctx["armature"]
@@ -806,8 +850,9 @@ def _tool_restore_accent(ctx, frame_range, data_path, index=None, method="ease_r
         raw_values=raw_values, impact_frame=impact_frame,
         retime_speed=retime_speed, retime_split=retime_split,
         blend=int(blend), op_mode=op_mode,
-        data_dir=ctx["data_dir"])
-    _write_common(ctx, armature, frame_range)
+        data_dir=ctx["data_dir"], dry_run=bool(dry_run))
+    if not op.get("dry_run"):
+        _write_common(ctx, armature, frame_range)
     return op
 
 
@@ -875,6 +920,11 @@ def _tool_list_ops(ctx, owner=None, op_id=None, live=None, frames=None,
            and not (live and o.get("status") == "reverted")]
     rows = [r for r in rows
             if keep(r, r.get("op_id"), r.get("frames"), r.get("owner"))]
+    if compact:
+        for r in rows:
+            if r.get("alive") and r.get("strip"):
+                r["bones"] = sorted(_strip_bones(
+                    armature, {"track": r.get("track"), "strip": r.get("strip")}))
     out = {"fixes": rows,
            "filters": {k: v for k, v in (("owner", owner), ("op_id", op_id),
                                           ("live", live), ("frames", frames),
@@ -987,9 +1037,14 @@ def _tool_set_influence(ctx, value, op_id=None, track_name=None, **_):
             raise RuntimeError(f"{op_id} 的 strip 找不到了（可能已被撤销/删除）")
         res = agent_ops.set_strip_exponent(strip, float(value))
         _redraw()
-        return {"op_id": op_id, "strip": strip.name,
-                "track": track.name if track else None,
-                "exponent": float(value), "touched": res.get("touched", 0)}
+        return {"summary": f"{op_id} 力度 → {float(value):g}（delta^{float(value):g}）",
+                "data": {"op_id": op_id, "strip": strip.name,
+                         "track": track.name if track else None,
+                         "exponent": float(value),
+                         "touched": res.get("touched", 0),
+                         "scalar_touched": res.get("scalar_touched", 0)},
+                "warnings": [], "truncated": False,
+                "hint": "reapply 会保留这个力度；复测用实时类读工具"}
     tracks = [t for t in anim.nla_tracks
               if t.name.startswith(track_name or PREVIEW_TRACK)]
     if not tracks:
@@ -1277,17 +1332,29 @@ def _dispatch(request: Mapping[str, Any]) -> dict:
             raise agent_query.AgentQueryError(
                 f"未知工具 {name!r}", code="E_UNKNOWN",
                 fix=f"可用：{', '.join(sorted(TOOLS))}")
+        dry = bool(args.get("dry_run"))
+        if dry and name not in _dry_run_tools():
+            # 旧版工具用 **_ 吞掉未知参数：dry_run 会被忽略、照样真写——而且绕过
+            # 租约/owner/版本号（sonnet 验证里留下了 3 条无主 strip）。不支持就直说。
+            raise agent_query.AgentQueryError(
+                f"{name} 不支持 dry_run", code="E_SCOPE",
+                fix=f"支持 dry_run 的：{', '.join(sorted(_dry_run_tools()))}；"
+                    "其它写工具直接写（preview，可 revert/reapply）")
         ctx = _ctx()
         ctx["agent_id"] = agent_id
         scope = _write_scope(name, ctx, args, agent_id, force)
         _check_version(args, scope, agent_id, ctx, notes)
         if scope is not None:
-            _enforce_claims(name, ctx, scope, agent_id, force, notes)
+            if not dry:
+                _enforce_claims(name, ctx, scope, agent_id, force, notes)
+            if name not in _OP_TOOLS and name != "ab_toggle":
+                notes.extend(_stack_warnings(name, ctx, scope, agent_id))
             _settle_base_strip()          # 老文件基底 1 帧修正：先于该工具的任何采样
         _LAST_TOOL = name
         _STATUS["last_tool"] = name
         _IN_TOOL = True
-        agent_ops.CURRENT_OWNER = agent_id if scope is not None else None
+        agent_ops.CURRENT_OWNER = (agent_id if scope is not None and not dry
+                                   else None)
         try:
             result = tool(ctx, **args)
         finally:
