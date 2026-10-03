@@ -324,6 +324,21 @@ r = call("describe", target=[A, B], max_items=3)
 check("12c read tools too (describe(max_items=…) → rejected, lists what it takes)",
       not r["ok"] and "不认识参数" in r["error"]["message"], r.get("error", {}).get("message", "")[:140])
 
+# ---- 13: probe's hold_pose_args is the recommended per-frame probe form ------------------
+pr = call("probe_anatomy", part="palm", side="L", frame_range=[900, 960], toward=[0, -1, 0])
+hp = (pr.get("data") or {}).get("hold_pose_args") or {}
+check("13 probe hold_pose_args = probe:palm.L + probe:finger_dir.L (not a static mean axis)",
+      hp.get("world_axis") == "probe:palm.L" and hp.get("secondary_axis") == "probe:finger_dir.L", hp)
+if hp:
+    r = call("hold_pose", frame_range=[900, 960], target="world_dir", world_dir=[0, -1, 0],
+             mode="replace", blend=4, **hp)
+    pr2 = call("probe_anatomy", part="palm", side="L", frame_range=[900, 960], toward=[0, -1, 0])
+    e0 = pr["data"].get("err_inner_deg"); e1 = (pr2.get("data") or {}).get("err_inner_deg")
+    check("13b hold_pose(**hold_pose_args) reaches the target (err_inner < 5°)",
+          r["ok"] and e1 is not None and e1 < 5, f"err_inner {e0} → {e1}")
+    if r["ok"]:
+        call("revert", op_id=r["data"]["op_id"])
+
 fails = [r for r in RESULTS if not r[1]]
 print(f"\n==== {len(RESULTS) - len(fails)}/{len(RESULTS)} PASS ====")
 for n, _o, d in fails:

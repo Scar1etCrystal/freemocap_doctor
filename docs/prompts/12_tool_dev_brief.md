@@ -161,6 +161,10 @@ REAPPLY = {"my_tool": _reapply_my_tool}
 - 写入失败一律 `raise RuntimeError("<中文说清原因>，<下一步怎么做>")`——
   错误信息就是给 agent 的提示，要能照着改参数。
 - strip 名必须以 `agent_` 开头（is_agent_track_name 靠它），格式 `agent_<短工具名>_<a>_<b>`。
+- **拼错的参数要报错**：壳里调 `P.reject_unknown_args("my_tool", my_tool, args)`（按函数签名生成可用清单、
+  提示最接近的名字）。别用 `**_` 吞参数——弱模型不看 warnings，拼错就静默按默认值执行。
+- **"原样传"的输出必须是推荐写法**：`suggest.*.args`、`*_args`、`verify.args` 这类给 agent 直接展开的参数，返回什么
+  就该是最好的做法（它们一定会被照抄）。
 
 ## 4. e2e 测试要求
 

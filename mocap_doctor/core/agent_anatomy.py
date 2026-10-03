@@ -496,10 +496,7 @@ def probe(scene: Any, armature: Any, *, part: str, side: str | None = None,
                     sm = _norm(sum(secs, Vector((0.0, 0.0, 0.0))))
                     out["secondary_axis"] = [round(v, 4) for v in sm]
                     out["secondary_name"] = sec_key
-            out["hold_pose_args"] = {"bones": [owner],
-                                     "world_axis": out["local_axis"]}
-            if out.get("secondary_axis"):
-                out["hold_pose_args"]["secondary_axis"] = out["secondary_axis"]
+            out["hold_pose_args"] = _hold_pose_args(part, side_n, owner, out, finger)
 
     if toward is not None and key:
         head_pos = _pw(armature, owner, "head") if owner else None
@@ -670,10 +667,7 @@ def _probe_slow(scene: Any, armature: Any, *, part: str, side: str | None = None
                     sm = _norm(sum(secs, Vector((0.0, 0.0, 0.0))))
                     out["secondary_axis"] = [round(v, 4) for v in sm]
                     out["secondary_name"] = sec_key
-            out["hold_pose_args"] = {"bones": [owner],
-                                     "world_axis": out["local_axis"]}
-            if out.get("secondary_axis"):
-                out["hold_pose_args"]["secondary_axis"] = out["secondary_axis"]
+            out["hold_pose_args"] = _hold_pose_args(part, side, owner, out, finger)
 
     # toward：解析目标 + 误差角（修后复测同一调用）
     if toward is not None and key:
@@ -722,6 +716,34 @@ _FRAME_KEYS = {"palm": "palm", "back_of_hand": "back",
                "sole": "sole", "instep": "instep", "toe": "toe",
                "knee_front": "front", "elbow_front": "front",
                "body_forward": "forward"}
+
+
+# probe 返回的 hold_pose_args = 推荐写法（与剧本 30 的表一致）：逐帧 probe 主轴 + 次轴
+_HOLD_AXES = {"palm": ("palm", "finger_dir"), "back_of_hand": ("back_of_hand", "finger_dir"),
+              "finger_dir": ("finger_dir", "palm"), "knuckle": ("knuckle", "palm"),
+              "sole": ("sole", "toe"), "instep": ("instep", "toe"), "toe": ("toe", "sole"),
+              "knee_front": ("knee_front", None), "elbow_front": ("elbow_front", None)}
+
+
+def _hold_pose_args(part, side, owner, out, finger=None) -> dict:
+    """"可直接展开给 hold_pose"的参数必须是推荐写法：逐帧 "probe:<part>.<side>" 轴。
+
+    以前给的是全段平均的固定局部轴——解剖方向相对控制骨随帧变（手指实测散布 ~70°），
+    均值轴对齐后每帧留几十度残差；照抄返回值的弱模型会踩这个坑（sonnet 第三轮指出）。
+    单根手指（finger=）/ bone_axis / body_forward 没有对应的 probe 轴，仍给均值轴。"""
+    spec = _HOLD_AXES.get(part) if (side in ("L", "R") and not finger) else None
+    if spec is None:
+        args = {"bones": [owner], "world_axis": out["local_axis"]}
+        if out.get("secondary_axis"):
+            args["secondary_axis"] = out["secondary_axis"]
+        return args
+    main, sec = spec
+    args = {"bones": [owner], "world_axis": f"probe:{main}.{side}"}
+    if sec:
+        args["secondary_axis"] = f"probe:{sec}.{side}"
+    elif out.get("secondary_axis"):
+        args["secondary_axis"] = out["secondary_axis"]       # 膝/肘：次轴用探出的局部向量
+    return args
 
 
 def frame_probe_fn(part: str, side: str | None = None):

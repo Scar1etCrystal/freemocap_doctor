@@ -10,8 +10,7 @@
    /home/sb/remote_kit_1.7.1/tools/agent probe_anatomy '{"agent_id":"<ME>","part":"palm","side":"L","frame_range":[A,B],"toward":[0,-1,0]}'
    ```
    记下：`data.err_inner_deg`（修前误差）、`data.owner_bone`、`data.confidence`、
-   `data.secondary_axis`。（返回里的 `hold_pose_args` 是旧写法——全段用一个平均局部轴；**别用它**，
-   照第 3 步的表写 `probe:` 逐帧轴。）
+   `data.secondary_axis`。（返回里的 `hold_pose_args` 已经是第 3 步表里的 `probe:` 逐帧轴写法，可以直接展开进 hold_pose。）
    - `confidence < 0.5` 或返回里有 `alternatives` → **不要修**，在报告里写"低置信度，
      需要用户确认方向"，附两个候选，结束。
    - `err_inner_deg < 5` → 已经对了，报告"无需修复"，结束。
