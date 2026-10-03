@@ -244,11 +244,14 @@ def _op_envelope(op: dict, tool: str) -> dict:
 
 
 def _tool_ping(_ctx, **_):
+    data = {"ok": True, "version": _DATA_VERSION, "running": _running,
+            "tools": sorted(TOOLS)}
+    warnings = []
+    if _PLUGIN_ERRORS:
+        data["plugin_errors"] = dict(_PLUGIN_ERRORS)
+        warnings.append(f"插件载入失败：{sorted(_PLUGIN_ERRORS)}")
     return {"summary": f"服务运行中 · 数据 v{_DATA_VERSION}",
-            "data": {"ok": True, "version": _DATA_VERSION,
-                     "running": _running,
-                     "tools": sorted(TOOLS)},
-            "warnings": [], "truncated": False, "hint": ""}
+            "data": data, "warnings": warnings, "truncated": False, "hint": ""}
 
 
 def _tool_overview(_ctx, force_refresh=False, **_):
@@ -728,15 +731,58 @@ TOOLS = {
 }
 
 
+# ---------------------------------------------------------------------------
+# plugin tools: each module may export
+#   TOOLS        {name: fn(ctx, **args)}            bridge-level tool functions
+#   WRITE_SCOPES {name: fn(ctx, args) -> [(bones, (a, b)), ...]}  marks a write
+#                 tool + the bones/frames it may touch (concurrency leases)
+#   TUNABLE      {name: [param specs]}              → agent_ops.TUNABLE_PARAMS
+#   REAPPLY      {name: fn(...)}                    → agent_ops.REAPPLY_HANDLERS
+# A missing module is fine (not shipped yet); a broken one is reported by ping
+# instead of taking every other tool down with it.
+_PLUGIN_MODULES = ("agent_motion", "agent_copy", "agent_principles",
+                   "agent_overlap", "agent_contact")
+_PLUGIN_ERRORS: dict = {}
+WRITE_SCOPES: dict = {}
+
+
+def _load_plugins():
+    import importlib
+    for name in _PLUGIN_MODULES:
+        full = f"{__package__}.{name}"
+        try:
+            mod = importlib.import_module(full)
+        except ModuleNotFoundError as exc:
+            if exc.name != full:
+                _PLUGIN_ERRORS[name] = repr(exc)
+            continue
+        except Exception as exc:  # noqa: BLE001 - report, keep serving
+            _PLUGIN_ERRORS[name] = repr(exc)
+            continue
+        TOOLS.update(getattr(mod, "TOOLS", {}) or {})
+        WRITE_SCOPES.update(getattr(mod, "WRITE_SCOPES", {}) or {})
+        agent_ops.TUNABLE_PARAMS.update(getattr(mod, "TUNABLE", {}) or {})
+        agent_ops.REAPPLY_HANDLERS.update(getattr(mod, "REAPPLY", {}) or {})
+
+
+_load_plugins()
+
+
 def _ctx():
     scene, settings = _settings()
-    return {
+    ctx = {
         "scene": scene,
         "settings": settings,
         "armature": _rig_armature(settings, scene),
         "source_armature": _source_armature(settings),
         "data_dir": _data_dir(settings),
     }
+    # helpers for plugin tools (so they never import agent_bridge back)
+    arm = ctx["armature"]
+    ctx["resolve_bones"] = lambda names: _resolve_bones(arm, list(names))
+    ctx["base_action"] = lambda: _base_action(arm)
+    ctx["after_write"] = lambda frame_range: _write_common(ctx, arm, frame_range)
+    return ctx
 
 
 def _dispatch(request: Mapping[str, Any]) -> dict:

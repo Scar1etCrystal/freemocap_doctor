@@ -194,10 +194,22 @@ def _save_oplog(data_dir: str | Path, ops: Sequence[Mapping[str, Any]]) -> None:
                     encoding="utf-8")
 
 
+# ---- plugin hooks -----------------------------------------------------------
+# agent_bridge sets CURRENT_OWNER (the calling agent_id) around a write tool so
+# every op written in that call carries an "owner" - revert/reapply by another
+# agent is then refused.  None (GUI / legacy callers) = no owner key at all, so
+# old logs and old callers see byte-identical ops.
+CURRENT_OWNER: str | None = None
+# Tools living in plugin modules (agent_motion / agent_copy / ...) register
+# their re-solve function here:  fn(armature, base_action, *, params,
+# frame_range, status, scene, track_name) -> op dict (NOT recorded).
+REAPPLY_HANDLERS: dict = {}
+
+
 def _new_op(tool: str, params: Mapping[str, Any], frames,
             strip_name: str, status: str, metrics: Mapping | None,
             track: str | None = None) -> dict:
-    return {
+    op = {
         "id": f"{tool}_{int(time.time() * 1000) % 10**9}",
         "tool": tool,
         "params": dict(params),
@@ -208,6 +220,9 @@ def _new_op(tool: str, params: Mapping[str, Any], frames,
         "metrics": dict(metrics or {}),
         "ts": time.strftime("%Y-%m-%d %H:%M:%S"),
     }
+    if CURRENT_OWNER:
+        op["owner"] = str(CURRENT_OWNER)
+    return op
 
 
 def _record(data_dir, op) -> dict:
@@ -343,7 +358,8 @@ def reapply(data_dir: str | Path, armature: Any, op_id: str, *,
     if op is None:
         raise RuntimeError(f"op 不存在：{op_id}")
     tool = op.get("tool")
-    if tool not in TUNABLE_PARAMS:
+    plugin = REAPPLY_HANDLERS.get(tool)
+    if tool not in TUNABLE_PARAMS and plugin is None:
         raise RuntimeError(f"{tool} 不支持参数重写")
     params = dict(op.get("params") or {})
     params.update(overrides)
@@ -352,7 +368,8 @@ def reapply(data_dir: str | Path, armature: Any, op_id: str, *,
     if base_action is None:
         raise RuntimeError("找不到基底动作（active action / mcd_base）")
 
-    kwargs = _reapply_kwargs(tool, params, frame_range, op.get("status"))
+    kwargs = (None if plugin is not None
+              else _reapply_kwargs(tool, params, frame_range, op.get("status")))
     old_track_name = op.get("track")
     old_strip_name = op.get("strip")
 
@@ -373,7 +390,11 @@ def reapply(data_dir: str | Path, armature: Any, op_id: str, *,
         old_strip.frame_end += _SHIFT
     res = None
     try:
-        if tool == "hold_pose":
+        if plugin is not None:
+            res = plugin(armature, base_action, params=params,
+                         frame_range=frame_range, status=op.get("status"),
+                         scene=scene, track_name=old_track_name)
+        elif tool == "hold_pose":
             res = hold_pose(armature, base_action, scene=scene, data_dir=None,
                             record=False, track_name=old_track_name, **kwargs)
         elif tool == "clean_jitter":
