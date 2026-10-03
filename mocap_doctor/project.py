@@ -162,6 +162,22 @@ def project_data_dir(work_filepath):
     return work.parent / ".mocap_doctor" / _safe_name(work.stem)
 
 
+def resolve_data_dir(settings):
+    """settings.data_directory 存的是绝对路径——工作文件挪到别的机器/盘符
+    后它就是死路径（Linux 上 ``F:\\...`` 只会变成怪名目录）。还在就用；
+    不在就按当前 blend 位置重推并回写自愈。"""
+    stored = settings.data_directory or ""
+    if stored and Path(stored).is_dir():
+        return stored
+    fp = bpy.data.filepath or getattr(settings, "work_filepath", "") or ""
+    if fp:
+        derived = str(project_data_dir(fp))
+        if stored != derived:
+            settings.data_directory = derived
+        return derived
+    return stored or "."
+
+
 def ensure_project_directories(settings):
     root = Path(settings.data_directory)
     for name in ("checkpoints", "reports", "recovery", "logs", "tmp"):

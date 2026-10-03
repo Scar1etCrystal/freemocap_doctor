@@ -2992,7 +2992,7 @@ class MD_OT_AgentFixCommit(_AgentFixOp):
             self.report({"ERROR"}, "没有可提交的记录")
             return {"CANCELLED"}
         for item in targets:
-            agent_ops.commit(settings.data_directory or ".", item.op_id)
+            agent_ops.commit(agent_bridge._data_dir(settings), item.op_id)
         agent_bridge._bump_ops_rev_from(settings)
         agent_bridge.sync_fixes_list(settings, context.scene)
         agent_bridge._redraw()
@@ -3017,7 +3017,7 @@ class MD_OT_AgentFixRevert(_AgentFixOp):
         n = 0
         for item in targets:
             if item.op_id:
-                agent_ops.revert(rig, settings.data_directory or ".",
+                agent_ops.revert(rig, agent_bridge._data_dir(settings),
                                  item.op_id)
             elif item.strip and rig is not None:   # 孤儿行：直接删 strip
                 agent_ops.delete_op_strip(rig, {"strip": item.strip,
@@ -3046,7 +3046,7 @@ class MD_OT_AgentFixForget(_AgentFixOp):
             self.report({"ERROR"}, "没有可清除的记录")
             return {"CANCELLED"}
         rig = agent_bridge._rig_armature(settings, context.scene)
-        data_dir = settings.data_directory or "."
+        data_dir = agent_bridge._data_dir(settings)
         drop_ids = set()
         n = 0
         for item in targets:

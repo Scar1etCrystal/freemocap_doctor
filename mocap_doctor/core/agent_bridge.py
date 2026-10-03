@@ -111,6 +111,16 @@ def _resolve_bones(armature, names):
     return out
 
 
+def _data_dir(settings):
+    """op 日志目录解析：blend 文件挪机器后 settings 里的绝对路径会失效，
+    resolve_data_dir 按当前文件位置重推并回写。延迟 import 避开包循环。"""
+    try:
+        from .. import project
+        return project.resolve_data_dir(settings)
+    except Exception:
+        return settings.data_directory or "."
+
+
 def get_store(force: bool = False):
     """Build (or reuse) the query store over the current RIG armature."""
     global _STORE, _STORE_KEY
@@ -124,7 +134,7 @@ def get_store(force: bool = False):
         _STORE = agent_io.build_store_for_scene(
             scene, armature, settings,
             spec=agent_io.rig_bake_spec(armature),
-            data_dir=settings.data_directory or None,
+            data_dir=_data_dir(settings),
             use_cache=True, tag="rig",
         )
         _STORE_KEY = key
@@ -714,7 +724,7 @@ def _ctx():
         "settings": settings,
         "armature": _rig_armature(settings, scene),
         "source_armature": _source_armature(settings),
-        "data_dir": settings.data_directory or ".",
+        "data_dir": _data_dir(settings),
     }
 
 
@@ -922,7 +932,7 @@ def _param_tick():
         settings = getattr(scene, "mocap_doctor", None)
         if settings is None or not getattr(settings, "initialized", False):
             return PARAM_TICK
-        data_dir = settings.data_directory or "."
+        data_dir = _data_dir(settings)
         rig = _rig_armature(settings, scene)
         if rig is None:
             return PARAM_TICK
@@ -981,7 +991,7 @@ def _sync_params_list(settings, data_dir=None):
     key = "op_id::param"；pending 中的项跳过（不覆盖用户正在拖的值）。"""
     from .. import properties as _props
 
-    data_dir = data_dir or settings.data_directory or "."
+    data_dir = data_dir or _data_dir(settings)
     try:
         ops = agent_ops.list_ops(data_dir)
     except Exception:
@@ -1051,6 +1061,10 @@ def _on_file_loaded(*_args):
     _PARAM_PENDING.clear()
     _EMPTY_WATCH.clear()       # 新文件里旧签名无意义
     try:
+        _data_dir(_settings()[1])   # 文件挪机器后先自愈日志路径
+    except Exception:
+        pass
+    try:
         start_fixlist_timer()
     except Exception:
         pass
@@ -1093,7 +1107,7 @@ def sync_fixes_list(settings, scene=None) -> int:
     if rig is None:
         return 0
     from .. import properties as _props
-    rows = agent_ops.reconcile(rig, settings.data_directory or ".")
+    rows = agent_ops.reconcile(rig, _data_dir(settings))
     coll = settings.agent_fixes
     keep = {item.op_id: (item.exponent, item.muted, item.selected)
             for item in coll}
@@ -1136,7 +1150,7 @@ def fixes_snapshot(settings, scene=None) -> list:
     rig = _rig_armature(settings, scene)
     if rig is None:
         return []
-    return agent_ops.reconcile(rig, settings.data_directory or ".")
+    return agent_ops.reconcile(rig, _data_dir(settings))
 
 
 def status() -> dict:

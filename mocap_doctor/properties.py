@@ -35,7 +35,7 @@ def _agent_fix_strip(settings, item):
     if rig is None:
         return None, None
     if item.op_id:
-        for op in agent_ops.list_ops(settings.data_directory or "."):
+        for op in agent_ops.list_ops(agent_bridge._data_dir(settings)):
             if op["id"] == item.op_id:
                 return agent_ops.find_op_strip(rig, op)
     anim = getattr(rig, "animation_data", None)
