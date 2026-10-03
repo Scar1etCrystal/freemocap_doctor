@@ -182,9 +182,52 @@ def sole_heights(scene, armature, sides, frames) -> dict:
             for s in sides}
 
 
+# 目标模型（MMD）靴子的顶点组：足首D = 脚掌/靴身，足先EX = 脚尖。权重 > 0.5 的顶点算鞋。
+_MESH_FOOT_GROUPS = ("足首D.{s}", "足先EX.{s}")
+
+
+def mesh_sole_heights(scene, mesh_obj, sides, frames):
+    """{side: (T,) 靴底网格最低点的世界 Z}——真正的鞋底，不是关节中心。
+
+    逐帧求值目标网格（约 2.7 ms/帧）。找不到顶点组 → 返回 None（模型不是 MMD 命名）。"""
+    if mesh_obj is None or getattr(mesh_obj, "type", "") != "MESH":
+        return None
+    vg = {g.name: g.index for g in mesh_obj.vertex_groups}
+    sel = {}
+    for s in sides:
+        gi = {vg[n.format(s=s)] for n in _MESH_FOOT_GROUPS if n.format(s=s) in vg}
+        if not gi:
+            return None
+        idx = [v.index for v in mesh_obj.data.vertices
+               if any(ge.group in gi and ge.weight > 0.5 for ge in v.groups)]
+        if not idx:
+            return None
+        sel[s] = np.asarray(idx)
+    out = {s: np.zeros(len(frames)) for s in sides}
+    from .animation import preserve_scene_frame, set_scene_frame
+    import bpy
+    with preserve_scene_frame(scene):
+        for i, f in enumerate(frames):
+            set_scene_frame(scene, f)
+            ev = mesh_obj.evaluated_get(bpy.context.evaluated_depsgraph_get())
+            m = ev.to_mesh()
+            try:
+                n = len(m.vertices)
+                co = np.empty(n * 3, dtype=np.float32)
+                m.vertices.foreach_get("co", co)
+                co = co.reshape(n, 3)
+                M = np.asarray(ev.matrix_world, dtype=np.float64)
+                for s in sides:
+                    p = co[sel[s]].astype(np.float64)
+                    out[s][i] = float((p @ M[2, :3] + M[2, 3]).min())
+            finally:
+                ev.to_mesh_clear()
+    return out
+
+
 def ground_report(scene, armature, *, frame_range, floor_z, side=None,
                   threshold_mm: float = 10.0, blend: int = 4, snapshot=None,
-                  contact_height=None, detail: bool = False) -> dict:
+                  contact_height=None, detail: bool = False, mesh_obj=None) -> dict:
     """Live penetration / floating check - the before/after check for fix_ground.
 
     clearance = 脚底点最低值 − floor_z（mm）。判定相对"这只脚正常着地的高度"
@@ -261,6 +304,24 @@ def ground_report(scene, armature, *, frame_range, floor_z, side=None,
         if detail:
             res["rel_mm"] = [round(float(v), 1) for v in rel]
         out["sides"][s] = res
+    if mesh_obj is not None:
+        mh = mesh_sole_heights(scene, mesh_obj, sides, frames)
+        out["mesh"] = None if mh is None else {}
+        for s in (sides if mh is not None else ()):
+            clr = (mh[s] - float(floor_z)) * 1000.0
+            rows = []
+            for c in out["sides"][s]["contacts"]:
+                if c.get("partial"):
+                    continue
+                idx = [i for i, f in enumerate(frames) if c["frames"][0] <= f <= c["frames"][1]]
+                c["mesh_min_mm"] = round(float(clr[idx].min()), 1)
+                rows.append(c["mesh_min_mm"])
+            out["mesh"][s] = {
+                "sole_min_mm": round(float(clr.min()), 1),
+                "sole_min_frame": frames[int(np.argmin(clr))],
+                "frames_below_5mm": int((clr < -5.0).sum()),
+                "contacts_median_min_mm": round(float(np.median(rows)), 1) if rows else None,
+                "units": "mm，靴底网格最低点 − 地面（负 = 鞋陷进地面）"}
     return out
 
 
@@ -379,7 +440,7 @@ def _tool_slide_report(ctx, side=None, frame_range=None, threshold_mm=10.0,
 
 
 def _tool_ground_report(ctx, frame_range=None, side=None, threshold_mm=10.0,
-                        blend=4, detail=False, **unknown):
+                        blend=4, detail=False, mesh=False, **unknown):
     P.reject_unknown_args("ground_report", _tool_ground_report, unknown)
     if frame_range is None:
         raise RuntimeError("ground_report 需要 frame_range=[A,B]")
@@ -394,18 +455,30 @@ def _tool_ground_report(ctx, frame_range=None, side=None, threshold_mm=10.0,
             snapshot[s] = np.asarray(sh)[mask]
     from . import agent_query
     cal = agent_query.contact_heights(store)        # 与 describe/validate 同一个标定
+    mesh_obj = None
+    if mesh:
+        mesh_obj = getattr(getattr(ctx["scene"], "mocap_doctor", None), "target_mesh", None)
+        if mesh_obj is None:
+            raise RuntimeError("mesh=true 需要向导里设好目标模型网格（settings.target_mesh）")
     res = ground_report(ctx["scene"], ctx["armature"], frame_range=frame_range,
                         floor_z=store.floor_z, side=side, threshold_mm=threshold_mm,
                         blend=blend, snapshot=snapshot, contact_height=cal,
-                        detail=bool(detail))
+                        detail=bool(detail), mesh_obj=mesh_obj)
     parts = []
     for s, r in res["sides"].items():
         parts.append(f"{s}: 着地高度 {r['contact_height_mm']} mm，最低处 rel {r['rel_min_mm']} mm"
                      f" @ {r['clearance_min_frame']}，下沉段 {len(r['pen_frames'])}，悬空接触段 "
                      f"{sum(1 for c in r['contacts'] if c['floating'])}")
+    if mesh and res.get("mesh") is None:
+        raise RuntimeError("目标网格上找不到靴子的顶点组（足首D.L/R、足先EX.L/R）；mesh 模式只支持 MMD 命名的模型")
     stale = [s for s, r in res["sides"].items() if r.get("snapshot_diff_max_mm", 0) > 1.0]
     warnings = ([f"{'/'.join(stale)} 脚的快照（fix_ground 用的 sole_h）与当前姿态差 > 1 mm："
                  "这段已经被修过，fix_ground 会按旧高度算"] if stale else [])
+    for s, m in (res.get("mesh") or {}).items():
+        med = m.get("contacts_median_min_mm")
+        if med is not None and med < -5.0:
+            warnings.append(f"{s} 脚：接触期靴底网格整体比地面低 {-med} mm（中位数）——这是全局偏移，别用 fix_ground "
+                            "逐段修；报告给协调者（可在导出准备里设 vmd_floor_offset，或回到向导重做 target_floor/foot_lock）")
     return {"summary": "；".join(parts), "data": res, "warnings": warnings,
             "truncated": False,
             "hint": "fix_ground_args 去掉 why 后原样传给 fix_ground（rest_clearance 已是米）；修后同参数再调 ground_report 复测"}

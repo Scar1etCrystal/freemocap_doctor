@@ -149,6 +149,14 @@ check("G8b describe's foot flags are relative ('比正常着地…'), no false R
       r["ok"] and all("正常着地" in f for f in flags) and not any(f.startswith("foot.R") for f in flags),
       flags)
 
+# ---- G9: mesh=true reports the real boot sole (target mesh) next to the joint view -------
+r = call("ground_report", side="L", frame_range=[700, 770], mesh=True)
+m = ((r.get("data") or {}).get("mesh") or {}).get("L") or {}
+rows = [c for c in (r.get("data") or {}).get("sides", {}).get("L", {}).get("contacts", []) if "mesh_min_mm" in c]
+check("G9 ground_report(mesh=true): boot-sole numbers per side and per full contact",
+      r["ok"] and m.get("sole_min_mm") is not None and -100 < m["sole_min_mm"] < 100 and rows,
+      {k: m.get(k) for k in ("sole_min_mm", "sole_min_frame", "frames_below_5mm", "contacts_median_min_mm")})
+
 # ---- G7: typo'd parameters are rejected with the closest legal name -------------------
 r = call("ground_report", frame_range=[700, 720], treshold_mm=5)
 check("G7 ground_report(treshold_mm=…) → rejected, suggests threshold_mm",

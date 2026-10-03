@@ -138,7 +138,7 @@ list_ops       确认新 op 在册
 | `compare_motion` | 读 | `op_id`（直接验收某个 motion_copy，等价于它的 verify.args）或 `a:{bones/chain,frame_range}` `b:{…}` `mirror` `bone_map` `space` `trim` | 两段动作逐帧角差 `err_inner_deg`（复制/镜像验收；a 放目标窗） |
 | `chain_lag` | 读 | `bones`/`chain` `frame_range` `max_lag` `signal` | 每骨相对链内父骨的滞后帧数（只信 `reliable=true`） |
 | `slide_report` | 读 | `side` `frame_range` `threshold_mm` | 每段接触 foot_ik 水平漂移 `drift_mm`（**毫米**），flagged 行带 foot_lock 参数 |
-| `ground_report` | 读 | `frame_range` `side` `threshold_mm`(默认 10) `detail` | 实时脚底高度（DEF-foot 头/尾 + DEF-toe 尾取最低，与快照同一组点）。先从全片 contact 标注标定每只脚"正常着地"高度 `contact_height_mm`（关节中心不是鞋底，穿鞋模型踩实时也离地几厘米），再按相对值判：`pen_max_mm`/`pen_frames`（下沉）、`contacts[].floating`（悬空）；`fix_ground_args` 带好 `mode` 和 `rest_clearance`（米）；`snapshot_diff_max_mm` > 1 mm = 快照已过时，fix_ground 会按旧高度算 |
+| `ground_report` | 读 | `frame_range` `side` `threshold_mm`(默认 10) `detail` | 实时脚底高度（DEF-foot 头/尾 + DEF-toe 尾取最低，与快照同一组点）。先从全片 contact 标注标定每只脚"正常着地"高度 `contact_height_mm`（关节中心不是鞋底，穿鞋模型踩实时也离地几厘米），再按相对值判：`pen_max_mm`/`pen_frames`（下沉）、`contacts[].floating`（悬空）；`fix_ground_args` 带好 `mode` 和 `rest_clearance`（米）；`snapshot_diff_max_mm` > 1 mm = 快照已过时，fix_ground 会按旧高度算；`mesh:true` 另报目标网格靴底（顶点组 足首D/足先EX）的真实离地高度 |
 | `motion_copy` | 写 | `bones`/`chain` `src_range` `dst_start`/`dst_range`/`time_scale` `mirror` `bone_map` `space`(local/world) `channels`(rot/rot+loc) `mode`(replace/add) | 动作搬到别的时间/另一侧/别的部位；镜像用 rest 标定的 F=Rest_src⁻¹·S·Rest_dst |
 | `anticipation` | 写 | `bones`/`chain` `frame_range` `main_bone` `amount` `lead` `delay` | 发力前反向小动 + 起点后移 + 时间重映射补回总时长 |
 | `follow_through` | 写 | 同上 + `stop_frame` `amount` `period` `decay` `cycles` `propagate` | 停止点后衰减振荡 |

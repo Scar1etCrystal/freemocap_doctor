@@ -41,6 +41,8 @@ contact 标注**标定每只脚"正常着地"的高度** `contact_height_mm`，�
    看 `data.sides.R`：`contact_height_mm`、`pen_frames`（rel < −10 mm 的帧段）、`pen_max_mm`、
    `contacts[]`（`floating:true` = 这段接触整段比平时高 > 10 mm）、`fix_ground_args`（现成参数）。
    修前数字：下沉记 `pen_max_mm`；悬空记那段 contact 的 `rel_max_mm`（验收也看它；`rel_min_mm` 一并写上）。
+   想知道鞋子本身有没有陷进地面：加 `"mesh":true`，看 `data.mesh.<side>`（靴底网格最低点 − 地面，mm）。如果 warnings 说
+   "接触期靴底网格整体比地面低 X mm"——那是全局偏移，**别用 fix_ground 逐段修**，报告给协调者。
 2. `claim bones=["foot_ik.R"] frames=<fix_ground_args 的 frame_range>`。
 3. **写入**：把 `fix_ground_args` 里的一项**去掉 `why`** 原样传（`rest_clearance` 已经是**米**，别换算）：
    ```
