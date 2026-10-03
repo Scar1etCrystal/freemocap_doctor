@@ -740,9 +740,22 @@ def set_strip_exponent(strip: Any, exponent: float) -> dict:
             fc.update()      # 重算贝塞尔手柄，保持原插值类型
         touched += 1
 
+    # Euler / location delta 在 Combine 下相加 → 线性缩放即"力度"。
+    # （旧版只缩四元数通道：手臂 Euler 修复、位置修复拖力度毫无反应）
+    scalar_touched = 0
+    for fc in action.fcurves:
+        dp = fc.data_path
+        if not (dp.endswith(".rotation_euler") or dp.endswith(".location")):
+            continue
+        for kp in fc.keyframe_points:
+            kp.co = (kp.co[0], kp.co[1] / e_prev * float(exponent))
+        fc.update()
+        scalar_touched += 1
+
     action["applied_exp"] = float(exponent)
     strip.influence = 1.0    # 力度烘进曲线，influence 不再当旋钮
-    return {"touched": touched, "exponent": float(exponent)}
+    return {"touched": touched, "scalar_touched": scalar_touched,
+            "exponent": float(exponent)}
 
 
 def locked_exclusions(data_dir: str | Path) -> list:
@@ -957,27 +970,60 @@ def clean_jitter(
     data_dir: str | Path | None = None,
     track_name: str | None = None,
 ) -> dict:
-    """Zero-phase smooth each channel inside the window; write deltas."""
+    """Zero-phase smooth each channel inside the window; write deltas.
+
+    rotation_quaternion paths are smoothed as ONE 4-vector (sign-continuous,
+    renormalised) and written as a true quaternion delta conj(cur)⊗new.  The
+    old per-component ``new - cur`` scalars were garbage on a Combine strip:
+    Blender normalises the strip's 4 values and multiplies, so a near-zero
+    component difference became an arbitrary rotation (measured 145–172°
+    mean error and 20–120× MORE jitter on hand_fk.L / spine_fk.001).
+    Euler / location channels add under Combine, so scalar deltas are right.
+    """
     start, end = int(frame_range[0]), int(frame_range[1])
     scalars = {}
+    quats = {}
+    qpaths = []
     for path, index in paths:
+        if str(path).endswith(".rotation_quaternion"):
+            if path not in qpaths:
+                qpaths.append(path)
+            continue
         cur = agent_bake.sample_fcurve_values(base_action, path, index, start, end)
         if cur is None:
             continue
         new = agent_fx.clean_jitter_values(cur, strength=strength,
                                            width=width, blend=blend)
         scalars[(path, index)] = new - cur
-    if not scalars:
+    for path in qpaths:
+        comps = [agent_bake.sample_fcurve_values(base_action, path, i,
+                                                 start, end)
+                 for i in range(4)]
+        if any(c is None for c in comps):
+            continue
+        cur = np.stack(comps, axis=1)
+        cur /= np.linalg.norm(cur, axis=1, keepdims=True)
+        for i in range(1, len(cur)):
+            if float(cur[i] @ cur[i - 1]) < 0:
+                cur[i] = -cur[i]
+        new = cur.copy()
+        for c in range(4):
+            new[:, c] = agent_fx.clean_jitter_values(
+                cur[:, c], strength=strength, width=width, blend=blend)
+        new /= np.linalg.norm(new, axis=1, keepdims=True)
+        quats[path] = agent_fx.delta_quat(new, cur)
+    if not scalars and not quats:
         raise RuntimeError("没有任何通道在动作里")
     name = f"agent_jitter_{start}_{end}"
     _track, strip = _write_strip(armature, name, start, scalars=scalars,
-                               blend=blend, track_name=track_name)
+                               quats=quats, blend=blend,
+                               track_name=track_name)
     op = _new_op("clean_jitter",
                  {"paths": [list(p) for p in paths], "strength": strength,
                   "width": width, "blend": blend,
                   "frame_range": [start, end]},
                  (start, end), strip.name, mode,
-                 {"channel_count": len(scalars)},
+                 {"channel_count": len(scalars) + 4 * len(quats)},
                  track=_track.name)
     return _record(data_dir, op) if data_dir else op
 
@@ -1071,6 +1117,41 @@ def _basis_channel(action: Any, quat_path: str, start: int, end: int):
     if any(p is None for p in parts):
         return None
     return np.stack(parts, axis=1)
+
+
+def _euler_channel(action: Any, bone: str, start: int, end: int):
+    """Sample rotation_euler fcurves → (T,3) radians; None if missing."""
+    path = bone_path(bone, "rotation_euler")
+    parts = [agent_bake.sample_fcurve_values(action, path, i, start, end)
+             for i in range(3)]
+    if any(p is None for p in parts):
+        return None
+    return np.stack(parts, axis=1)
+
+
+def _euler_to_quats(eulers: np.ndarray, order: str) -> np.ndarray:
+    from mathutils import Euler
+    out = np.zeros((len(eulers), 4))
+    for i, e in enumerate(eulers):
+        q = Euler((float(e[0]), float(e[1]), float(e[2])), order).to_quaternion()
+        out[i] = (q.w, q.x, q.y, q.z)
+    for i in range(1, len(out)):
+        if float(np.dot(out[i - 1], out[i])) < 0.0:
+            out[i] = -out[i]
+    return out
+
+
+def _quats_to_euler(quats: np.ndarray, order: str,
+                    compat: np.ndarray) -> np.ndarray:
+    from mathutils import Euler, Quaternion
+    out = np.zeros((len(quats), 3))
+    for i, q in enumerate(quats):
+        ref = Euler((float(compat[i][0]), float(compat[i][1]),
+                     float(compat[i][2])), order)
+        e = Quaternion((float(q[0]), float(q[1]), float(q[2]),
+                        float(q[3]))).to_euler(order, ref)
+        out[i] = (e.x, e.y, e.z)
+    return out
 
 
 def _geo_deg(a: np.ndarray, b: np.ndarray) -> np.ndarray:
@@ -1520,16 +1601,28 @@ def hold_pose(
 
     frames = np.arange(start, end + 1)
     quats: dict[str, np.ndarray] = {}
+    scalars: dict = {}
     metrics = {"bones": {}, "fixed_frames": 0}
     dir_metrics: dict[str, dict] = {}
     values = values or {}
 
     cur_by_bone = {}
+    euler_by_bone = {}       # Euler 骨（手臂）：order + 基底 Euler 曲线
     for bone in bones:
-        path = bone_path(bone, "rotation_quaternion")
-        cur = _basis_channel(base_action, path, start, end)
-        if cur is None:
-            raise RuntimeError(f"{bone} 没有 rotation_quaternion 通道")
+        mode_r = armature.pose.bones[bone].rotation_mode
+        if mode_r == "QUATERNION":
+            path = bone_path(bone, "rotation_quaternion")
+            cur = _basis_channel(base_action, path, start, end)
+            if cur is None:
+                raise RuntimeError(f"{bone} 没有 rotation_quaternion 通道")
+        elif mode_r == "AXIS_ANGLE":
+            raise RuntimeError(f"{bone} 是 AXIS_ANGLE 旋转，hold_pose 不支持")
+        else:
+            ce = _euler_channel(base_action, bone, start, end)
+            if ce is None:
+                raise RuntimeError(f"{bone} 没有 rotation_euler 通道")
+            cur = _euler_to_quats(ce, mode_r)
+            euler_by_bone[bone] = (mode_r, ce)
         cur_by_bone[bone] = cur
 
     if target == "from_frame" and ref_frame in (None, "auto"):
@@ -1560,7 +1653,12 @@ def hold_pose(
             desired = np.tile(ref, (n, 1))
         elif target == "from_frame":
             rf = int(ref_frame)
-            ref = _basis_channel(base_action, path, rf, rf)
+            if bone in euler_by_bone:
+                ce_rf = _euler_channel(base_action, bone, rf, rf)
+                ref = (None if ce_rf is None
+                       else _euler_to_quats(ce_rf, euler_by_bone[bone][0]))
+            else:
+                ref = _basis_channel(base_action, path, rf, rf)
             if ref is None:
                 raise RuntimeError(f"{bone} 在 {rf} 帧无数据")
             desired = np.tile(ref[0], (n, 1))
@@ -1618,18 +1716,28 @@ def hold_pose(
         if bone in dir_metrics:
             metrics["bones"][bone].update(dir_metrics[bone])
         metrics["fixed_frames"] += int((err > threshold_deg).sum())
+        if bone in euler_by_bone:
+            # Euler 通道在 Combine 下相加：delta = Euler(final, compat=cur) − cur
+            order, ce = euler_by_bone[bone]
+            fe = _quats_to_euler(final, order, ce)
+            epath = bone_path(bone, "rotation_euler")
+            for c in range(3):
+                scalars[(epath, c)] = (fe[:, c] - ce[:, c]) * float(strength)
+            continue
         quats[path] = agent_fx.delta_quat(final, cur)
-        # scale the correction by strength via angle scaling
-        if float(strength) < 1.0:
+        # strength 只作用一次：缩放 delta 角度（>1 = 超量修正）。旧版 <1 时既
+        # 缩角度又设 strip.influence=strength（Combine 对四元数按 influence 再取
+        # 幂）→ 实际 strength²；>1 时 influence 被钳到 1 → 完全无效。
+        if float(strength) != 1.0:
             from .pkl_hand import aa_to_quat, quat_to_aa
             quats[path] = aa_to_quat(
                 quat_to_aa(quats[path]) * float(strength))
 
     name = strip_name or f"agent_hold_{start}_{end}"
     _track, strip = _write_strip(
-        armature, name, start, quats=quats, blend=blend,
+        armature, name, start, scalars=scalars, quats=quats, blend=blend,
         track_name=track_name)
-    strip.influence = float(strength)
+    strip.influence = 1.0
     op = _new_op(
         "hold_pose",
         # params 必须覆盖全部求解输入（reapply 靠它重算）

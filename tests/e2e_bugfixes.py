@@ -1,0 +1,182 @@
+"""Bug-fix regressions found during the 2026-10-03 session (measured, not assumed).
+
+  1. clean_jitter(bone=quaternion bone) wrote per-component quaternion
+     differences into a Combine strip → ~150-180° garbage rotations and
+     20-120× MORE jitter.  Now: true quaternion delta, small change, less jitter.
+  2. clean_jitter(bone=Euler arm bone) skipped the rotation (built
+     rotation_quaternion paths that don't exist) → only location smoothed.
+  3. hold_pose strength applied twice (<1 → strength², >1 → no effect).
+  4. hold_pose refused Euler bones (upper_arm/forearm/shoulder) - the owner
+     probe_anatomy elbow_front hands out.
+  5. set_influence ignored Euler / location deltas.
+"""
+import os
+import sys
+
+import addon_utils
+import bpy
+import numpy as np
+
+addon_utils.enable("bl_ext.user_default.mocap_doctor")
+from bl_ext.user_default.mocap_doctor.core import (  # noqa: E402
+    agent_anatomy, agent_bridge, agent_ops, agent_pose as P)
+from mathutils import Matrix, Vector  # noqa: E402
+
+RESULTS = []
+
+
+def check(name, ok, detail=""):
+    RESULTS.append((name, bool(ok), str(detail)))
+    print(f"[{'PASS' if ok else 'FAIL'}] {name} :: {detail}", flush=True)
+
+
+scene = bpy.context.scene
+settings = scene.mocap_doctor
+rig = settings.mmr_rig or next(o for o in scene.objects if o.type == "ARMATURE"
+                               and o.name.startswith("RIG-"))
+settings.mmr_rig = rig
+data_dir = os.path.join(os.path.dirname(bpy.data.filepath), "e2e_bugfixes_data")
+os.makedirs(data_dir, exist_ok=True)
+settings.data_directory = data_dir
+oplog = os.path.join(data_dir, "agent_ops.json")
+if os.path.exists(oplog):
+    os.remove(oplog)
+
+
+def call(tool, **args):
+    r = agent_bridge._dispatch({"tool": tool, "args": args})
+    if not r["ok"]:
+        print("ERR", tool, r.get("error"), r.get("trace"))
+    return r
+
+
+A, B = 150, 224
+FR = list(range(A, B + 1))
+INNER = slice(6, -6)
+
+
+def jitter(q):
+    sp = P.angular_speed_deg(q)
+    return float(np.abs(np.diff(sp, 2)).mean())
+
+
+# ---- 1/2: clean_jitter on quaternion + Euler bones --------------------------
+for role, bone in (("left_hand", "hand_fk.L"), ("spine2", "spine_fk.001"),
+                   ("left_forearm", "forearm_fk.L")):
+    smp_b = P.sample_visible(scene, rig, [bone], FR)
+    before = smp_b["quat"][bone]
+    eul_before = smp_b["euler"].get(bone)
+    r = call("clean_jitter", frame_range=[A, B], bone=role, strength=1.0, width=5)
+    after = P.sample_visible(scene, rig, [bone], FR)["quat"][bone]
+    ch = P.qangle_deg(before, after)
+    jb, ja = jitter(before[INNER]), jitter(after[INNER])
+    # 独立重算：对可见四元数（符号连续）逐分量零相位平滑后归一化——内段
+    # （两端 taper 外）Blender 求值结果必须等于它。旧 bug 下这里差 ~150°。
+    from bl_ext.user_default.mocap_doctor.core import agent_fx
+    if P.rot_mode(rig.pose.bones[bone]) == "QUATERNION":
+        q = P.quat_continuous(before)
+        sm = np.stack([agent_fx.clean_jitter_values(q[:, c], strength=1.0, width=5,
+                                                    blend=4) for c in range(4)], axis=1)
+        sm = P.quat_normalize(sm)
+    else:   # Euler 骨：Combine 下 Euler 相加，平滑的是 Euler 三通道本身
+        order = P.rot_mode(rig.pose.bones[bone])
+        eb = eul_before
+        es = np.stack([agent_fx.clean_jitter_values(eb[:, c], strength=1.0, width=5,
+                                                    blend=4) for c in range(3)], axis=1)
+        from mathutils import Euler
+        sm = P.quat_continuous(np.array([list(Euler(tuple(e), order).to_quaternion())
+                                         for e in es]))
+    dev = P.qangle_deg(after, sm)[INNER]
+    check(f"1 clean_jitter {bone}: = independent smoothing, less jitter",
+          r["ok"] and dev.max() < 0.1 and ja < jb and ch.max() < 15.0,
+          f"vs-expected max={dev.max():.4f}°  change max={ch.max():.2f}° "
+          f"mean={ch.mean():.2f}°  jitter {jb:.3f}→{ja:.3f} {r['data']['metrics']}")
+    if bone == "forearm_fk.L":
+        op = agent_ops.get_op(data_dir, r["data"]["op_id"])
+        _t, strip = agent_ops.find_op_strip(rig, op)
+        paths = sorted({fc.data_path.rsplit(".", 1)[1] for fc in strip.action.fcurves})
+        check("2 Euler bone smooths rotation_euler", "rotation_euler" in paths, paths)
+    call("revert", op_id=r["data"]["op_id"])
+    back = P.sample_visible(scene, rig, [bone], FR)["quat"][bone]
+    check(f"1b revert restores {bone}", P.qangle_deg(before, back).max() < 0.01)
+
+# ---- 3: strength applied once -----------------------------------------------
+bone = "hand_fk.L"
+before = P.sample_visible(scene, rig, [bone], FR)["quat"][bone]
+eff = {}
+for s in (1.0, 0.5, 1.5):
+    r = call("hold_pose", bones=[bone], frame_range=[A, B], target="values",
+             strength=s, blend=4)
+    after = P.sample_visible(scene, rig, [bone], FR)["quat"][bone]
+    eff[s] = float(np.median(P.qangle_deg(before, after)[INNER]))
+    call("revert", op_id=r["data"]["op_id"])
+check("3 strength 0.5 → half the correction (was 0.25)",
+      abs(eff[0.5] / eff[1.0] - 0.5) < 0.03, f"ratio={eff[0.5] / eff[1.0]:.3f} eff={eff}")
+check("3b strength 1.5 → 1.5× (was 1.0×)",
+      abs(eff[1.5] / eff[1.0] - 1.5) < 0.05, f"ratio={eff[1.5] / eff[1.0]:.3f}")
+
+# ---- 4: hold_pose on Euler bones -----------------------------------------------
+fa = "forearm_fk.L"
+base = agent_ops.base_action_of(rig)
+ref_f = 160
+smp0 = P.sample_visible(scene, rig, [fa], FR + [ref_f])
+r = call("hold_pose", bones=["left_forearm"], frame_range=[A, B], target="from_frame",
+         ref_frame=ref_f, blend=4)
+check("4 hold_pose accepts Euler bone (forearm_fk.L)", r["ok"], r.get("error"))
+smp1 = P.sample_visible(scene, rig, [fa], FR)
+want = np.tile(smp0["quat"][fa][-1], (len(FR), 1))      # visible @ ref frame
+err = P.qangle_deg(smp1["quat"][fa], want)[INNER]
+check("4b Euler from_frame holds the reference pose (inner)", err.max() < 0.05,
+      f"err_inner max={err.max():.4f}°")
+op_fa = r["data"]["op_id"]
+# ---- 5: set_influence scales Euler deltas -----------------------------------------
+e1 = float(np.median(P.qangle_deg(smp0["quat"][fa][:-1], smp1["quat"][fa])[INNER]))
+call("set_influence", op_id=op_fa, value=0.5)
+smp2 = P.sample_visible(scene, rig, [fa], FR)
+e05 = float(np.median(P.qangle_deg(smp0["quat"][fa][:-1], smp2["quat"][fa])[INNER]))
+check("5 set_influence 0.5 halves an Euler correction (was ignored)",
+      abs(e05 / e1 - 0.5) < 0.06, f"{e1:.2f}° → {e05:.2f}° ratio={e05 / e1:.3f}")
+call("revert", op_id=op_fa)
+
+# ---- 4c: world_dir on an Euler bone (static axis) -------------------------------
+ua = "upper_arm_fk.L"
+ax0 = agent_anatomy.probe(scene, rig, part="bone_axis", bone=ua, frame_range=[A, B])
+y0 = Vector(ax0["axes"]["+Y"])
+target = (Matrix.Rotation(np.radians(30.0), 3, "Z") @ y0).normalized()
+r = call("hold_pose", bones=["left_upper_arm"], frame_range=[A, B], target="world_dir",
+         world_dir=list(target), world_axis="Y", secondary_axis="X", blend=4)
+check("4c world_dir on Euler bone writes", r["ok"], r.get("error"))
+errs = []
+cur = scene.frame_current
+for f in FR[8:-8]:
+    scene.frame_set(f)
+    m = (rig.matrix_world @ rig.pose.bones[ua].matrix).to_quaternion()
+    errs.append(np.degrees((m @ Vector((0, 1, 0))).angle(target)))
+scene.frame_set(cur)
+check("4d upper arm +Y lands on target (inner, re-measured)", max(errs) < 0.5,
+      f"err max={max(errs):.3f}°")
+call("revert", op_id=r["data"]["op_id"])
+
+# ---- 4e: elbow_front flow (probe → hold_pose) on the Euler owner -----------------
+pe = agent_anatomy.probe(scene, rig, part="elbow_front", side="L", frame_range=[A, B])
+if (pe.get("confidence") or 0) >= 0.5 and pe.get("secondary_axis"):
+    w0 = Vector(pe["world_dir"])
+    tgt = (Matrix.Rotation(np.radians(25.0), 3, "Z") @ w0).normalized()
+    r = call("hold_pose", bones=[pe["owner_bone"]], frame_range=[A, B], target="world_dir",
+             world_dir=list(tgt), world_axis="probe:elbow_front.L",
+             secondary_axis=pe["secondary_axis"], blend=4)
+    pe2 = agent_anatomy.probe(scene, rig, part="elbow_front", side="L",
+                              frame_range=[A, B], toward=list(tgt))
+    check("4e elbow_front standard flow works on Euler owner",
+          r["ok"] and pe2.get("err_inner_deg") is not None and pe2["err_inner_deg"] < 8,
+          f"owner={pe['owner_bone']} conf={pe['confidence']} err_inner={pe2.get('err_inner_deg')}")
+    call("revert", op_id=r["data"]["op_id"])
+else:
+    check("4e elbow_front standard flow works on Euler owner (skipped: low conf)", True,
+          f"conf={pe.get('confidence')}")
+
+fails = [r for r in RESULTS if not r[1]]
+print(f"\n==== {len(RESULTS) - len(fails)}/{len(RESULTS)} PASS ====")
+for n, _o, d in fails:
+    print(f"FAIL {n}: {d}")
+sys.exit(1 if fails else 0)

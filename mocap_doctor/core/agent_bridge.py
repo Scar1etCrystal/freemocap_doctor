@@ -714,10 +714,13 @@ def _tool_clean_jitter(ctx, frame_range, bone=None, paths=None,
     armature = ctx["armature"]
     if paths is None and bone:
         bone = _resolve_bones(armature, [bone])[0]
+        mode_r = armature.pose.bones[bone].rotation_mode
+        rot_prop, n_rot = (("rotation_quaternion", 4) if mode_r == "QUATERNION"
+                           else ("rotation_axis_angle", 4) if mode_r == "AXIS_ANGLE"
+                           else ("rotation_euler", 3))   # 手臂是 Euler 骨
         paths = (
             [(agent_ops.bone_path(bone, "location"), i) for i in range(3)]
-            + [(agent_ops.bone_path(bone, "rotation_quaternion"), i)
-               for i in range(4)]
+            + [(agent_ops.bone_path(bone, rot_prop), i) for i in range(n_rot)]
         )
     if not paths:
         raise RuntimeError("clean_jitter 需要 bone 或 paths")
