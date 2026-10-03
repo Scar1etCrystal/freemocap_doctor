@@ -11,6 +11,7 @@
   agent_id 会变成空字符串（匿名写入、没有 owner）；本机 shell 是 zsh，带空格的 `$C` 还会直接
   报 "no such file"。JSON 用**单引号**包住；JSON 里骨名的双引号写成 `\"`（例：
   `"data_path":"pose.bones[\"hand_fk.R\"].rotation_quaternion"`）。
+- zsh 里带 `*` 的参数要加引号（`grep --include='*.md'`），否则直接报 "no matches found"、命令根本没跑。
 - 每个调用都带 `"agent_id":"<ME>"`。不带 = 匿名，会被别人的 claim 挡住，写的 op 也没有 owner。
 - `ping` 的 `data.tools` 里没有你要的工具 → 服务没重启/代码没部署：停下报告，别绕路。
 - 服务是 headless Blender（没人看视口）。**验收只看数字。不要启动 Blender、不要跑 mcd.sh**

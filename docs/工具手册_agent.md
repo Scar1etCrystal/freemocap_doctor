@@ -121,6 +121,7 @@ list_ops       确认新 op 在册
 | `ab_toggle` | — | 全部 agent 轨静音/放响 |
 | `revert` | `op_id` | 删 strip+action+轨+记录 |
 | `commit` | `op_id` | 标记已提交（**别调，用户的事**） |
+| `save` | – | 把工作文件落盘（headless 服务里没人按 Ctrl+S；每段修复完成后调一次） |
 
 ### 读工具：快照类 vs 实时类（2026-10-03 补）
 

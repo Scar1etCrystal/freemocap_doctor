@@ -58,7 +58,7 @@ scope：<骨/链> × [A,B]。只许写这里。写之前 claim（读、dry_run �
 ## 4. 收单检查（每份报告都过一遍）
 
 - 有修前/修后**数字**，且数字来自实时类读工具（probe_anatomy / analyze_motion / compare_motion /
-  chain_lag / slide_report）。"应该没问题" = 没做完。
+  chain_lag / slide_report / ground_report）。"应该没问题" = 没做完。
 - `list_claims` 里该 agent 已 release；`list_ops` 里它的 op 都是 `preview`、`alive=true`、owner 正确。
 - 报告里说"层级相关"的，安排对应子骨任务的 agent 复测。
 - 最后协调者自己 `save` 一次，`list_ops` 对账：`fixes` 里没有 `lost` / `unregistered`。
@@ -67,3 +67,7 @@ scope：<骨/链> × [A,B]。只许写这里。写之前 claim（读、dry_run �
 
 **等所有 agent 的报告都到了**（不是只看它 release 了——有的 agent release 后还会再复测一次）
 再 `bash /home/sb/remote_kit_1.7.1/tools/mcd.sh server-stop`（之前先 save！）→ 需要回归时跑 `20_verifier.md`。
+
+派验收者之前：**协调者自己** `mcd.sh deploy`（subagent 跑 deploy 会被自动模式权限当成"生产部署"拦下），
+`git status` 干净或改动已提交；之后**冻结**——验收期间不改 clone、不 deploy、不起服务、不跑别的 Blender，
+否则验收测的不是你以为的那份代码（2026-10-03 第四轮就踩了：协调者中途改代码并重新部署）。
