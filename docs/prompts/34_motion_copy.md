@@ -45,6 +45,8 @@
    /home/sb/remote_kit_1.7.1/tools/agent compare_motion '{"agent_id":"<ME>","op_id":"<op_id>"}'
    ```
    （写入**之前**的修前基线没有 op_id，用第 1 步 dry_run 返回的 verify.args。）
+   写入响应 warnings 出现"源窗 … 正被 … 认领" = 别人正在改你的源：在报告"遗留"里写明，请协调者等对方完成后让你
+   `reapply {"op_id":…, "overrides":{}}` 重新复制一次。
    `err_inner_deg < 0.05` = 到位（四元数骨有 ~0.005–0.03° 的 float32 噪声，正常）。
    verify.args 里没有 agent_id——调用时在顶层自己补上 `"agent_id":"<ME>"`。
    **不达标**：先 `reapply {"op_id":…, "overrides":{}}`（空 overrides = 按当前现场重算一次）再验；

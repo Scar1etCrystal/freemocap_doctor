@@ -537,7 +537,7 @@ def _op_envelope(op: dict, tool: str) -> dict:
             "preview": {"track": op.get("strip"),
                         "playback_range": frames},
         },
-        "warnings": [],
+        "warnings": list(op.get("_warnings") or []),   # 插件写工具的附加提示（不进 op 日志）
         "truncated": False,
         "hint": "看视口 A/B 后 commit(op_id) 或 revert(op_id)",
     }
@@ -1167,10 +1167,12 @@ def _tool_list_claims(ctx, **_):
 def _tool_plan_scopes(ctx, tasks=None, **_):
     """派单前体检（协调者用，只读）：把打算并行派出去的任务 scope 先过一遍。
 
-    tasks=[{"name":"左臂去抖","bones":[...]|"chain":"arm.L","frames":[a,b]}, ...]
+    tasks=[{"name":"左臂去抖","bones":[...]|"chain":"arm.L","frames":[a,b],
+            "reads":{"chain":"arm.L","frames":[c,d]}（可选，也可以是列表）}, ...]
     返回：两两冲突（同骨+帧重叠 = hard，必须分批；父子骨+帧重叠 = related，
-    父骨的任务应先做）、与现有租约的冲突、建议的并行批次 waves（同一批内两两
-    无 hard 冲突，且任何子骨任务都排在它的父骨任务之后）。"""
+    父骨的任务应先做；A 写的骨×帧落在 B 声明要**读**的范围里 = read，A 先做——
+    比如动作复制的源窗被别人改，复制的就是旧姿态）、与现有租约的冲突、建议的
+    并行批次 waves（同一批内两两无 hard 冲突，子骨任务/读者排在父骨任务/写者之后）。"""
     tasks = list(tasks or [])
     if not tasks:
         raise agent_query.AgentQueryError(
@@ -1181,8 +1183,16 @@ def _tool_plan_scopes(ctx, tasks=None, **_):
     for i, t in enumerate(tasks):
         bset = _claim_bones(ctx, t.get("bones"), t.get("chain"))
         fr = t.get("frames") or t.get("frame_range")
+        reads = t.get("reads") or []
+        if isinstance(reads, Mapping):
+            reads = [reads]
+        rd = []
+        for r_ in reads:
+            rfr = r_.get("frames") or r_.get("frame_range")
+            rd.append((_claim_bones(ctx, r_.get("bones"), r_.get("chain")),
+                       None if rfr is None else (int(rfr[0]), int(rfr[1]))))
         rows.append({"i": i, "name": str(t.get("name") or f"task{i}"),
-                     "bones": bset,
+                     "bones": bset, "reads": rd,
                      "frames": None if fr is None else (int(fr[0]), int(fr[1]))})
     pairs = []
     parent_of = {r["i"]: set() for r in rows}       # j ∈ parent_of[i]: j 改的是 i 的祖先骨
@@ -1211,7 +1221,27 @@ def _tool_plan_scopes(ctx, tasks=None, **_):
                         parent_of[y].add(x)
                     else:
                         parent_of[x].add(y)
-    # 批次：父骨任务先；同批不许 hard 冲突
+    # 读依赖：x 写的骨（或其祖先）× 帧落在 y 要读的范围里 → x 先做
+    for x in range(len(rows)):
+        for y in range(len(rows)):
+            if x == y:
+                continue
+            for rbones, rfr in rows[y]["reads"]:
+                if not agent_claims.frames_overlap(rows[x]["frames"], rfr):
+                    continue
+                shared = agent_claims._bones_hard(rows[x]["bones"], rbones)
+                rel = agent_claims._bones_related(rows[x]["bones"], rbones, anc)
+                if not (shared is agent_claims.ALL or shared or rel):
+                    continue
+                pairs.append({"a": rows[x]["name"], "b": rows[y]["name"], "kind": "read",
+                              "bones": ("ALL" if shared is agent_claims.ALL else
+                                        sorted(shared)[:8] if shared else
+                                        [f"{p}→{c}" for p, c in rel[:6]]),
+                              "frames": agent_claims.frames_intersection(rows[x]["frames"], rfr),
+                              "note": f"{rows[y]['name']} 读的范围被 {rows[x]['name']} 改：后者先做"})
+                parent_of[y].add(x)
+                break
+    # 批次：父骨任务/写者先；同批不许 hard 冲突
     wave_of: dict = {}
     order = sorted(range(len(rows)), key=lambda i: len(parent_of[i]))
     for _round in range(len(rows) + 1):
@@ -1237,14 +1267,25 @@ def _tool_plan_scopes(ctx, tasks=None, **_):
             vs_claims.append({"task": r["name"],
                               "held_by": sorted({h["agent_id"] for h in hard}),
                               "related_to": sorted({h["agent_id"] for h in soft})})
+    for r in rows:
+        for rbones, rfr in r["reads"]:
+            hard, _soft = _LEASES.conflicts("__plan__", rbones, rfr, anc)
+            if hard:
+                vs_claims.append({"task": r["name"], "reads_held_by": sorted({h["agent_id"] for h in hard})})
+    warnings = []
+    for y, deps in parent_of.items():
+        for x in deps:
+            if wave_of.get(y, 0) <= wave_of.get(x, 0):
+                warnings.append(f"{rows[x]['name']} 与 {rows[y]['name']} 互相依赖（循环），排不出先后：拆开或手动定顺序")
     n_hard = sum(1 for p in pairs if p["kind"] == "hard")
-    n_rel = len(pairs) - n_hard
+    n_read = sum(1 for p in pairs if p["kind"] == "read")
+    n_rel = len(pairs) - n_hard - n_read
     summary = (f"{len(rows)} 个任务 → {len(waves)} 批"
-               f"（hard 冲突 {n_hard}，父子相关 {n_rel}，与现有租约冲突 {len(vs_claims)}）")
+               f"（hard 冲突 {n_hard}，父子相关 {n_rel}，读依赖 {n_read}，与现有租约冲突 {len(vs_claims)}）")
     return {"summary": summary,
             "data": {"waves": waves, "conflicts": pairs, "vs_claims": vs_claims,
                      "parallel_ok": len(waves) == 1 and not vs_claims},
-            "warnings": [], "truncated": False,
+            "warnings": sorted(set(warnings)), "truncated": False,
             "hint": "同一批内的任务可以同时派；下一批等上一批 release 后再派"}
 
 

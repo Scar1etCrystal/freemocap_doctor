@@ -267,6 +267,32 @@ spans = sorted(tuple(c["frames"]) for c in mine)
 check("22d reapply moving dst_start claims old and new windows",
       rr["ok"] and (405, 450) in spans and (470, 515) in spans, spans)
 
+# ---- read dependencies: a copy's source window is a READ scope ------------------------
+agent_bridge._LEASES.clear()
+r = call("plan_scopes", tasks=[
+    {"name": "copy", "chain": "arm.L", "frames": [1430, 1480],
+     "reads": {"chain": "arm.L", "frames": [630, 680]}},
+    {"name": "elbow", "bones": ["upper_arm_fk.L"], "frames": [600, 640]},
+    {"name": "other", "chain": "arm.R", "frames": [600, 640]}])
+waves = r["data"]["waves"] if r["ok"] else []
+kinds = [(c["a"], c["b"], c["kind"]) for c in (r["data"]["conflicts"] if r["ok"] else [])]
+check("23 plan_scopes: a task writing another task's read range goes first",
+      r["ok"] and ("elbow", "copy", "read") in kinds
+      and any("elbow" in w for w in waves[:1]) and any("copy" in w for w in waves[1:]),
+      f"waves={waves} conflicts={kinds}")
+call("claim", agent_id="writer", bones=["upper_arm_fk.L"], frames=[600, 640])
+r = call("motion_copy", agent_id="copier", chain="arm.L", src_range=[630, 680], dst_start=1430)
+check("23b motion_copy warns when its source window is claimed by someone else",
+      r["ok"] and any("源窗" in w for w in r.get("warnings", [])), r.get("warnings"))
+if r["ok"]:
+    call("revert", agent_id="copier", op_id=r["data"]["op_id"])
+r = call("plan_scopes", tasks=[{"name": "copy2", "chain": "arm.R", "frames": [1430, 1480],
+                                "reads": {"chain": "arm.L", "frames": [630, 680]}}])
+check("23c plan_scopes reports a live claim on a task's read range",
+      r["ok"] and any(v.get("reads_held_by") == ["writer"] for v in r["data"]["vs_claims"]),
+      r["data"]["vs_claims"] if r["ok"] else r.get("error"))
+agent_bridge._LEASES.clear()
+
 fails = [r for r in RESULTS if not r[1]]
 print(f"\n==== {len(RESULTS) - len(fails)}/{len(RESULTS)} PASS ====")
 for n, _o, d in fails:

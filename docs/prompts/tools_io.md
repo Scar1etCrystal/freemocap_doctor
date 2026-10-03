@@ -138,7 +138,7 @@ ping → 读/探查（确定 scope 和修前基线）→ claim → 写（带 exp
 | `revert {op_id}` | 撤销你自己的 op |
 | `set_influence {op_id, value}` | 力度（0.5 = 一半，1.5 = 超量） |
 | `claim` / `release` / `list_claims` | 并发租约 |
-| `plan_scopes` | 协调者派单前用（工人不用） |
+| `plan_scopes` | 协调者派单前用（工人不用）；任务可带 `reads`（复制的源窗），写-读重叠报 `kind:"read"`、写者先做 |
 | `eval_bpy` / `set_preview` / `ab_toggle` | 调试/GUI 用，工人任务里**不要用**（ab_toggle 见 §4 第 7 条） |
 | `save` | 落盘（段落完成必调） |
 | `commit` | **禁用** |

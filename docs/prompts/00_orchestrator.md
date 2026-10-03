@@ -32,8 +32,11 @@ bash /home/sb/remote_kit_1.7.1/tools/mcd.sh server-start <工作文件.blend>  #
 /home/sb/remote_kit_1.7.1/tools/agent plan_scopes '{"tasks":[
   {"name":"左臂预备","chain":"arm_nofingers.L","frames":[550,603]},
   {"name":"右脚脚滑","bones":["right_foot"],"frames":[790,853]},
-  {"name":"脊柱去抖","chain":"spine_head","frames":[500,620]}]}'
+  {"name":"脊柱去抖","chain":"spine_head","frames":[500,620]},
+  {"name":"复制手势","chain":"arm.L","frames":[1430,1480],"reads":{"chain":"arm.L","frames":[630,680]}}]}'
 ```
+- **复制类任务要写 `reads`**（源窗）：别的任务改到这段源，`plan_scopes` 会报 `kind:"read"` 并把改源的任务排在前面
+  （否则复制的是改之前的旧姿态）。时间平移/重叠/变速只读自己的窗口，不用写。
 - `data.waves`：建议批次。**同一批内并行派**（≤5 个），下一批等上一批 release。
 - 规则：同骨 + 帧重叠 = hard，必须不同批；父子骨（脊柱 vs 手臂、前臂 vs 手）= related，
   父骨的任务先做（父骨一动，子骨的世界朝向就变，子骨任务要基于新姿态）。

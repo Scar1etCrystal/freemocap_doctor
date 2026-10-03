@@ -514,11 +514,36 @@ def _tool_motion_copy(ctx, **args):
     bmap = _resolve_map(ctx, args.get("bone_map"))
     names = _src_names(ctx, args, bmap)
     rest = {k: v for k, v in args.items() if k not in ("bones", "chain", "bone_map")}
+    src_warn = _source_claim_warnings(ctx, arm, names, rest)
     op = motion_copy(ctx["scene"], arm, bones=names, bone_map=bmap,
                      data_dir=ctx["data_dir"], **rest)
+    if src_warn:
+        op["_warnings"] = src_warn
     if not op.get("dry_run"):
         ctx["after_write"](op["frames"])
     return op
+
+
+def _source_claim_warnings(ctx, arm, src_names, args) -> list:
+    """源窗正被别的 agent 认领（= 他们正在改这段）→ 提醒：复制的是此刻的姿态。
+
+    租约只保护"写"；复制的源是"读"——对方改完后源就变了、副本却不会跟着变。
+    local 空间只看同骨；world 空间连祖先骨也算（父骨一动，世界朝向就变）。"""
+    try:
+        from . import agent_bridge
+        a, b = _rng(args.get("src_range"), "src_range")
+        me = ctx.get("agent_id") or "__anon__"
+        anc = agent_bridge._ancestor_fn(arm)
+        hard, soft = agent_bridge._LEASES.conflicts(me, set(src_names), (a, b), anc)
+    except Exception:  # noqa: BLE001 - 提示性检查，绝不挡写入
+        return []
+    world = str(args.get("space", "local")).lower() == "world"
+    held = list(hard) + (list(soft) if world else [])
+    if not held:
+        return []
+    who = sorted({h["agent_id"] for h in held})
+    return [f"源窗 [{a},{b}] 正被 {who} 认领（他们在改这段）：复制的是此刻的姿态，对方改完后源会变、"
+            f"副本不会跟着变——最好等对方 release 后再复制；已经复制了就在对方完成后 reapply（overrides:{{}}）"]
 
 
 def _side(ctx, spec, label):
