@@ -656,6 +656,12 @@ def _bone_report(q, sp, a, *, o, p, s, onset_frac, stop_frac, axis_frames,
         "axis": _vec(ax), "axis_deg": _r(ax_deg), "axis_frames": int(k1),
         "approach_axis": _vec(apx), "approach_deg": _r(ap_deg),
     }
+    # 抖动：每帧偏离"前后两帧 slerp 中点"的角度（度）。匀速转动≈0，越大越抖。
+    # 去抖（clean_jitter）前后对比看这个数。
+    if T >= 3:
+        jit = P.qangle_deg(q[1:-1], P.slerp(q[:-2], q[2:], 0.5))
+        row["jitter_deg"] = _r(float(jit.mean()))
+        row["jitter_max_deg"] = _r(float(jit.max()))
     # counter-move: earlier poses that sit AHEAD (along +axis) of the onset
     # pose = the bone came BACK (−axis) before launching.  ≈ amount×amplitude
     # after anticipation, ≈0 on a plain start.

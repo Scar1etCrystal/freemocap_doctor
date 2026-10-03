@@ -175,6 +175,20 @@ else:
     check("4e elbow_front standard flow works on Euler owner (skipped: low conf)", True,
           f"conf={pe.get('confidence')}")
 
+# ---- 6: effect_check default sampling avoids the zero-weight taper ends ----------
+r = call("hold_pose", bones=["left_hand"], frame_range=[A, B], target="values", blend=4)
+ec = call("effect_check", op_id=r["data"]["op_id"])
+check("6 effect_check(op_id) on a tapered fix: every sampled frame moved",
+      ec["ok"] and ec["data"]["pass"], f"{ec.get('summary')} frames="
+      f"{[x['frame'] for x in ec['data']['per_frame']]}")
+call("revert", op_id=r["data"]["op_id"])
+r = call("foot_lock", side="R", frame_range=[790, 853], lock="xy")
+ec = call("effect_check", op_id=r["data"]["op_id"])
+check("6b effect_check infers bones from the strip (foot_lock has no params.bones)",
+      ec["ok"] and "foot_ik.R" in ec["data"]["per_frame"][0]["bones"],
+      ec.get("summary") if ec["ok"] else ec.get("error"))
+call("revert", op_id=r["data"]["op_id"])
+
 fails = [r for r in RESULTS if not r[1]]
 print(f"\n==== {len(RESULTS) - len(fails)}/{len(RESULTS)} PASS ====")
 for n, _o, d in fails:

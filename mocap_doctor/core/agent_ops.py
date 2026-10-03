@@ -431,6 +431,13 @@ def reapply(data_dir: str | Path, armature: Any, op_id: str, *,
     if res is not None:
         op["strip"] = res.get("strip", op["strip"])
         op["metrics"] = res.get("metrics", {})
+        if plugin is not None:
+            # 插件工具的写入窗不一定等于 params.frame_range（motion_copy 写的是
+            # 目标窗 dst_start..），以插件自己回报的 frames/params 为准
+            if res.get("params"):
+                op["params"] = dict(res["params"])
+            if res.get("frames"):
+                op["frames"] = [int(res["frames"][0]), int(res["frames"][1])]
     op["ts"] = time.strftime("%Y-%m-%d %H:%M:%S")
     _save_oplog(data_dir, ops)
     return op

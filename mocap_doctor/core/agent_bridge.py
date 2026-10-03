@@ -597,10 +597,22 @@ def _tool_effect_check(ctx, track_name=None, op_id=None, bones=None,
                        if o.get("status") in ("preview", "committed")), None)
         if op is None:
             raise RuntimeError("op log 里没有修复记录，传 bones/frames")
-        bones = bones or op.get("params", {}).get("bones") \
-            or [op.get("params", {}).get("bone")]
-        fr = op.get("frames")
-        frames = frames or [fr[0], (fr[0] + fr[1]) // 2, fr[1]]
+        if not bones:
+            pbones = [b for b in (op.get("params", {}).get("bones")
+                                  or [op.get("params", {}).get("bone")])
+                      if b and armature.pose.bones.get(b) is not None]
+            # 参数里没写骨（foot_lock 记的是 side、restore_accent 记的是 path）
+            # → 用 strip 实际写了的骨
+            bones = pbones or sorted(_strip_bones(armature, op))
+        if not frames:
+            # 默认采样落在 taper 之外：strip 两端各 blend 帧权重从 0 渐升，
+            # 端点权重恰为 0——旧版采 [起, 中, 止] 必然报"1/3 帧有变化"。
+            fr = op.get("frames")
+            bl = int((op.get("params") or {}).get("blend", 4) or 0)
+            lo, hi = fr[0] + bl, fr[1] - bl
+            if hi < lo:
+                lo, hi = fr[0], fr[1]
+            frames = sorted({lo, (lo + hi) // 2, hi})
     if track_name is None:
         # 没指定就查所有 agent 轨（A/B 语义：全部修复一起 mute）
         armature_anim = getattr(armature, "animation_data", None)
