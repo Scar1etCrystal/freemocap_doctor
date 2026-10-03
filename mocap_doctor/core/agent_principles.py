@@ -879,6 +879,7 @@ def _norm_args(ctx, args):
 def _write_shell(fn):
     def _tool(ctx, **args):
         names, rest = _norm_args(ctx, args)
+        P.reject_unknown_args(fn.__name__, fn, rest)
         op = fn(ctx["scene"], ctx["armature"], bones=names,
                 data_dir=ctx["data_dir"], **rest)
         if not op.get("dry_run"):
@@ -907,6 +908,8 @@ def _tool_analyze_motion(ctx, **args):
     names, rest = _norm_args(ctx, args)
     baseline_op = rest.pop("baseline_op", None)
     brief = bool(rest.pop("brief", False))      # 只要数字：去掉速度序列（~6KB）
+    P.reject_unknown_args("analyze_motion", analyze_motion, rest,
+                          extra_allowed=("baseline_op", "brief"))
     tracks = None
     if baseline_op:
         op = agent_ops.get_op(ctx["data_dir"], str(baseline_op))

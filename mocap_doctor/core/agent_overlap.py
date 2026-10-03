@@ -657,6 +657,7 @@ def _tool_overlap(ctx, **args):
     if args.get("depths"):
         args["depths"] = {ctx["resolve_bones"]([k])[0]: v
                           for k, v in dict(args["depths"]).items()}
+    P.reject_unknown_args("overlap", overlap, args)
     op = overlap(ctx["scene"], arm, bones=bones, chain=chain,
                  data_dir=ctx["data_dir"], **args)
     if not op.get("dry_run"):
@@ -667,6 +668,7 @@ def _tool_overlap(ctx, **args):
 def _tool_time_warp(ctx, **args):
     arm = _need_rig(ctx)
     chain, bones, args = _split_target(ctx, args)
+    P.reject_unknown_args("time_warp", time_warp, args)
     op = time_warp(ctx["scene"], arm, bones=bones, chain=chain,
                    data_dir=ctx["data_dir"], **args)
     if not op.get("dry_run"):
@@ -683,6 +685,7 @@ def _fmt_level(lv) -> str:
 def _tool_chain_lag(ctx, **args):
     arm = _need_rig(ctx)
     chain, bones, args = _split_target(ctx, args)
+    P.reject_unknown_args("chain_lag", chain_lag, args)
     res = chain_lag(ctx["scene"], arm, bones=bones, chain=chain, **args)
     fr = res["frame_range"]
     warnings = [f"{lv['parent']}→{lv['child']} 不可信（corr<{_LAG_RELIABLE} 或峰在 ±max_lag 边界）"

@@ -413,6 +413,18 @@ back = max(float(P.qangle_deg(q0[b], q3[b]).max()) for b in BONES)
 check("O9 revert restores the visible pose (<0.01°)", r.get("ok") and back < 0.01,
       f"max={back:.5f}°")
 
+# ---------- T: typo'd parameters are rejected with the closest legal name -------------
+r = call("anticipation", chain=CHAIN, frame_range=list(FR_A), amout=0.15, dry_run=True)
+check("T1 anticipation(amout=…) → rejected, suggests amount",
+      not r["ok"] and "amout" in r["error"]["message"] and "amount" in r["error"]["message"],
+      r.get("error", {}).get("message", "")[:160])
+r = call("analyze_motion", chain=CHAIN, frame_range=list(FR_A), main_bon="forearm_fk.R")
+check("T2 analyze_motion(main_bon=…) → rejected, suggests main_bone",
+      not r["ok"] and "main_bone" in r["error"]["message"],
+      r.get("error", {}).get("message", "")[:160])
+r = call("analyze_motion", chain=CHAIN, frame_range=list(FR_A), brief=True)
+check("T3 shell-level params (brief) still accepted", r["ok"], r.get("summary", "")[:80])
+
 # ---------- summary -----------------------------------------------------------
 fails = [r for r in RESULTS if not r[1]]
 print(f"\n==== {len(RESULTS) - len(fails)}/{len(RESULTS)} PASS ====")

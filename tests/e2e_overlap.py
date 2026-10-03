@@ -517,6 +517,17 @@ check("H3 panel-style reapply(delay) on arm.L op",
       and opC2["metrics"]["bones"]["hand_fk.L"]["lag_frames"] == 3.0,
       f"hand lag={opC2['metrics']['bones']['hand_fk.L']['lag_frames']}")
 
+# ---------- T: typo'd parameters are rejected with the closest legal name -------------
+r = call("overlap", chain="arm.R", frame_range=[A0, A1], dealy=1.0, dry_run=True)
+check("T1 overlap(dealy=…) → rejected, suggests delay",
+      not r["ok"] and "delay" in r["error"]["message"], r.get("error", {}).get("message", "")[:160])
+r = call("time_warp", chain="arm.R", frame_range=[A0, A1], speed=1.5, pivt=A0 + 20, dry_run=True)
+check("T2 time_warp(pivt=…) → rejected, suggests pivot",
+      not r["ok"] and "pivot" in r["error"]["message"], r.get("error", {}).get("message", "")[:160])
+r = call("chain_lag", chain="arm.R", frame_range=IN_A, max_lags=4)
+check("T3 chain_lag(max_lags=…) → rejected, suggests max_lag",
+      not r["ok"] and "max_lag" in r["error"]["message"], r.get("error", {}).get("message", "")[:160])
+
 # ---------- summary -----------------------------------------------------------
 print(f"elapsed {time.time() - T_START:.1f}s")
 # ---------- Z: 默认值 = 用户原话"每级晚 1~3 帧、越往末端越晚"（不封顶）+ 自动 blend ----

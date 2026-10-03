@@ -383,6 +383,7 @@ def _foot_args(ctx, args):
 
 
 def _tool_foot_lock(ctx, **args):
+    P.reject_unknown_args("foot_lock", foot_lock, args)
     args = _foot_args(ctx, args)
     op = foot_lock(ctx["scene"], ctx["armature"], data_dir=ctx["data_dir"], **args)
     if not op.get("dry_run"):
@@ -391,7 +392,8 @@ def _tool_foot_lock(ctx, **args):
 
 
 def _tool_slide_report(ctx, side=None, frame_range=None, threshold_mm=10.0,
-                       min_len=4, max_rows=60, **_):
+                       min_len=4, max_rows=60, **unknown):
+    P.reject_unknown_args("slide_report", _tool_slide_report, unknown)
     res = slide_report(ctx["scene"], ctx["armature"], side=side,
                        frame_range=frame_range, threshold_mm=threshold_mm,
                        min_len=min_len, max_rows=max_rows)
@@ -404,7 +406,8 @@ def _tool_slide_report(ctx, side=None, frame_range=None, threshold_mm=10.0,
 
 
 def _tool_ground_report(ctx, frame_range=None, side=None, threshold_mm=10.0,
-                        blend=4, detail=False, **_):
+                        blend=4, detail=False, **unknown):
+    P.reject_unknown_args("ground_report", _tool_ground_report, unknown)
     if frame_range is None:
         raise RuntimeError("ground_report 需要 frame_range=[A,B]")
     from . import agent_bridge          # 运行期取信号库（避免插件载入时循环引用）

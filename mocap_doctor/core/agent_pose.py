@@ -584,6 +584,36 @@ def smoothstep(x: np.ndarray) -> np.ndarray:
     return x * x * (3.0 - 2.0 * x)
 
 
+# 只在调用链内部用的形参：agent 不该传，也不算"可用参数"
+_INTERNAL_ARGS = frozenset({"ctx", "scene", "armature", "bones", "chain", "data_dir",
+                            "record", "track_name", "baseline_tracks"})
+
+
+def reject_unknown_args(tool: str, fn, args: Mapping[str, Any], extra_allowed=()) -> None:
+    """拼错的参数直接报错，并给出最接近的合法参数名（§10-7）。
+
+    以前这些工具只在 warnings / metrics.ignored_args 里提一句，然后按默认值照常执行
+    ——能力弱的模型常常不看 warnings，拼错 amount 就静默变成默认值。合法参数取自
+    fn 的签名（去掉内部形参），再加 extra_allowed（壳层自己吃掉的参数）。"""
+    import difflib
+    import inspect
+    sig = inspect.signature(fn)
+    allowed = {n for n, p in sig.parameters.items()
+               if p.kind not in (p.VAR_KEYWORD, p.VAR_POSITIONAL)} - _INTERNAL_ARGS
+    allowed |= set(extra_allowed)
+    bad = sorted(k for k in args if k not in allowed)
+    if not bad:
+        return
+    hints = []
+    for k in bad:
+        close = difflib.get_close_matches(k, sorted(allowed), n=1, cutoff=0.6)
+        if close:
+            hints.append(f"{k} → {close[0]}？")
+    raise RuntimeError(f"{tool} 不认识参数 {bad}"
+                       + (f"（{'；'.join(hints)}）" if hints else "")
+                       + f"；可用：{', '.join(sorted(allowed))}")
+
+
 def strip_window(frame_range: Sequence[int]) -> tuple[int, int, list[int]]:
     a, b = int(frame_range[0]), int(frame_range[1])
     if b - a + 1 < 2:

@@ -134,6 +134,14 @@ check("G5 without rest_clearance fix_ground behaves as before (no extra param re
 if r["ok"]:
     call("revert", op_id=r["data"]["op_id"])
 
+# ---- G7: typo'd parameters are rejected with the closest legal name -------------------
+r = call("ground_report", frame_range=[700, 720], treshold_mm=5)
+check("G7 ground_report(treshold_mm=…) → rejected, suggests threshold_mm",
+      not r["ok"] and "threshold_mm" in r["error"]["message"], r.get("error", {}).get("message", "")[:140])
+r = call("foot_lock", side="R", frame_range=[700, 720], lok="xy", dry_run=True)
+check("G7b foot_lock(lok=…) → rejected, suggests lock",
+      not r["ok"] and "lock" in r["error"]["message"], r.get("error", {}).get("message", "")[:140])
+
 # ---- G6: a legacy file whose base strip lags 1 frame (and whose snapshot cache was baked
 #           against the lag) - the settle must retire that snapshot, not keep using it ----------
 from bl_ext.user_default.mocap_doctor.core import agent_bake, agent_io, agent_ops  # noqa: E402
