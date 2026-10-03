@@ -686,6 +686,16 @@ def _tool_set_influence(ctx, value, op_id=None, track_name=None, **_):
             "tracks": [t.name for t in tracks]}
 
 
+def _tool_save(ctx, filepath=None, **_):
+    """存盘。headless 盲写模式（tools/headless_server.py）下 op 全在内存，
+    不写盘进程一关就没了——远程 agent 每完成一段工作必须调一次。"""
+    if filepath:
+        bpy.ops.wm.save_as_mainfile(filepath=str(filepath))
+    else:
+        bpy.ops.wm.save_mainfile()
+    return {"saved": bpy.data.filepath}
+
+
 TOOLS = {
     "ping": _tool_ping,
     "get_overview": _tool_overview,
@@ -711,6 +721,7 @@ TOOLS = {
     "commit": _tool_commit,
     "revert": _tool_revert,
     "reapply": _tool_reapply,
+    "save": _tool_save,
     "ab_toggle": _tool_ab_toggle,
     "set_preview": _tool_set_preview,
     "set_influence": _tool_set_influence,
