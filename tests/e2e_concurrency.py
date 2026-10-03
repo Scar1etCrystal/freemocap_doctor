@@ -220,6 +220,31 @@ rows = agent_ops.reconcile(rig, data_dir)
 bad = [r for r in rows if r["status"] in ("lost", "unregistered")]
 check("20 reconcile: no lost/unregistered strips", not bad, bad[:3])
 
+# ---- plan_scopes: dispatch-time check ---------------------------------------------
+agent_bridge._LEASES.clear()
+r = call("plan_scopes", tasks=[
+    {"name": "spine", "chain": "spine_head", "frames": [100, 200]},
+    {"name": "armL", "chain": "arm.L", "frames": [100, 200]},
+    {"name": "armR", "chain": "arm.R", "frames": [100, 200]},
+    {"name": "handL-late", "bones": ["left_hand"], "frames": [150, 260]},
+    {"name": "head-later", "bones": ["head"], "frames": [300, 400]}])
+w = r["data"]["waves"] if r["ok"] else []
+wave_of = {n: i for i, names in enumerate(w) for n in names}
+check("21 plan_scopes: parents first, same-bone overlap in different waves",
+      r["ok"] and wave_of.get("spine", 9) < wave_of.get("armL", -1)
+      and wave_of.get("spine", 9) < wave_of.get("armR", -1)
+      and wave_of["armL"] != wave_of["handL-late"]
+      and wave_of["head-later"] == 0,
+      f"waves={w}")
+check("21b plan_scopes reports hard + related pairs",
+      any(c["kind"] == "hard" for c in r["data"]["conflicts"])
+      and any(c["kind"] == "related" for c in r["data"]["conflicts"]),
+      [(c["a"], c["b"], c["kind"]) for c in r["data"]["conflicts"]][:6])
+call("claim", agent_id="zz", bones=["right_hand"], frames=[150, 160])
+r = call("plan_scopes", tasks=[{"name": "armR", "chain": "arm.R", "frames": [100, 200]}])
+check("21c plan_scopes sees live claims", r["data"]["vs_claims"]
+      and r["data"]["vs_claims"][0]["held_by"] == ["zz"], r["data"]["vs_claims"])
+
 fails = [r for r in RESULTS if not r[1]]
 print(f"\n==== {len(RESULTS) - len(fails)}/{len(RESULTS)} PASS ====")
 for n, _o, d in fails:

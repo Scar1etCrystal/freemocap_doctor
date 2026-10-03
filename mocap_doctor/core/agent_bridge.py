@@ -1037,7 +1037,92 @@ def _tool_list_claims(ctx, **_):
             "warnings": [], "truncated": False, "hint": ""}
 
 
+def _tool_plan_scopes(ctx, tasks=None, **_):
+    """派单前体检（协调者用，只读）：把打算并行派出去的任务 scope 先过一遍。
+
+    tasks=[{"name":"左臂去抖","bones":[...]|"chain":"arm.L","frames":[a,b]}, ...]
+    返回：两两冲突（同骨+帧重叠 = hard，必须分批；父子骨+帧重叠 = related，
+    父骨的任务应先做）、与现有租约的冲突、建议的并行批次 waves（同一批内两两
+    无 hard 冲突，且任何子骨任务都排在它的父骨任务之后）。"""
+    tasks = list(tasks or [])
+    if not tasks:
+        raise agent_query.AgentQueryError(
+            "plan_scopes 需要 tasks 列表", code="E_SCOPE",
+            fix='tasks=[{"name":"…","chain":"arm.L","frames":[a,b]}, …]')
+    anc = _ancestor_fn(ctx["armature"])
+    rows = []
+    for i, t in enumerate(tasks):
+        bset = _claim_bones(ctx, t.get("bones"), t.get("chain"))
+        fr = t.get("frames") or t.get("frame_range")
+        rows.append({"i": i, "name": str(t.get("name") or f"task{i}"),
+                     "bones": bset,
+                     "frames": None if fr is None else (int(fr[0]), int(fr[1]))})
+    pairs = []
+    parent_of = {r["i"]: set() for r in rows}       # j ∈ parent_of[i]: j 改的是 i 的祖先骨
+    hard_with = {r["i"]: set() for r in rows}
+    for x in range(len(rows)):
+        for y in range(x + 1, len(rows)):
+            a, b = rows[x], rows[y]
+            if not agent_claims.frames_overlap(a["frames"], b["frames"]):
+                continue
+            fr = agent_claims.frames_intersection(a["frames"], b["frames"])
+            shared = agent_claims._bones_hard(a["bones"], b["bones"])
+            if shared is agent_claims.ALL or shared:
+                pairs.append({"a": a["name"], "b": b["name"], "kind": "hard",
+                              "bones": "ALL" if shared is agent_claims.ALL
+                              else sorted(shared)[:8], "frames": fr})
+                hard_with[x].add(y)
+                hard_with[y].add(x)
+                continue
+            rel = agent_claims._bones_related(a["bones"], b["bones"], anc)
+            if rel:
+                pairs.append({"a": a["name"], "b": b["name"], "kind": "related",
+                              "pairs": [f"{p}→{c}" for p, c in rel[:6]],
+                              "frames": fr})
+                for p_bone, c_bone in rel:
+                    if p_bone in (a["bones"] or ()):
+                        parent_of[y].add(x)
+                    else:
+                        parent_of[x].add(y)
+    # 批次：父骨任务先；同批不许 hard 冲突
+    wave_of: dict = {}
+    order = sorted(range(len(rows)), key=lambda i: len(parent_of[i]))
+    for _round in range(len(rows) + 1):
+        changed = False
+        for i in order:
+            need = max([wave_of.get(j, 0) + 1 for j in parent_of[i]
+                        if j in wave_of] + [0])
+            w = need
+            while any(wave_of.get(k) == w for k in hard_with[i] if k != i):
+                w += 1
+            if wave_of.get(i) != w:
+                wave_of[i] = w
+                changed = True
+        if not changed:
+            break
+    waves = []
+    for w in sorted(set(wave_of.values())):
+        waves.append([rows[i]["name"] for i in sorted(wave_of) if wave_of[i] == w])
+    vs_claims = []
+    for r in rows:
+        hard, soft = _LEASES.conflicts("__plan__", r["bones"], r["frames"], anc)
+        if hard or soft:
+            vs_claims.append({"task": r["name"],
+                              "held_by": sorted({h["agent_id"] for h in hard}),
+                              "related_to": sorted({h["agent_id"] for h in soft})})
+    n_hard = sum(1 for p in pairs if p["kind"] == "hard")
+    n_rel = len(pairs) - n_hard
+    summary = (f"{len(rows)} 个任务 → {len(waves)} 批"
+               f"（hard 冲突 {n_hard}，父子相关 {n_rel}，与现有租约冲突 {len(vs_claims)}）")
+    return {"summary": summary,
+            "data": {"waves": waves, "conflicts": pairs, "vs_claims": vs_claims,
+                     "parallel_ok": len(waves) == 1 and not vs_claims},
+            "warnings": [], "truncated": False,
+            "hint": "同一批内的任务可以同时派；下一批等上一批 release 后再派"}
+
+
 TOOLS = {
+    "plan_scopes": _tool_plan_scopes,
     "claim": _tool_claim,
     "release": _tool_release,
     "list_claims": _tool_list_claims,
