@@ -61,7 +61,8 @@
 ```
 ping → 读/探查（确定 scope 和修前基线）→ claim → 写（带 expect_version）→ 复测 → list_ops 自查 → save → release
 ```
-0. **修前基线以"写入前最后一次读"为准**（同一 version 下的数字）。别的 agent 写入、
+0. **修前基线以"写入前最后一次读"为准**（同一 version 下的数字；期间只有和你**不相交**的写入——写入时 warnings
+   会说"已放行"——就不用重读）。别的 agent 写入、
    服务端维护都可能让实时数字在你两次读之间变化——报告里的"修前"用最后那次。
 1. **先看现场**：`list_ops {"agent_id":"<ME>","frames":[A,B],"live":true,"compact":true}`——你的骨在这段
    帧上如果已经有**别人的同类修复**（同工具、同骨），**不要再叠一层**：报告给协调者（除非任务明确要求叠加）。
@@ -104,7 +105,7 @@ ping → 读/探查（确定 scope 和修前基线）→ claim → 写（带 exp
 ### 读（实时类）
 | 工具 | 关键参数 | 看什么 |
 |---|---|---|
-| `probe_anatomy` | `part` `side` `frame_range` `toward` (`bone`/`finger`) `max_frames`(默认 9) | `err_inner_deg` `owner_bone` `confidence` `secondary_axis`；均匀采样 max_frames 帧、掐头去尾算 inner——长段/快动作复测时把 max_frames 调到 31 |
+| `probe_anatomy` | `part`：palm 掌心 / back_of_hand 手背 / finger_dir 指尖方向 / knuckle 指关节 / sole 脚底 / instep 脚背 / toe 脚尖 / knee_front 膝盖（髌骨）朝向 / **elbow_front 肘尖（鹰嘴）朝向——不是肘窝，肘窝 = 它的反方向** / body_forward / bone_axis；`side` `frame_range` `toward` (`bone`/`finger`) `max_frames`(默认 9) | `err_inner_deg` `owner_bone` `confidence` `secondary_axis` `hold_pose_args`（可直接展开）；均匀采样 max_frames 帧，inner **只去掉首尾各一个采样点、不认识 blend**——所以修前修后都在**用户帧段**（有效区）上量，别用外扩后的写入窗；长段/快动作把 max_frames 调到 31 |
 | `analyze_motion` | `bones`/`chain` `frame_range` `main_bone` (`onset_frame` `stop_frame` `baseline_op`=你的某个 op_id，结果多一节 `vs_baseline`=修后−该 op 之前) | `data.main`: onset/peak/stop 帧、`peak_speed`(°/帧)、`amplitude_deg`、`counter_move_deg`；每骨 `jitter_deg`；`data.suggest.<工具>.args` 可直接用（帧段若超出你的 scope 见 §4 第 10 条）。`truncated:true` 只表示速度序列按 max_points 抽样，数字不受影响；只要数字时加 `"brief":true`（去掉速度序列，省约 6 KB） |
 | `compare_motion` | `op_id`（验收某个 motion_copy，最省事）或 `a:{bones/chain, frame_range}` `b:{…}` `mirror` `bone_map` `space` `trim` | `err_inner_deg`（复制/镜像是否到位） |
 | `chain_lag` | `bones`/`chain` `frame_range` | 每骨相对链内父骨的滞后帧数 |
@@ -112,7 +113,7 @@ ping → 读/探查（确定 scope 和修前基线）→ claim → 写（带 exp
 | `ground_report` | `frame_range` `side` `threshold_mm`(默认 10) `detail` | `contact_height_mm`（这只脚正常着地时脚底关节点的高度，自动标定）、`pen_max_mm`/`pen_frames`（比它低 = 下沉）、`contacts[].floating`（接触期比它高 = 悬空）、`fix_ground_args`（去掉 why 原样用）；`snapshot_diff_max_mm` > 1 = 快照已过时（fix_ground 会算错） |
 | `effect_check` | `op_id` | 在 [A+blend, 中点, B−blend] 三帧上该 op 到底动没动：**写上了 = `moved_any:true`**；`pass` 要求三帧都动，局部修复（重音、跟随、踩实）`pass:false` 是正常的。只答"动了没"，不答"对不对" |
 | `dry_run:true` | 同写工具 | 只算不写，返回 `dry_run:true` + metrics（clean_jitter/hold_pose 给 `pred_rot_change_max_deg`）。**支持的**：hold_pose、clean_jitter、restore_accent 和全部新写工具；其它（fix_ground/solve_pelvis/apply_exemplar）会**直接报错**而不是偷偷写。响应里没有 `dry_run:true` 就说明真写了 |
-| `list_ops` | `owner`（"none"=无主历史） `op_id` `live`（去掉日志里 reverted 的历史） `frames` `compact`（只回场景对账行，带 `bones`） | **自查用** `{"agent_id":"<ME>","owner":"<ME>","compact":true}`（只回你的 fixes 行，几百字节）；不带过滤 = 全量（可能 50KB+）。fixes 行用 `op_id`，日志行用 `id` |
+| `list_ops` | `owner`（"none"=无主历史） `op_id` `live`（去掉日志里 reverted 的历史） `frames` `bones`（只要写了这些骨的修复） `compact`（只回场景对账行，带 `bones`） | **自查用** `{"agent_id":"<ME>","owner":"<ME>","compact":true}`（只回你的 fixes 行，几百字节）；不带过滤 = 全量（可能 50KB+）。fixes 行用 `op_id`，日志行用 `id` |
 | `list_claims` | – | 租约表 + 每个 agent 名下的 op |
 
 ### 写（全部 preview delta strip，可 revert；除 fix_ground / solve_pelvis / apply_exemplar 外都支持 `dry_run:true` 先看效果）

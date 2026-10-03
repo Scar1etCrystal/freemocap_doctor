@@ -5,7 +5,7 @@
 ```bash
 bash /home/sb/remote_kit_1.7.1/tools/mcd.sh status                     # 内存、Blender 锁
 bash /home/sb/remote_kit_1.7.1/tools/mcd.sh server-start <工作文件.blend>  # 起 headless 服务（占用唯一的 Blender 名额）
-/home/sb/remote_kit_1.7.1/tools/agent ping '{}'  # 工具表里要有 claim / plan_scopes / 你要用的工具
+/home/sb/remote_kit_1.7.1/tools/agent ping '{"agent_id":"coord"}'  # 工具表里要有 claim / plan_scopes / 你要用的工具
 ```
 - 机器只有 ~8GB：**同时只能有 1 个 Blender**。服务开着时不能跑 e2e（mcd.sh 会排队等）。
 - 先 `list_ops` 看文件里已有的修复（别让 agent 在用户已有修复上乱叠）。
@@ -20,16 +20,17 @@ bash /home/sb/remote_kit_1.7.1/tools/mcd.sh server-start <工作文件.blend>  #
 | 抖 | 31 | 骨 × 帧段 |
 | 打击感 | 32 | 骨 × 帧段 |
 | 脚滑/穿地 | 33 | `foot_ik.L/R` × 接触段±blend |
-| 复制/镜像 | 34 | **目标**骨 × **目标**窗 |
+| 复制/镜像 | 34 | **目标**骨 × **目标**窗（镜像时是另一侧：源 arm.L → scope 写 arm.R）+ `reads` = 源骨 × 源窗。注意 motion_copy 调用里的 `chain` 是**源** |
 | 预备/跟随/过冲 | 35 | 链 × 帧段 |
 | 重叠/改节奏 | 36 | 链 × 帧段 |
 
-帧段两端要留 `blend`（默认 3–4）帧余量：有效区是 `[A+blend, B−blend]`。
+**用户给的帧段 = 要生效的区域**。写入窗 = 两端各外扩 `blend`（默认 4）帧：`[A−4, B+4]`，scope 也写外扩后的窗；
+复测/验收都在用户帧段上量（复制类：源窗和目标窗同样外扩，副本才能整段到位）。
 
 ## 2. 派单前体检（让 agent 天然避开同一段关键帧）
 
 ```bash
-/home/sb/remote_kit_1.7.1/tools/agent plan_scopes '{"tasks":[
+/home/sb/remote_kit_1.7.1/tools/agent plan_scopes '{"agent_id":"coord","tasks":[
   {"name":"左臂预备","chain":"arm_nofingers.L","frames":[550,603]},
   {"name":"右脚脚滑","bones":["right_foot"],"frames":[790,853]},
   {"name":"脊柱去抖","chain":"spine_head","frames":[500,620]},
@@ -42,7 +43,7 @@ bash /home/sb/remote_kit_1.7.1/tools/mcd.sh server-start <工作文件.blend>  #
   父骨的任务先做（父骨一动，子骨的世界朝向就变，子骨任务要基于新姿态）。
 - `vs_claims` 非空 = 现有租约挡路（上一批没 release / 有人还在干）。
 
-## 3. 每个 agent 的提示词 = 三段拼起来
+## 3. 每个 agent 的提示词 = 四段拼起来（tools_io + 剧本 + 11_socket_worker + 任务块）
 
 1. `tools_io.md` 全文（通用协议 + 单位 + 工具表）
 2. 对应剧本全文（30–36）
@@ -63,7 +64,9 @@ scope：<骨/链> × [A,B]。只许写这里。写之前 claim（读、dry_run �
 - 有修前/修后**数字**，且数字来自实时类读工具（probe_anatomy / analyze_motion / compare_motion /
   chain_lag / slide_report / ground_report）。"应该没问题" = 没做完。
 - `list_claims` 里该 agent 已 release；`list_ops` 里它的 op 都是 `preview`、`alive=true`、owner 正确。
-- 报告里说"层级相关"的，安排对应子骨任务的 agent 复测。
+- 报告里说"层级相关"的，安排对应子骨任务的 agent 复测。改了**父骨**（上臂、脊柱）的任务即使没有租约冲突，也要看一眼
+  这段帧上子骨（前臂、手、手指、头）已有的**朝向类**修复——父骨一动它们的世界朝向就变了，需要的话 reapply。
+- 你自己串行执行任务时也一样：每个任务做完就 save（save 很快），别攒到最后。
 - 最后协调者自己 `save` 一次，`list_ops` 对账：`fixes` 里没有 `lost` / `unregistered`。
 
 ## 5. 收尾

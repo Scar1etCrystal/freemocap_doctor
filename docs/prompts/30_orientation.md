@@ -17,7 +17,7 @@
 
 2. **认领**
    ```
-   /home/sb/remote_kit_1.7.1/tools/agent claim '{"agent_id":"<ME>","bones":["<owner_bone>"],"frames":[A,B]}'
+   /home/sb/remote_kit_1.7.1/tools/agent claim '{"agent_id":"<ME>","bones":["<owner_bone>"],"frames":[A-4,B+4]}'
    ```
    `data.granted=false` → 有人在改，报告冲突对象（`data.conflicts`），结束。不要 force。
 
@@ -28,6 +28,8 @@
      "world_axis":"probe:palm.L","secondary_axis":"probe:finger_dir.L",
      "mode":"replace","blend":4,"expect_version":<第 1 步 probe 响应的 version（据以算参数的那次读；不是 claim 回的）>}'
    ```
+   `frame_range` 写**外扩后的写入窗** `[A−4, B+4]`（blend 4 帧过渡落在用户帧段外面）；claim 也用它。第 1、4 步的
+   probe 始终用用户帧段 `[A,B]`（probe 的 inner 不认识 blend，用写入窗量会把过渡帧算进去）。
    主轴/次轴对照表（**照抄，别自己发明**）：
 
    | part | world_axis | secondary_axis |
@@ -37,6 +39,9 @@
    | sole / instep | `"probe:sole.L"` / `"probe:instep.L"` | `"probe:toe.L"` |
    | toe | `"probe:toe.L"` | `"probe:sole.L"` |
    | knee_front / elbow_front | `"probe:knee_front.L"` / `"probe:elbow_front.L"` | 第 1 步返回的 `secondary_axis` **数组**（没有 `probe:s1` 这种写法） |
+
+   ⚠ `elbow_front` 是**肘尖（鹰嘴）**的指向（两段骨夹角的凸出侧）；用户说"肘窝朝前"= elbow_front 朝**后**，toward 取反。
+   `knee_front` 是膝盖（髌骨）朝向，与直觉一致。
 
    记下返回的 `data.op_id` 和顶层 `version`。返回 `metrics.bones.<骨>` 各字段含义：
    `err_max_before_deg/err_max_after_deg`（求解器自评，全帧口径，**不作验收**）、
@@ -76,5 +81,5 @@
 格式见 tools_io §8（唯一格式），示例：
 
 ```
-hold_pose @[A,B] <owner_bone>（<part>.<side>，toward=[x,y,z]）：修前 X° → 修后 Y°（err_inner_deg）；op=<op_id> claim=<claim_id> save=ok；看 <A+blend>–<B−blend> 帧
+hold_pose @[A−4,B+4] <owner_bone>（<part>.<side>，toward=[x,y,z]）：修前 X° → 修后 Y°（err_inner_deg，probe 在 [A,B] 上量）；op=<op_id> claim=<claim_id> save=ok；看 A–B 帧
 ```

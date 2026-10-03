@@ -518,6 +518,15 @@ live = [o["id"] for o in agent_ops.list_ops(data_dir)
 check("K1 revert all → every window back to pre-write (<0.01°)",
       eK < 0.01 and not live, f"max={eK:.5f}° at {wK} live={live}")
 
+# ---------- N: dry_run hands back the 'before' baseline ---------------------------------
+r = call("motion_copy", chain="arm.L", src_range=[630, 680], dst_start=1430, dry_run=True)
+vb = ((r.get("data") or {}).get("metrics") or {}).get("verify") or {}
+cmb = call("compare_motion", **vb.get("args", {})) if vb.get("args") else {"ok": False}
+check("N1 motion_copy dry_run returns err_inner_before_deg == compare_motion(verify.args) before writing",
+      r["ok"] and cmb["ok"] and vb.get("err_inner_before_deg") == cmb["data"]["err_inner_deg"]
+      and vb["err_inner_before_deg"] > 1.0,
+      f"before={vb.get('err_inner_before_deg')} compare={cmb.get('data', {}).get('err_inner_deg')}")
+
 # ---------- L: error paths -------------------------------------------------------
 r = call("motion_copy", bones=["left_hand"], src_range=SRC)
 check("L1 missing target → actionable error",

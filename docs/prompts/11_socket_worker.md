@@ -5,7 +5,7 @@
 ## 纪律（每条都重要）
 
 1. 每个调用带 `"agent_id":"<你的名>"`。第一步 `ping`，确认要用的工具在 `data.tools` 里。
-2. 写之前先 `list_ops {"agent_id":"<ME>","frames":[A,B],"live":true,"compact":true}` 看你的骨（行里的 `bones`）在这段帧上
+2. 写之前先 `list_ops {"agent_id":"<ME>","frames":[A,B],"bones":[<你的骨>],"live":true,"compact":true}` 看你的骨在这段帧上
    有没有别人的**同类**修复（有 → 不叠，报告）；再 `claim` 你的 scope。claim 不批且对方正做同一件事
    = 任务重复派了：停下，按"未写入"报告。`granted=false` → 换 scope 或停下报告，**不要 force**。
 3. 写调用带 `expect_version` = 你据以算参数的那次读（修前基线）响应顶层的 `version`（不是 claim 回的）。

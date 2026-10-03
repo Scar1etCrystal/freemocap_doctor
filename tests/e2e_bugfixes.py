@@ -324,6 +324,19 @@ r = call("describe", target=[A, B], max_items=3)
 check("12c read tools too (describe(max_items=…) → rejected, lists what it takes)",
       not r["ok"] and "不认识参数" in r["error"]["message"], r.get("error", {}).get("message", "")[:140])
 
+# ---- 14: list_ops can filter by bone (frames alone also returns unrelated bones) --------
+r = call("hold_pose", bones=["left_hand"], frame_range=[1000, 1040], target="values", blend=4)
+r2 = call("hold_pose", bones=["right_hand"], frame_range=[1000, 1040], target="values", blend=4)
+lo = call("list_ops", frames=[1000, 1040], bones=["hand_fk.L"], compact=True)
+rows = (lo.get("data") or {}).get("fixes", [])
+check("14 list_ops(bones=…) keeps only fixes that write those bones",
+      lo["ok"] and rows and all("hand_fk.L" in (x.get("bones") or []) for x in rows)
+      and not any("hand_fk.R" in (x.get("bones") or []) and "hand_fk.L" not in (x.get("bones") or []) for x in rows),
+      [(x["op_id"], x.get("bones")) for x in rows])
+for rr in (r, r2):
+    if rr["ok"]:
+        call("revert", op_id=rr["data"]["op_id"])
+
 # ---- 13: probe's hold_pose_args is the recommended per-frame probe form ------------------
 pr = call("probe_anatomy", part="palm", side="L", frame_range=[900, 960], toward=[0, -1, 0])
 hp = (pr.get("data") or {}).get("hold_pose_args") or {}

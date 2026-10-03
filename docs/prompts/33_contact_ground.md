@@ -69,5 +69,5 @@ contact 标注**标定每只脚"正常着地"的高度** `contact_height_mm`，�
 
 ## 报告
 ```
-脚滑 foot_ik.R contact.R:17 [794,849]：漂移 35.1 → 0.0 mm（lock=xy）；op=<id>；看 790–853 帧
+foot_lock @[790,853] foot_ik.R（contact.R:17 [794,849]，lock=xy）：修前 35.1 → 修后 0.0 mm（slide_report drift_mm）；op=<id> claim=<id> save=ok；看 794–849 帧
 ```

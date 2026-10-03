@@ -83,7 +83,7 @@ list_ops       确认新 op 在册
 | `sole` | 脚底法线（三点定面，小腿在脚背侧定号） | foot_ik.{s} |
 | `instep` / `toe` | 脚背 / 脚尖 | foot_ik.{s} |
 | `knee_front` | 膝前（大小腿夹角凸出向） | thigh_fk.{s} |
-| `elbow_front` | 肘前 | upper_arm_fk.{s} |
+| `elbow_front` | **肘尖（鹰嘴）**朝向 = 两段骨夹角的凸出侧（不是肘窝；肘窝 = 反方向） | upper_arm_fk.{s} |
 | `body_forward` | 身体前方（脚尖+肩线+相机交叉） | — |
 | `bone_axis` | 任意骨六根主轴世界向（`bone=`） | 该骨 |
 

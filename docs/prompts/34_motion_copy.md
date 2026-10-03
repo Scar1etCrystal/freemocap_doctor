@@ -25,8 +25,10 @@
    ```
    看 `data.metrics.mirror_map`（实际 源→目标 映射）、`time_scale`、`notes`（警告，比如 IK 腿）。
    映射不对就改 `bone_map`，别硬写。
-   **修前基线**：把 dry_run 返回的 `data.metrics.verify.args` 原样传给 `compare_motion`，记下
-   `err_inner_deg`（目标窗现在与源差多少，比如 148°）——这就是报告里的"修前"。
+   **修前基线**：dry_run 返回的 `data.metrics.verify.err_inner_before_deg`（目标窗现在与源差多少，比如 148°）——
+   这就是报告里的"修前"，不用再手抄 verify.args 去调 compare_motion。
+   **chain/bones 写的是源**：镜像时 `{"chain":"arm.L","mirror":true}` 写的是 arm.R（claim/scope 用 dry_run 返回的
+   `params.bones`，即目标骨）。
 2. **认领目标**：`claim` 目标骨 × 目标窗口（时间平移：`[dst_start, dst_start+源长−1]`；时间缩放：就是 `dst_range`；
    拿不准就看 dry_run 返回的 `params.frame_range`）。
    源只读，不用认领。
@@ -44,7 +46,7 @@
    ```
    /home/sb/remote_kit_1.7.1/tools/agent compare_motion '{"agent_id":"<ME>","op_id":"<op_id>"}'
    ```
-   （写入**之前**的修前基线没有 op_id，用第 1 步 dry_run 返回的 verify.args。）
+   （写入**之前**的修前基线用第 1 步 dry_run 的 `err_inner_before_deg`。）
    写入响应 warnings 出现"源窗 … 正被 … 认领" = 别人正在改你的源：在报告"遗留"里写明，请协调者等对方完成后让你
    `reapply {"op_id":…, "overrides":{}}` 重新复制一次。
    `err_inner_deg < 0.05` = 到位（四元数骨有 ~0.005–0.03° 的 float32 噪声，正常）。

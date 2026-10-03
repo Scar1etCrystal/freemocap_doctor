@@ -373,6 +373,20 @@ def motion_copy(scene: Any, armature: Any, *, bones: Sequence[str] | None = None
         "strength": strength, "blend": blend, "_applied_window": [c, d],
     }
     if dry_run:
+        if "verify" in metrics:
+            # 修前基线直接给出（sonnet 第六轮：写入前没有 op_id，要手抄约 1 KB 的 verify.args
+            # 才能量修前，是整个流程里最容易抄错的一步）。与写入后 compare_motion(op_id)
+            # 同一口径。
+            try:
+                va = metrics["verify"]["args"]
+                before = compare_motion(scene, armature,
+                                        a_bones=va["a"]["bones"], a_range=va["a"]["frame_range"],
+                                        b_bones=va["b"]["bones"], b_range=va["b"]["frame_range"],
+                                        mirror=va["mirror"], space=va["space"], trim=va["trim"])
+                metrics["verify"]["err_inner_before_deg"] = before["err_inner_deg"]
+            except Exception as exc:  # noqa: BLE001 - 只是附带的基线，失败不挡 dry_run
+                metrics["verify"]["err_inner_before_deg"] = None
+                metrics["verify"]["before_error"] = str(exc)[:160]
         return {"dry_run": True, "params": params, "metrics": metrics,
                 "frames": [c, d]}
     track, strip = P.write_pose(armature, f"agent_copy_{c}_{d}", c, scalars,

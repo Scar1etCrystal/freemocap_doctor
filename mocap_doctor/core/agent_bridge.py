@@ -910,12 +910,13 @@ def _tool_validate(ctx, frame_range=None, **_):
 
 
 def _tool_list_ops(ctx, owner=None, op_id=None, live=None, frames=None,
-                   compact=None, **_):
+                   compact=None, bones=None, **_):
     """Op log enriched with live state (track / exponent / mute) so an agent can
     see exactly what is on the rig without guessing.
 
     过滤（都可选；不传 = 旧版全量输出）：owner="<agent_id>"（"none"=无 owner 的
     历史修复）、op_id、live=true（去掉 reverted 历史）、frames=[a,b]（与之相交）、
+    bones=[...]（只要写了这些骨的修复；可用角色名/链名会被解析成骨名）、
     compact=true（只回 fixes 对账行，不带完整 params/metrics——自查用这个）。"""
     armature = ctx["armature"]
     rows = agent_ops.reconcile(armature, ctx["data_dir"])
@@ -941,14 +942,23 @@ def _tool_list_ops(ctx, owner=None, op_id=None, live=None, frames=None,
            and not (live and o.get("status") == "reverted")]
     rows = [r for r in rows
             if keep(r, r.get("op_id"), r.get("frames"), r.get("owner"))]
-    if compact:
+    if compact or bones:
         for r in rows:
             if r.get("alive") and r.get("strip"):
                 r["bones"] = sorted(_strip_bones(
                     armature, {"track": r.get("track"), "strip": r.get("strip")}))
+    if bones:
+        # 写前查"这根骨在这段上有没有别人的同类修复"：按帧过滤还会带出无关骨，
+        # 弱模型得自己读 bones 判断（sonnet 第六轮反馈）——这里直接按骨过滤。
+        want = _claim_bones(ctx, [bones] if isinstance(bones, str) else list(bones), None)
+        if want is not agent_claims.ALL:
+            rows = [r for r in rows if set(want) & set(r.get("bones") or ())]
+            ids = {r.get("op_id") for r in rows}
+            ops = [o for o in ops if o.get("id") in ids]
     out = {"fixes": rows,
            "filters": {k: v for k, v in (("owner", owner), ("op_id", op_id),
                                           ("live", live), ("frames", frames),
+                                          ("bones", bones),
                                           ("compact", compact)) if v is not None}}
     if not compact:
         out["ops"] = ops
