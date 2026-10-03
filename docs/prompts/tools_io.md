@@ -105,7 +105,7 @@ ping → 读/探查（确定 scope 和修前基线）→ claim → 写（带 exp
 | 工具 | 关键参数 | 看什么 |
 |---|---|---|
 | `probe_anatomy` | `part` `side` `frame_range` `toward` (`bone`/`finger`) `max_frames`(默认 9) | `err_inner_deg` `owner_bone` `confidence` `secondary_axis`；均匀采样 max_frames 帧、掐头去尾算 inner——长段/快动作复测时把 max_frames 调到 31 |
-| `analyze_motion` | `bones`/`chain` `frame_range` `main_bone` (`onset_frame` `stop_frame` `baseline_op`=你的某个 op_id，结果多一节 `vs_baseline`=修后−该 op 之前) | `data.main`: onset/peak/stop 帧、`peak_speed`(°/帧)、`amplitude_deg`、`counter_move_deg`；每骨 `jitter_deg`；`data.suggest.<工具>.args` 可直接用（帧段若超出你的 scope 见 §4 第 10 条）。`truncated:true` 只表示速度序列按 max_points 抽样，数字不受影响 |
+| `analyze_motion` | `bones`/`chain` `frame_range` `main_bone` (`onset_frame` `stop_frame` `baseline_op`=你的某个 op_id，结果多一节 `vs_baseline`=修后−该 op 之前) | `data.main`: onset/peak/stop 帧、`peak_speed`(°/帧)、`amplitude_deg`、`counter_move_deg`；每骨 `jitter_deg`；`data.suggest.<工具>.args` 可直接用（帧段若超出你的 scope 见 §4 第 10 条）。`truncated:true` 只表示速度序列按 max_points 抽样，数字不受影响；只要数字时加 `"brief":true`（去掉速度序列，省约 6 KB） |
 | `compare_motion` | `op_id`（验收某个 motion_copy，最省事）或 `a:{bones/chain, frame_range}` `b:{…}` `mirror` `bone_map` `space` `trim` | `err_inner_deg`（复制/镜像是否到位） |
 | `chain_lag` | `bones`/`chain` `frame_range` | 每骨相对链内父骨的滞后帧数 |
 | `slide_report` | `side` `frame_range` `threshold_mm` | 每段接触的 `drift_mm`、`flagged`、`foot_lock_args` |

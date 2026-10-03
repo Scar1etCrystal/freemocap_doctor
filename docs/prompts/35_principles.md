@@ -13,8 +13,9 @@
 
 ```
 /home/sb/remote_kit_1.7.1/tools/agent analyze_motion '{"agent_id":"<ME>","chain":"arm_nofingers.R","frame_range":[550,603],
-  "main_bone":"upper_arm_fk.R"}'
+  "main_bone":"upper_arm_fk.R","brief":true}'
 ```
+- `"brief":true` 去掉逐帧速度序列（约 6 KB）——本剧本只看 `main` / `suggest` / `vs_baseline`，复测也带上它。
 - **显式给 `main_bone`**（主通道 = 动作的主角骨）。不给时自动选峰速最大的骨——这份数据是舞蹈，
   手几乎一直在转，自动选到手往往不对。任务块写了 main_bone 就用它；只写了起动/停止帧，就选让
   `main.onset_frame`/`stop_frame` 与之吻合（±1 帧）的骨——一般挥臂类是 `upper_arm_fk.*`、甩小臂是
