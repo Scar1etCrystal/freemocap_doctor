@@ -30,6 +30,10 @@ LOCK_WAIT_S="${MCD_LOCK_WAIT_S:-3600}"
 FIXTURE="$KIT/sandbox/work/fixture_1499.blend"
 WORKFILE="$KIT/work/fixture_1499_3.blend"
 PIDFILE="$KIT/sandbox/headless.pid"
+# 只认真正的 Blender 服务进程（-b … --python …/tools/headless_server.py）。裸的 "headless_server.py"
+# 会匹配到任何命令行里带这几个字的 shell（比如一条把 mcd.sh 和 grep 串起来的命令），
+# server-start 就会误以为服务已在跑而直接退出。
+SERVER_PAT="--python .*tools/headless_server\.py"
 mkdir -p "$LOGDIR"
 
 if [ ! -f "$KIT/sandbox/env.sh" ]; then
@@ -108,7 +112,7 @@ case "$cmd" in
     test="${1:?用法: mcd.sh e2e tests/xxx.py [blend]}"; shift
     case "$test" in /*) ;; *) test="$KIT/$test";; esac
     blend="${1:-$FIXTURE}"; [ $# -gt 0 ] && shift
-    if pgrep -f headless_server.py >/dev/null; then
+    if pgrep -f -- "$SERVER_PAT" >/dev/null; then
         echo "[mcd] 注意：headless 服务在跑且占着 Blender 锁——e2e 会排队到服务停掉为止。"
         echo "[mcd]       （内存只够 1 个 Blender。需要 e2e 就先 mcd.sh server-stop）"
     fi
@@ -125,8 +129,8 @@ case "$cmd" in
   server-start)
     blend="${1:-$WORKFILE}"
     case "$blend" in /*) ;; *) blend="$KIT/$blend";; esac
-    if pgrep -f headless_server.py >/dev/null; then
-        echo "[mcd] headless 已在跑（pid $(pgrep -f headless_server.py | head -1)）"; exit 0
+    if pgrep -f -- "$SERVER_PAT" >/dev/null; then
+        echo "[mcd] headless 已在跑（pid $(pgrep -f -- "$SERVER_PAT" | head -1)）"; exit 0
     fi
     ts=$(date +%m%d_%H%M%S); log="$LOGDIR/headless_${ts}.log"
     exec 9>"$LOCK"
@@ -157,11 +161,11 @@ case "$cmd" in
     echo "[mcd] 120s 内没看到 pumping...，看 $log"; exit 1
     ;;
   server-stop)
-    pids=$(pgrep -f headless_server.py || true)
+    pids=$(pgrep -f -- "$SERVER_PAT" || true)
     if [ -z "$pids" ]; then echo "[mcd] 没有 headless 在跑"; rm -f "$LOCK.owner"; exit 0; fi
     kill $pids
-    for i in $(seq 1 30); do pgrep -f headless_server.py >/dev/null || break; sleep 1; done
-    pgrep -f headless_server.py >/dev/null && { echo "[mcd] SIGTERM 不响应，SIGKILL"; pkill -9 -f headless_server.py; }
+    for i in $(seq 1 30); do pgrep -f -- "$SERVER_PAT" >/dev/null || break; sleep 1; done
+    pgrep -f -- "$SERVER_PAT" >/dev/null && { echo "[mcd] SIGTERM 不响应，SIGKILL"; pkill -9 -f -- "$SERVER_PAT"; }
     rm -f "$LOCK.owner" "$PIDFILE"
     echo "[mcd] headless 已停（内存里没 save 的 op 已丢——停之前该 save 的要 save）"
     ;;
@@ -176,14 +180,18 @@ case "$cmd" in
     for f in "$CLONE"/tests/e2e_*.py "$CLONE"/tests/bench_*.py; do
         [ -f "$f" ] && cp "$f" "$KIT/tests/"
     done
+    # 先写临时文件再 mv：mcd.sh 自己也在这批里，而 bash 是边读边执行脚本的——
+    # 原地 cp 覆盖会让正在跑的这个进程读到错位的内容（实测：line 213 syntax error）。
+    # mv 换的是目录项，正在跑的 bash 继续读旧 inode。
     for f in "$CLONE"/tools/*.py "$CLONE"/tools/*.sh; do
-        [ -f "$f" ] && cp "$f" "$KIT/tools/"
+        [ -f "$f" ] || continue
+        cp "$f" "$KIT/tools/.$(basename "$f").new" && mv -f "$KIT/tools/.$(basename "$f").new" "$KIT/tools/$(basename "$f")"
     done
     [ -d "$CLONE/docs" ] && rsync -a "$CLONE/docs/" "$KIT/docs/"
     bash "$KIT/setup_remote.sh" > "$LOGDIR/setup_remote_last.log" 2>&1 \
         && echo "[mcd] deploy ok（$(cd "$CLONE" && git rev-parse --short HEAD) + 工作区改动）" \
         || { echo "[mcd] setup_remote.sh 失败"; cat "$LOGDIR/setup_remote_last.log"; exit 1; }
-    if pgrep -f headless_server.py >/dev/null; then
+    if pgrep -f -- "$SERVER_PAT" >/dev/null; then
         echo "[mcd] 注意：headless 服务还在跑旧代码——server-stop 再 server-start 才生效"
     fi
     ;;
