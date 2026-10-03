@@ -152,6 +152,12 @@ def _write_strip(
         )
 
     anim = armature.animation_data or armature.animation_data_create()
+    # Blender 的 NLA auto-blend：新 strip 与相邻轨上的 strip **部分**重叠时，会把
+    # 两条的 blend_in/out 自动改成重叠帧数——先写的修复被悄悄削弱、新修复也到不了
+    # 位（实测 spine 65–155 + 手 75–165：旧修复偏 16°，新修复差 53°）。taper 已经
+    # 烘在 delta 曲线里，strip 自身的 blend 必须恒为 0：写前给全部 agent/基底 strip
+    # 拍快照，写后关掉 auto-blend 并逐条还原——任何一次写入都不改动别的修复。
+    blend_snap = _blend_snapshot(anim)
     track = None
     if track_name:
         for tr in anim.nla_tracks:
@@ -163,11 +169,45 @@ def _write_strip(
         track.name = track_name or name
     strip = track.strips.new(name, int(frame_start), action)
     strip.blend_type = "COMBINE"
-    strip.use_auto_blend = True
+    strip.use_auto_blend = False
+    strip.blend_in = 0.0
+    strip.blend_out = 0.0
     strip.extrapolation = "NOTHING"
     if not track_name:
         track.name = strip.name    # mirror the uniquified strip name (.001 on clash)
+    _blend_restore(anim, blend_snap)
     return track, strip
+
+
+def _blend_snapshot(anim) -> list:
+    out = []
+    for tr in anim.nla_tracks:
+        if not (is_agent_track_name(tr.name) or tr.name == BASE_TRACK):
+            continue
+        for st in tr.strips:
+            out.append((tr.name, st.name, float(st.blend_in),
+                        float(st.blend_out)))
+    return out
+
+
+def _blend_restore(anim, snap) -> int:
+    """Turn auto-blend off on every snapshotted strip and put its blend values
+    back.  Returns how many strips had been changed by Blender."""
+    fixed = 0
+    for tname, sname, bi, bo in snap:
+        for tr in anim.nla_tracks:
+            if tr.name != tname:
+                continue
+            for st in tr.strips:
+                if st.name != sname:
+                    continue
+                if st.use_auto_blend:
+                    st.use_auto_blend = False
+                if float(st.blend_in) != bi or float(st.blend_out) != bo:
+                    st.blend_in = bi
+                    st.blend_out = bo
+                    fixed += 1
+    return fixed
 
 
 # ---------------------------------------------------------------------------

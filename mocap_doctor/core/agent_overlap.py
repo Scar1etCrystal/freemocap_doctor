@@ -133,43 +133,6 @@ def _deltas(armature, smp, desired_q, desired_l, strength, sl, members):
                          index_slice=sl)
 
 
-def _blend_snapshot(armature) -> dict:
-    anim = getattr(armature, "animation_data", None)
-    return {(t.name, s.name): (float(s.blend_in), float(s.blend_out))
-            for t in (anim.nla_tracks if anim else ()) for s in t.strips}
-
-
-def _pin_blends(armature, track, strip, before: Mapping) -> list[str]:
-    """关掉 NLA 自动混合，并撤销本次写入对相邻 agent strip 的副作用。
-
-    共享 _write_strip 给每条 delta strip 开了 use_auto_blend：Blender 新建 strip
-    时会把"相邻轨上与它部分重叠"的 strip 的 blend_in/out 自动设成重叠帧数
-    （实测 spine 65-155 + arm 75-165 → 两条各被设 80 帧，旧修复被悄悄削弱 12°、
-    新修复错 55°）。我们的 taper 已烘进 delta 曲线，NLA 混合从来不需要：
-    本 strip 关掉自动混合；被本次写入改了 blend 的别的 agent strip 恢复原值并
-    同样关掉自动混合（只撤销本次副作用，不碰它们的通道）。"""
-    strip.use_auto_blend = False
-    strip.blend_in = 0.0
-    strip.blend_out = 0.0
-    repaired = []
-    anim = armature.animation_data
-    for t in anim.nla_tracks:
-        if not agent_ops.is_agent_track_name(t.name):
-            continue
-        for s in t.strips:
-            if t.name == track.name and s.name == strip.name:
-                continue
-            prev = before.get((t.name, s.name))
-            if prev is None:
-                continue
-            if abs(s.blend_in - prev[0]) > 1e-6 or abs(s.blend_out - prev[1]) > 1e-6:
-                s.use_auto_blend = False
-                s.blend_in = prev[0]
-                s.blend_out = prev[1]
-                repaired.append(s.name)
-    return repaired
-
-
 def _finish(tool, short, armature, smp, desired_q, desired_l, *, params, metrics,
             members, a, b, sl, strength, blend, op_mode, data_dir, track_name,
             dry_run, record):
@@ -181,16 +144,10 @@ def _finish(tool, short, armature, smp, desired_q, desired_l, *, params, metrics
     if dry_run:
         return {"dry_run": True, "tool": tool, "params": params,
                 "metrics": metrics, "frames": [a, b]}
-    before = _blend_snapshot(armature)
+    # NLA auto-blend 的副作用由 agent_ops._write_strip 统一处理（写前快照、写后还原）
     track, strip = P.write_pose(armature, f"agent_{short}_{a}_{b}", a,
                                 scalars, quats, blend=blend,
                                 track_name=track_name)
-    repaired = _pin_blends(armature, track, strip, before)
-    if repaired:
-        metrics["autoblend_repaired"] = repaired
-        metrics["warnings"].append(
-            f"NLA 自动混合把相邻修复 {repaired} 的 blend_in/out 改成了重叠帧数"
-            "（会悄悄削弱那些修复），已恢复原值并关掉它们的自动混合")
     op = agent_ops._new_op(tool, params, (a, b), strip.name, op_mode,
                            metrics, track=track.name)
     return agent_ops._record(data_dir, op) if (data_dir and record) else op

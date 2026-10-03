@@ -462,9 +462,10 @@ if jtr is not None and jtr.strips:            # how big the silent damage would 
     js.blend_out = 0.0
 check("S1 earlier clean_jitter fix untouched by our overlapping write (<0.01°)",
       rJ["ok"] and rS2["ok"] and jit > 0.5 and keep < 0.01
-      and jrow.get("strip") in (mS2.get("autoblend_repaired") or []),
+      and jtr is not None and jtr.strips and not jtr.strips[0].use_auto_blend
+      and jtr.strips[0].blend_in == 0 and jtr.strips[0].blend_out == 0,
       f"jitter fix size={jit:.2f}° change after our write={keep:.6f}° "
-      f"repaired={mS2.get('autoblend_repaired')} (unrepaired auto-blend would have "
+      f"(agent_ops._write_strip keeps every strip's blend at 0; unrepaired auto-blend would have "
       f"changed it by {None if would is None else round(would, 2)}°)")
 
 # ---------- G: skipped bones ---------------------------------------------------

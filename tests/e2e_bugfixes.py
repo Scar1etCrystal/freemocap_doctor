@@ -189,6 +189,34 @@ check("6b effect_check infers bones from the strip (foot_lock has no params.bone
       ec.get("summary") if ec["ok"] else ec.get("error"))
 call("revert", op_id=r["data"]["op_id"])
 
+# ---- 7: NLA auto-blend must never touch other fixes -------------------------------
+fr7 = list(range(60, 170))
+r1 = call("hold_pose", bones=["spine2"], frame_range=[65, 155], target="values", blend=4)
+sp_mid = P.sample_visible(scene, rig, ["spine_fk.001"], fr7)["quat"]["spine_fk.001"]
+r2 = call("hold_pose", bones=["left_hand"], frame_range=[75, 165], target="values", blend=4)
+aft = P.sample_visible(scene, rig, ["spine_fk.001", "hand_fk.L"], fr7)
+ins = slice(fr7.index(69), fr7.index(151) + 1)
+inh = slice(fr7.index(79), fr7.index(161) + 1)
+d_sp = P.qangle_deg(sp_mid[ins], aft["quat"]["spine_fk.001"][ins]).max()
+e_h = P.qangle_deg(aft["quat"]["hand_fk.L"][inh],
+                   np.tile([1.0, 0, 0, 0], (len(fr7), 1))[inh]).max()
+strips = [agent_ops.find_op_strip(rig, agent_ops.get_op(data_dir, r["data"]["op_id"]))[1]
+          for r in (r1, r2)]
+check("7 partially overlapping fixes on adjacent tracks: no auto-blend",
+      all(st.blend_in == 0 and st.blend_out == 0 and not st.use_auto_blend for st in strips)
+      and d_sp < 0.01 and e_h < 0.05,
+      f"blends={[(st.blend_in, st.blend_out) for st in strips]} earlier fix moved "
+      f"{d_sp:.4f}° (was 16°), new fix err {e_h:.4f}° (was 53°)")
+# legacy strip (old file) with auto-blend on: a new overlapping write must not change it
+strips[0].use_auto_blend = True
+strips[0].blend_out = 7.0
+r3 = call("hold_pose", bones=["right_hand"], frame_range=[120, 200], target="values", blend=4)
+check("7b legacy auto-blend strip left exactly as it was (and auto turned off)",
+      strips[0].blend_out == 7.0 and not strips[0].use_auto_blend,
+      f"blend_out={strips[0].blend_out} auto={strips[0].use_auto_blend}")
+for r in (r1, r2, r3):
+    call("revert", op_id=r["data"]["op_id"])
+
 fails = [r for r in RESULTS if not r[1]]
 print(f"\n==== {len(RESULTS) - len(fails)}/{len(RESULTS)} PASS ====")
 for n, _o, d in fails:
