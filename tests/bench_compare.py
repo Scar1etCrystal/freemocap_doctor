@@ -58,6 +58,8 @@ def main():
         num = [d for d in diffs if d[2] is not None]
         print(f"GOLDEN DIFF: {len(diffs)} differences "
               f"(numeric {len(num)}, max |Δ|={max((d[2] for d in num), default=0):.3e})")
+        sections = sorted({p.split(".")[1].split("[")[0] for p, _m, _d in diffs if p.count(".") >= 1})
+        print(f"GOLDEN DIFF SECTIONS: {sections}")
         for p, msg, _ in diffs[:60]:
             print(f"  {p}: {msg}")
         return 1
