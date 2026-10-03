@@ -1,6 +1,7 @@
 # 验收者提示词（收尾：只跑测试、对账、出报告；不写 op、不改代码）
 
-> 你只读、只跑测试：**不许**改任何源码/文档、不许 commit/push、不许写 op、不许 deploy、不许起服务。
+> 你只读、只跑测试：**不许**改任何源码/文档、不许 commit/push、不许写 op、不许 deploy、不许起服务
+> （mcd.sh 往 `logs/` 写的 .log/.json 是正常的）。
 > 所有 Blender 运行都经过 `mcd.sh`（排队、查内存，同一时刻只有 1 个 Blender）——命令**一条一条**跑，
 > 不要并行两个 mcd.sh。下面的命令照抄：全是绝对路径、没有 shell 变量。某一步失败就记下失败行原文，
 > 继续做后面的步骤，最后统一下结论。
@@ -15,9 +16,8 @@ git -C /home/sb/freemocap_doctor status --short
 git -C /home/sb/freemocap_doctor log --oneline -1
 diff -rq /home/sb/freemocap_doctor/mocap_doctor /home/sb/remote_kit_1.7.1/sandbox/extensions/user_default/mocap_doctor -x __pycache__ && echo SYNC_OK
 ```
-- 服务**没在跑**时 server-status 会打出一段 Python traceback（`socket.create_connection` … 连接被拒），
-  最后一行是 `lock owner: free`——这是正常的"没在跑"。在跑（第一行是 `{"ok": true`）→ 停下，报告给协调者，
-  不要自己停服务。
+- 判据：第一行**不是** `{"ok": true` 且最后一行以 `lock owner: free` 开头 = 服务没在跑（中间那段被截断的 Python
+  traceback 是正常的）。第一行是 `{"ok": true` = 在跑 → 停下，报告给协调者，不要自己停服务。
 - `status --short` 有 `mocap_doctor/` 下的改动、或没出现 `SYNC_OK` → 现场没冻结/没部署：停下报告，不要自己 deploy。
 - 记下 HEAD 的 commit 号（报告里写"验收对象"）。
 
@@ -26,18 +26,20 @@ diff -rq /home/sb/freemocap_doctor/mocap_doctor /home/sb/remote_kit_1.7.1/sandbo
 ```bash
 for t in e2e_anatomy e2e_perfix e2e_accent e2e_fixlist_timer e2e_concurrency e2e_bugfixes e2e_motion_copy e2e_principles e2e_overlap e2e_foot_lock e2e_ground; do echo "## $t"; bash /home/sb/remote_kit_1.7.1/tools/mcd.sh e2e /home/sb/remote_kit_1.7.1/tests/$t.py | grep -E "^====? |^=== [0-9]|^\[FAIL\]|rc=|falling back"; done
 ```
-套件的结论行有两种写法（`==== N/N PASS ====` 和 `=== N/N passed ===`），都算。
+11 套合计约 75 秒（单套 2–14 s）：**前台一条 Bash 跑完**即可，不用后台/轮询。套件的结论行有两种写法
+（`==== N/N PASS ====` 和 `=== N/N passed ===`），都算。
 
 ## 3. 纯 Python 单测（13 个文件，不需要 Blender）
 
 ```bash
-for f in /home/sb/freemocap_doctor/tests/test_*.py; do printf '%s: ' "$(basename $f)"; PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=/home/sb/freemocap_doctor python3 "$f" 2>&1 | tail -1; done
+for f in /home/sb/freemocap_doctor/tests/test_*.py; do printf '%s: ' "$(basename $f)"; PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=/home/sb/freemocap_doctor python3 "$f" > /tmp/ut.out 2>&1; echo "rc=$? $(tail -1 /tmp/ut.out) fails=$(grep -c -E 'FAIL|Traceback|Error' /tmp/ut.out)"; done
 ```
-每行结尾应是 `OK` / `==== 0 FAIL ====` / `PASS …`。
+每行应是 `rc=0`、`fails=0`（`==== 0 FAIL ====` 这一行本身含 FAIL，算 1 次——这个文件 fails=1 也对）。
 
 ## 4. 基准：结果必须与原版逐位一致（速度只是附带）
 
-每条基准 15–60 秒，Bash 的 timeout 给 600000 毫秒。
+耗时：bench_baseline ~13 s、bench_wizard ~72 s、bench_export ~44 s；Bash 的 timeout 给 600000 毫秒。bench_wizard 的
+控制台只打出 source_check/source_floor 两行 EXC（正常），其余步骤看后面的 compare 脚本。
 ```bash
 bash /home/sb/remote_kit_1.7.1/tools/mcd.sh run /home/sb/remote_kit_1.7.1/tests/bench_baseline.py -- --label verify
 python3 /home/sb/remote_kit_1.7.1/tests/bench_compare.py /home/sb/remote_kit_1.7.1/logs/bench_orig1.json /home/sb/remote_kit_1.7.1/logs/bench_verify.json | grep -E "^INFO|^GOLDEN|socket|probe|world_dir"
@@ -62,10 +64,14 @@ python3 /home/sb/remote_kit_1.7.1/tests/bench_steps_compare.py /home/sb/remote_k
 
 ## 5. 文档与提交（只读）
 
-- `git -C /home/sb/freemocap_doctor log --oneline 190e354..HEAD | wc -l` = 本轮提交数（190e354 = v1.7.1 的 save 工具提交）；
+- `git -C /home/sb/freemocap_doctor log --oneline 190e354..HEAD | wc -l` = 本轮提交数（190e354 = v1.7.1 的 save 工具提交；
+  只记录，不判 PASS/FAIL）；
   `git -C /home/sb/freemocap_doctor log --oneline 190e354..HEAD` 里任务1–4、修复、文档都要有。
-- 工具清单：`python3 -c "import json; print(sorted(json.load(open('/home/sb/remote_kit_1.7.1/logs/bench_verify.json'))['golden']['ping']['tools']))"`
-  → 逐个 `grep -c '<工具名>' /home/sb/freemocap_doctor/docs/工具手册_agent.md`；表格行或小节标题都算有，0 次 = 缺口。
+- 工具清单对照（一条命令；`-w` 整词匹配，免得 save/claim 这类通用词被无关行凑数）：
+  ```bash
+  python3 -c "import json; print('\n'.join(sorted(json.load(open('/home/sb/remote_kit_1.7.1/logs/bench_verify.json'))['golden']['ping']['tools'])))" | while read -r n; do printf '%-18s %s\n' "$n" "$(grep -cw -- "$n" /home/sb/freemocap_doctor/docs/工具手册_agent.md)"; done
+  ```
+  0 次 = 缺口；只命中 1 次的，看一眼那一行是不是表格行或小节标题。
 
 ## 报告格式
 
