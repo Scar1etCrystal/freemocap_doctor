@@ -65,4 +65,5 @@ scope：<骨/链> × [A,B]。只许写这里。先 claim。
 
 ## 5. 收尾
 
-`bash $K/tools/mcd.sh server-stop`（之前先 save！）→ 需要回归时跑 `20_verifier.md`。
+**等所有 agent 的报告都到了**（不是只看它 release 了——有的 agent release 后还会再复测一次）
+再 `bash $K/tools/mcd.sh server-stop`（之前先 save！）→ 需要回归时跑 `20_verifier.md`。

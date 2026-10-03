@@ -15,6 +15,7 @@
 - `ping` 的 `data.tools` 里没有你要的工具 → 服务没重启/代码没部署：停下报告，别绕路。
 - 服务是 headless Blender（没人看视口）。**验收只看数字。不要启动 Blender、不要跑 mcd.sh**
   （内存只够 1 个 Blender，服务已经占着）。
+- 连接被拒（`Connection refused`）= 服务停了：不要重启、不要绕路，把已经拿到的数字写进报告结束。
 
 ## 2. 响应与错误码
 
@@ -61,7 +62,8 @@ ping → 读/探查（确定 scope 和修前基线）→ claim → 写（带 exp
 1. **先看现场**：`list_ops {"agent_id":"<ME>","frames":[A,B],"live":true,"compact":true}`——你的骨在这段
    帧上如果已经有**别人的同类修复**（同工具、同骨），**不要再叠一层**：报告给协调者（除非任务明确要求叠加）。
    不同类的修复（比如别人的朝向修复 + 你的去抖）可以共存。
-2. `claim {"agent_id":ME,"bones":[...],"frames":[A,B]}`（也可 `"chain":"arm.R"`）。
+2. `claim {"agent_id":"<ME>","bones":[...],"frames":[A,B]}`（`frames` 也可写 `frame_range`；骨也可用
+   `"chain":"arm.R"`，会展开成整条链）。`dry_run` 只算不写，**不需要 claim**。
    `data.granted=false` → `data.conflicts` 写着谁占了哪里：换范围或停下报告。
    `warnings` 里出现"层级相关"= 你和别人是父子骨（比如你改前臂、他改手）——可以写，但
    写完在报告里点名对方要复测。
@@ -70,7 +72,8 @@ ping → 读/探查（确定 scope 和修前基线）→ claim → 写（带 exp
 4. 你没 claim 就写也行——会**自动认领**（warnings 提示），但别人先占了就 `E_CLAIMED`。
 5. 租约 15 分钟没动静自动过期；你的每次 claim/写入都会续期。干完 `release`。
 6. 只碰自己的 op：`reapply`/`revert`/`set_influence` 别人的 op → `E_OWNER`。
-7. `ab_toggle` 带 agent_id 只静音/恢复**你自己的**修复；不带会动所有人的（别人有 claim 时被拒）。
+7. `ab_toggle` 带 agent_id 只静音/恢复**你自己的**修复（它算写操作：会按你的 op 范围自动认领）；
+   不带会动所有人的（别人有 claim 时被拒）。A/B 完一定再调一次恢复。
 8. **段落完成必须 `save`**（`{"agent_id":"<ME>"}`，不用别的参数）——headless 进程一关，没存盘的全丢。
    save 存的是**大家共用的同一个 .blend**（含所有 agent 的 preview），这是协议允许的写文件操作；
    报告里写 `save=ok` 即可。`release {"agent_id":"<ME>"}` 释放你的全部租约。
@@ -122,7 +125,7 @@ ping → 读/探查（确定 scope 和修前基线）→ claim → 写（带 exp
 ### 管理
 | 工具 | 用途 |
 |---|---|
-| `reapply {op_id, overrides:{…}, expect_version}` | 改参数重写同一条修复（op_id 不变）。它也是写调用（带 expect_version）。**同骨同帧段要改，一律 reapply，别叠新 op** |
+| `reapply {op_id, overrides:{…}, expect_version}` | 改参数重写同一条修复（op_id 不变）。它也是写调用（带 expect_version）。`overrides:{}` = 不改参数、按当前现场重算一次。**同骨同帧段要改，一律 reapply，别叠新 op** |
 | `revert {op_id}` | 撤销你自己的 op |
 | `set_influence {op_id, value}` | 力度（0.5 = 一半，1.5 = 超量） |
 | `claim` / `release` / `list_claims` | 并发租约 |

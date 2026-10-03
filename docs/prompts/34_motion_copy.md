@@ -42,6 +42,10 @@
    /home/sb/remote_kit_1.7.1/tools/agent compare_motion '<verify.args 的 JSON>'
    ```
    `err_inner_deg < 0.05` = 到位（四元数骨有 ~0.005–0.03° 的 float32 噪声，正常）。
+   verify.args 里没有 agent_id——调用时在顶层自己补上 `"agent_id":"<ME>"`。
+   **不达标**：先 `reapply {"op_id":…, "overrides":{}}`（空 overrides = 按当前现场重算一次）再验；
+   还不过就停手，报告 err_inner、最差骨（`worst_bone`）和你量到的数字——**诊断别超过 3 次调用**。
+   要逐帧误差加 `"detail":true`（默认不回逐帧数组，帧号只接受整数）。
    自己写 compare_motion 时注意：**a 放目标窗、b 放源窗**（b 会被重采样到 a 的帧上；反过来
    对时间缩放的复制会二次插值，报出假误差）。
 5. `list_ops` → `save` → `release`。
