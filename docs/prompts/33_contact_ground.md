@@ -40,7 +40,7 @@ contact 标注**标定每只脚"正常着地"的高度** `contact_height_mm`，�
    ```
    看 `data.sides.R`：`contact_height_mm`、`pen_frames`（rel < −10 mm 的帧段）、`pen_max_mm`、
    `contacts[]`（`floating:true` = 这段接触整段比平时高 > 10 mm）、`fix_ground_args`（现成参数）。
-   修前数字：下沉记 `pen_max_mm`；悬空记那段 contact 的 `rel_min_mm`。
+   修前数字：下沉记 `pen_max_mm`；悬空记那段 contact 的 `rel_max_mm`（验收也看它；`rel_min_mm` 一并写上）。
 2. `claim bones=["foot_ik.R"] frames=<fix_ground_args 的 frame_range>`。
 3. **写入**：把 `fix_ground_args` 里的一项**去掉 `why`** 原样传（`rest_clearance` 已经是**米**，别换算）：
    ```
@@ -54,11 +54,12 @@ contact 标注**标定每只脚"正常着地"的高度** `contact_height_mm`，�
    | `float` | 整段钉在 地面+rest_clearance（脚跟/脚尖滚动也被抹平） | 很少用 |
    **没有 `snap`**（旧手册写错了）。**不传 rest_clearance = 0**：在穿鞋的模型上 `lift` 会把整段脚按进地里
    几厘米——所以一律用 ground_report 给的参数。
-4. **复测**：同第 1 步，`frame_range` 用写入窗去掉两端 blend（[a+4, b−4]）→ 下沉：`pen_max_mm ≤ 1`；
+4. **复测**：同第 1 步，`frame_range` 用写入窗去掉两端 blend（fix_ground 的 blend 默认 4，返回里不回显：[a+4, b−4]）→ 下沉：`pen_max_mm ≤ 1`；
    悬空：那段 contact 的 `rel_max_mm ≤ 1`。`effect_check` 只答"动没动"。
 5. ⚠ `fix_ground` 按**快照**（最初烘焙的原始动作）里的脚底高度计算。ground_report 的 warnings 出现
    "快照…与当前姿态差 > 1 mm" = 这只脚这段已经被修过（foot_lock 的 pos/xy+rot、别人的 fix_ground）——
-   fix_ground 会按旧高度算错：**不写**，报告给协调者。`validate` 也是快照、而且按"关节贴地面"判，在穿鞋的
+   fix_ground 会按旧高度算错：**不写**，报告给协调者。——**你自己写完 fix_ground 之后**复测时出现这条警告是正常的
+   （快照里还是修前的高度），只是别在同一段再叠一次 fix_ground。`validate` 也是快照、而且按"关节贴地面"判，在穿鞋的
    模型上没有参考价值——用 ground_report。
 
 ## C. 顺序

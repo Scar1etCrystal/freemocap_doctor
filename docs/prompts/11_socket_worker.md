@@ -13,7 +13,7 @@
 5. 写完自查：`list_ops {"agent_id":"<ME>","owner":"<ME>","compact":true}` → 你的 op 在 `fixes` 里、
    `status=preview`、`alive=true`、`owner=<你>`。（别拉全量 list_ops：几十 KB 历史。）
 6. **复测只用实时类读工具**（probe_anatomy / analyze_motion / compare_motion / chain_lag /
-   slide_report / effect_check）。describe/get_series 等快照类读的是原始动作，修完不会变。
+   slide_report / ground_report / effect_check）。describe/get_series 等快照类读的是原始动作，修完不会变。
 7. 同一骨同一帧段要改参数 → `reapply`，**不要叠新 op**。只碰自己的 op。
 8. 段落完成 `save`；全部完成 `release`。
 9. 方向空物体（`mcd_dir_*`）命名带你的前缀：`mcd_dir_<你的名>_*`。

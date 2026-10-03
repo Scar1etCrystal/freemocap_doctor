@@ -114,7 +114,7 @@ ping → 读/探查（确定 scope 和修前基线）→ claim → 写（带 exp
 | `list_ops` | `owner`（"none"=无主历史） `op_id` `live`（去掉日志里 reverted 的历史） `frames` `compact`（只回场景对账行，带 `bones`） | **自查用** `{"agent_id":"<ME>","owner":"<ME>","compact":true}`（只回你的 fixes 行，几百字节）；不带过滤 = 全量（可能 50KB+）。fixes 行用 `op_id`，日志行用 `id` |
 | `list_claims` | – | 租约表 + 每个 agent 名下的 op |
 
-### 写（全部 preview delta strip，可 reapply / revert，都支持 `dry_run:true` 先看效果）
+### 写（全部 preview delta strip，可 revert；除 fix_ground / solve_pelvis / apply_exemplar 外都支持 `dry_run:true` 先看效果）
 | 工具 | 关键参数 | 剧本 |
 |---|---|---|
 | `hold_pose` | `bones` `frame_range` `target`(values/from_frame/world_dir) `world_dir` `world_axis` `secondary_axis` `mode` `strength` `blend` | 30 |
@@ -161,7 +161,8 @@ ping → 读/探查（确定 scope 和修前基线）→ claim → 写（带 exp
 遗留：<无 / 没做完的、低置信度、超出 scope 的段、层级冲突要谁复测>
 ```
 - "修前 X" = 写入前最后一次同口径实时读数；"修后 Y" = 同一工具同参数复测。
-- "看 a–b 帧" = 有效区：`[A+blend, B−blend]`（工具返回里有 `inner_frames`/`changed_frames` 就用它）。
+- `@[A,B]` = 你的**写入窗**（工具的 frame_range）。"看 a–b 帧" = 有效区：`[A+blend, B−blend]`；剧本里另有规定的
+  （跟随/过冲用主骨的 `vs_baseline.changed_frames`）按剧本，工具返回里有 `inner_frames` 就用它。
 - 没写（被租约挡住、发现别人已有同类修复、超出 scope）也要报告：第一行写
   `<工具> @[A,B] <骨>：未写入（<原因>）`，把你量到的数字和建议写在"遗留"里。
 看不到数字 = 没验成。报数字，不报感觉。最后附"提示词反馈"（若任务块要求）。

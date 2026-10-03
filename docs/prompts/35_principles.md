@@ -44,7 +44,8 @@ scope 时**：把它缩到 scope 内，`"dry_run":true` 试一次——报错就
 ```
 - 写失败时 `error.message` 常带"**建议 frame_range=[a, b]**"——照着改了重试（窗口要容得下
   lead/振荡/taper）。
-- 跟随加 `"propagate":1` = 链上每深一级晚 1 帧起振（末端甩得更晚）；这时窗口末端要相应延长。
+- 跟随加 `"propagate":1` = 链上每深一级晚 1 帧起振（末端甩得更晚）；这时窗口末端要相应延长：先 `"dry_run":true`，
+  `frame_range` 末端 ≥ 返回的 `metrics.oscillation_end_frame` + blend（suggest 给的帧段没算 propagate）。
 
 ## 第 3 步：复测（再调 analyze_motion，规则不一样，照抄）
 
