@@ -3,7 +3,7 @@
 > 你只读、只跑测试：**不许**改任何源码/文档、不许 commit/push、不许写 op、不许 deploy、不许起服务
 > （mcd.sh 往 `logs/` 写的 .log/.json 是正常的）。
 > 所有 Blender 运行都经过 `mcd.sh`（排队、查内存，同一时刻只有 1 个 Blender）——命令**一条一条**跑，
-> 不要并行两个 mcd.sh。下面的命令照抄：全是绝对路径、没有 shell 变量。某一步失败就记下失败行原文，
+> 不要并行两个 mcd.sh。下面的命令照抄：全是绝对路径、没有需要你预先设置或替换的变量（循环里的 `$t`/`$f` 是循环自己的）。某一步失败就记下失败行原文，
 > 继续做后面的步骤，最后统一下结论。
 >
 > 前提（协调者负责，你只核对）：代码已由协调者 deploy；验收期间 clone / 套件被冻结（没人改、没人 deploy）。
@@ -26,7 +26,7 @@ diff -rq /home/sb/freemocap_doctor/mocap_doctor /home/sb/remote_kit_1.7.1/sandbo
 ```bash
 for t in e2e_anatomy e2e_perfix e2e_accent e2e_fixlist_timer e2e_concurrency e2e_bugfixes e2e_motion_copy e2e_principles e2e_overlap e2e_foot_lock e2e_ground; do echo "## $t"; bash /home/sb/remote_kit_1.7.1/tools/mcd.sh e2e /home/sb/remote_kit_1.7.1/tests/$t.py | grep -E "^====? |^=== [0-9]|^\[FAIL\]|rc=|falling back"; done
 ```
-11 套合计约 75 秒（单套 2–14 s）：**前台一条 Bash 跑完**即可，不用后台/轮询。套件的结论行有两种写法
+11 套合计约 75 秒（单套 2–14 s）：**前台一条 Bash 跑完**即可（timeout 给 400000 毫秒），不用后台/轮询。套件的结论行有两种写法
 （`==== N/N PASS ====` 和 `=== N/N passed ===`），都算。
 
 ## 3. 纯 Python 单测（13 个文件，不需要 Blender）
@@ -68,14 +68,17 @@ python3 /home/sb/remote_kit_1.7.1/tests/bench_steps_compare.py /home/sb/remote_k
 ## 5. 文档与提交（只读）
 
 - `git -C /home/sb/freemocap_doctor log --oneline 190e354..HEAD | wc -l` = 本轮提交数（190e354 = v1.7.1 的 save 工具提交；
-  只记录，不判 PASS/FAIL）；
+  只记录，不判 PASS/FAIL；标题前缀 `[任务N]`/`[修复]`/`[文档]` 缺哪类也只是记录）；
   `git -C /home/sb/freemocap_doctor log --oneline 190e354..HEAD` 里任务1–4、修复、文档都要有。
 - 工具清单对照（一条命令；`-w` 整词匹配，免得 save/claim 这类通用词被无关行凑数）：
   ```bash
   python3 -c "import json; print('\n'.join(sorted(json.load(open('/home/sb/remote_kit_1.7.1/logs/bench_verify.json'))['golden']['ping']['tools'])))" | while read -r n; do printf '%-18s %s\n' "$n" "$(grep -cw -- "$n" /home/sb/freemocap_doctor/docs/工具手册_agent.md)"; done
   ```
-  0 次 = 缺口。只命中 1 次的再看一眼是哪一行（表格行或小节标题 = 有条目；只在正文里顺带提到 = 缺口）：
-  `grep -nw -- '<工具名>' /home/sb/freemocap_doctor/docs/工具手册_agent.md`（几个工具共用一张表格行也算有）。
+  0 次 = 缺口。再确认每个工具都有**表格行或小节标题**（只在正文里顺带提到 = 缺口；几个工具共用一张表格行也算有）：
+  ```bash
+  python3 -c "import json,re; tools=sorted(json.load(open('/home/sb/remote_kit_1.7.1/logs/bench_verify.json'))['golden']['ping']['tools']); L=open('/home/sb/freemocap_doctor/docs/工具手册_agent.md',encoding='utf-8').read().splitlines(); print('NO-ENTRY', [n for n in tools if not any(re.match(r'^\|[^|]*\x60'+re.escape(n)+r'\x60',l) or (l.startswith('#') and n in l) for l in L)])"
+  ```
+  打印 `NO-ENTRY []` = 没有缺口。
 
 ## 报告格式
 
