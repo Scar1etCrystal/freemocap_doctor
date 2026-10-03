@@ -10,7 +10,8 @@
    /home/sb/remote_kit_1.7.1/tools/agent probe_anatomy '{"agent_id":"<ME>","part":"palm","side":"L","frame_range":[A,B],"toward":[0,-1,0]}'
    ```
    记下：`data.err_inner_deg`（修前误差）、`data.owner_bone`、`data.confidence`、
-   `data.secondary_axis`、响应顶层 `version`。
+   `data.secondary_axis`。（返回里的 `hold_pose_args` 是旧写法——全段用一个平均局部轴；**别用它**，
+   照第 3 步的表写 `probe:` 逐帧轴。）
    - `confidence < 0.5` 或返回里有 `alternatives` → **不要修**，在报告里写"低置信度，
      需要用户确认方向"，附两个候选，结束。
    - `err_inner_deg < 5` → 已经对了，报告"无需修复"，结束。
@@ -26,7 +27,7 @@
    /home/sb/remote_kit_1.7.1/tools/agent hold_pose '{"agent_id":"<ME>","bones":["<owner_bone>"],"frame_range":[A,B],
      "target":"world_dir","world_dir":[0,-1,0],
      "world_axis":"probe:palm.L","secondary_axis":"probe:finger_dir.L",
-     "mode":"replace","blend":4,"expect_version":<version>}'
+     "mode":"replace","blend":4,"expect_version":<最近一次响应的 version（claim 之后就用 claim 返回的）>}'
    ```
    主轴/次轴对照表（**照抄，别自己发明**）：
 
@@ -71,9 +72,10 @@
 - `describe/get_series/get_joint_angles` 读的是**最初烘焙的快照**，修完不会变——
   别用它们复测，用 `probe_anatomy`。
 
-## 报告（不变通）
+## 报告
+
+格式见 tools_io §8（唯一格式），示例：
 
 ```
-朝向 <part>.<side> @[A,B] <owner_bone>：
-修前 X° → 修后 Y°（err_inner）；op=<op_id> claim=<claim_id> save=<路径>；看 A–B 帧
+hold_pose @[A,B] <owner_bone>（<part>.<side>，toward=[x,y,z]）：修前 X° → 修后 Y°（err_inner_deg）；op=<op_id> claim=<claim_id> save=ok；看 <A+blend>–<B−blend> 帧
 ```

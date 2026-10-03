@@ -48,7 +48,8 @@ bash /home/sb/remote_kit_1.7.1/tools/mcd.sh server-start <工作文件.blend>  #
 模型：sonnet
 你的 agent_id：<短名，如 armL-anti>
 任务：<一句话：帧段 + 部位 + 问题 → 想要的样子>
-scope：<骨/链> × [A,B]。只许写这里。先 claim。
+scope：<骨/链> × [A,B]。只许写这里。写之前 claim（读、dry_run 不用）。
+（预备/跟随/过冲写明 main_bone；朝向写明 toward 目标向量；复制写明源窗与目标窗）
 验收：<剧本里的指标 + 目标值>
 完成后：list_ops（owner=你，compact）自查 → save（允许：它是协议的一部分）→ release →
 按 tools_io §8 的格式报告；不许改任何源码/文档文件、不启动 Blender

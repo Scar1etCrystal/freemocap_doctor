@@ -25,6 +25,8 @@
    ```
    看 `data.metrics.mirror_map`（实际 源→目标 映射）、`time_scale`、`notes`（警告，比如 IK 腿）。
    映射不对就改 `bone_map`，别硬写。
+   **修前基线**：把 dry_run 返回的 `data.metrics.verify.args` 原样传给 `compare_motion`，记下
+   `err_inner_deg`（目标窗现在与源差多少，比如 148°）——这就是报告里的"修前"。
 2. **认领目标**：`claim` 目标骨 × 目标窗口（时间平移时目标窗 = `[dst_start, dst_start+源长−1]`）。
    源只读，不用认领。
 3. **写入**（去掉 dry_run，加 expect_version）。常用三种：

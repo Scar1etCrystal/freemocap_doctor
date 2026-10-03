@@ -90,7 +90,8 @@ list_ops       确认新 op 在册
 返回：`world_dir`（当前朝向，世界系）、`local_axis`（owner 骨局部向量，
 喂 world_axis）、`secondary_axis`+`secondary_name`（喂 secondary_axis）、
 `confidence`、`evidence`（数值证据）、`alternatives`（低置信时两候选）、
-`hold_pose_args`（可直接展开进 hold_pose 的参数字典）、
+`hold_pose_args`（可直接展开进 hold_pose 的参数字典；用的是全段平均的固定局部轴——肘/膝这类局部方向随帧
+变的部位，逐帧的 `world_axis:"probe:<part>.<side>"` 更准，见 `docs/prompts/30_orientation.md`）、
 `toward_resolved`/`err_max_deg`/`err_mean_deg`（带 toward 时）。
 
 `toward` 取值：`[x,y,z]` 向量 / `"up" "down" "forward" "camera"` /

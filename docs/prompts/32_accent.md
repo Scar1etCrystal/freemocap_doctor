@@ -9,10 +9,13 @@
    或 `stop_frame`（急停=击中）。打击类动作用 stop_frame（到达瞬间），甩动类用 peak_frame。
    记 `data.main.peak_speed`（°/帧）当修前基线。`onset_frame` 找不到（窗口开头不在静止段）对重音
    **不要紧**，忽略那条警告。
-2. `claim` 该骨 × [A,B]。**帧段怎么定**：ease_reshape 在冲击前 窗口长/3 帧加速、冲击后 窗口长/3 帧
-   做"冲过头再回落"（设计如此——这就是力量感），两端再各有 blend 帧过渡。所以**冲击帧要放在窗口
-   正中间**：前后各至少留 `窗口长/3 + blend` 帧。例：冲击 349 → [A,B] ≈ [325, 373]（49 帧）。
-   冲击后留得太少，回落会挤在最后几帧里，看起来像"弹回来"。
+2. `claim` 任务块给的 **scope**（骨 × 整个帧段）。然后在 scope 里定 restore_accent 的**写入窗口** [a,b]
+   （窗口 ⊂ scope）：ease_reshape 在冲击前 窗口长/3 帧加速、冲击后 窗口长/3 帧重塑（可能出现短暂的
+   "冲过头再回落"），两端再各有 blend 帧过渡。所以**冲击帧要放在窗口正中间**：前后各至少留
+   `窗口长/3 + blend` 帧。例：冲击 349 → [a,b] ≈ [325, 373]（49 帧）。
+   - 冲击后留得太少，回落会挤在最后几帧里，看起来像"弹回来"。
+   - 窗口里**还有别的速度峰**（第 1 步的速度序列里另一个 >50% 峰速的尖峰）→ 把窗口对称地缩小到不含它，
+     只要两侧仍 ≥ `窗口长/3 + blend`；缩不下去就报告，别把别的动作卷进去。
 3. **写入**——data_path 按骨的旋转模式选（**这是最常见的坑**）：
 
    | 骨 | data_path | index |
@@ -33,10 +36,12 @@
      "data_path":"pose.bones[\"forearm_fk.L\"].rotation_euler","index":0,
      "method":"ease_reshape","strength":0.5,"impact_frame":349,"blend":4,"expect_version":<version>}'
    ```
-4. **复测**：`analyze_motion` 同参数 → 冲击帧附近 `data.main.peak_speed` 应上升（典型 +20–60%），
-   `peak_frame` 不应漂移超过 1 帧。冲击后会出现一段短的"冲过头再回落"（stop_frame 往后挪几帧、
-   冲击后速度短暂变大）——这是设计行为；但如果回落挤在窗口最后 blend 帧里、或冲击后速度超过冲击前
-   峰速的一半，说明窗口后段太短：`reapply` 把 `frame_range` 往后扩。
+4. **复测**：`analyze_motion` 与第 1 步**完全相同的参数**（同骨、同 frame_range = scope）→
+   `data.main.peak_speed` 应上升（典型 +20–60%），`peak_frame` 不应漂移超过 1 帧。
+   冲击后可能出现一段短的"冲过头再回落"（打击类 stop_frame 往后挪几帧；甩动类 stop 反而可能提前）——
+   都是设计行为。**窗口后段太短的信号**：写入窗口的最后 blend 帧里出现修前没有的速度尖峰（对比修前
+   速度序列同一帧；冲击帧后 1–2 帧是峰的下降沿，不算；窗口里原有的峰也不算）→ `reapply` 把
+   `frame_range` 往后扩。想单看修复本身的变化：复测加 `"baseline_op":"<你的 op_id>"` 看 `vs_baseline`。
    `effect_check` 对重音常报 `pass:false`（冲击前的采样帧本来就不动）——看 `moved_any:true` 即写上了。
 5. `list_ops` → `save` → `release`。
 
@@ -46,7 +51,7 @@
   `retime_split` 0.2–0.5 加速段占比）；`hf_reinject`/`refilter` 需要 `raw_action`
   （原始未滤波动作名），且**不能 reapply**——一般不用。
 - `strength` 0.3–0.7。>0.8 容易出现"抽搐感"。
-- 帧段 [A,B] 要把冲击帧放在中间偏后，前后各留 ≥ blend 帧。
+- 写入窗口：冲击帧在正中，前后各 ≥ `窗口长/3 + blend` 帧，且整个窗口在 scope 内（见第 2 步）。
 
 ## 报告（格式见 tools_io §8；示例）
 ```

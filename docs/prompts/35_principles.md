@@ -16,7 +16,9 @@
   "main_bone":"upper_arm_fk.R"}'
 ```
 - **显式给 `main_bone`**（主通道 = 动作的主角骨）。不给时自动选峰速最大的骨——这份数据是舞蹈，
-  手几乎一直在转，自动选到手往往不对。挥臂类选 `upper_arm_fk.*`，甩小臂选 `forearm_fk.*`。
+  手几乎一直在转，自动选到手往往不对。任务块写了 main_bone 就用它；只写了起动/停止帧，就选让
+  `main.onset_frame`/`stop_frame` 与之吻合（±1 帧）的骨——一般挥臂类是 `upper_arm_fk.*`、甩小臂是
+  `forearm_fk.*`，第一根对不上就换另一根再试**一次**。
 - 看 `data.main`：`onset_frame`（发力起点）、`peak_frame`/`peak_speed`（°/帧）、`stop_frame`
   （速度归零）、`amplitude_deg`（动作幅度）。
 - `data.suggest.anticipation/follow_through/overshoot.args` 是**可以原样发送**的参数（帧段已留好
@@ -53,6 +55,10 @@ scope 时**：把它缩到 scope 内，`"dry_run":true` 试一次——报错就
 | overshoot | 钉住修前的 `stop_frame`，加 `baseline_op` | `approach_peak_deg` ≈ amount×amplitude；峰在 stop+peak_after；`approach_sign_changes == 0` |
 
 为什么要钉：跟随/过冲本身改变了停下时的速度曲线，不钉的话重新检测出的 stop 会被挪走。
+
+**修前怎么记**：跟随/过冲的 `vs_baseline.*` 只有写入之后才读得到，写前没有同口径读数——报告里修前
+写 `0（未加）`，并附修前 `main.amplitude_deg` 和目标值 amount×amplitude。预备的修前就是第 1 步的
+`onset_frame` 和 `counter_move_deg`。
 
 - 复测的 `frame_range` = **第 1 步 analyze_motion 用的那个**（不是写入用的 frame_range）。
 - 跟随/过冲修后**别看**：`data.main.overshoot_deg`、`post_stop_*`、各骨 `bones.<骨>.stop_frame`——

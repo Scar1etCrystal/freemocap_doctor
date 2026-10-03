@@ -70,7 +70,8 @@ ping → 读/探查（确定 scope 和修前基线）→ claim → 写（带 exp
    `data.granted=false` → `data.conflicts` 写着谁占了哪里：换范围或停下报告。
    `warnings` 里出现"层级相关"= 你和别人是父子骨（比如你改前臂、他改手）——可以写，但
    写完在报告里点名对方要复测。
-3. 写调用带 `"expect_version":<最近一次响应的 version>`。别人在**不相交**的地方写不会让你过期
+3. 写调用带 `"expect_version":<最近一次响应的 version>`。version 是全局计数：任何人在任何地方写入都会
+   让它 +1（claim/release/读工具不会）。别人在**不相交**的地方写不会让你过期
    （会在 warnings 里看到"已放行"）。
 4. 你没 claim 就写也行——会**自动认领**（warnings 提示），但别人先占了就 `E_CLAIMED`。
 5. 租约 15 分钟没动静自动过期；你的每次 claim/写入都会续期。干完 `release`。
@@ -134,6 +135,8 @@ ping → 读/探查（确定 scope 和修前基线）→ claim → 写（带 exp
 | `revert {op_id}` | 撤销你自己的 op |
 | `set_influence {op_id, value}` | 力度（0.5 = 一半，1.5 = 超量） |
 | `claim` / `release` / `list_claims` | 并发租约 |
+| `plan_scopes` | 协调者派单前用（工人不用） |
+| `eval_bpy` / `set_preview` / `ab_toggle` | 调试/GUI 用，工人任务里**不要用**（ab_toggle 见 §4 第 7 条） |
 | `save` | 落盘（段落完成必调） |
 | `commit` | **禁用** |
 

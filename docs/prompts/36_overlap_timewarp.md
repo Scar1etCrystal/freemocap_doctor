@@ -49,8 +49,13 @@
 - `ease`：`"smooth"`（默认，速度连续）或 `"linear"`（分段匀速）。smooth 时 pivot 之后会先略
   超前再收回（s=1.5 最多约 4 帧）；要 pivot 之后完全不动就用 `"linear"`，或把 B 设得离 pivot 近些。
 - speed > 2.8 时为保持单调会被限幅：**看 `metrics.speed_into_pivot`**（实际到达速度）。
-- 验收：`metrics.speed_into_pivot` ≈ speed、`metrics.pivot_time_old` == pivot、`warnings` 为空；
-  独立复测用 `analyze_motion`（同窗、同 main_bone）看 `peak_frame`/`peak_speed` 的变化。
+- 验收：`metrics.speed_into_pivot` ≈ speed、`metrics.pivot_time_old` == pivot、`data.metrics.warnings` 为空
+  （响应顶层 warnings 里的"版本 vX→vY…已放行"是并发提示，不算）。
+- 独立复测：`analyze_motion` 同窗、同 `main_bone`，并**钉住修前的 `onset_frame`/`stop_frame`**——改了节奏后
+  自动分段常会换到窗口里的另一笔，不钉就是拿两笔不同的动作在比。修前先跑一次不钉的拿到这三个值。
+- **副作用（设计如此，报告里提一句）**：time_warp 在小数帧上用 slerp 重采样，单帧的速度尖峰（甩腕、抖动）
+  会被摊到相邻两帧——同一笔的峰速可能比映射斜率能解释的再低 20% 左右，抖动也会变小。要保住打击感：
+  窗口只包住要变速的那段，或者变速之后在冲击帧上补一个 `restore_accent`（剧本 32）。
 - 参数非法（不单调、越界）会报错并告诉你怎么改。
 
 ## 报告
