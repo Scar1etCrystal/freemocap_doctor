@@ -32,14 +32,16 @@ for t in e2e_anatomy e2e_perfix e2e_accent e2e_fixlist_timer e2e_concurrency e2e
 ## 3. 纯 Python 单测（13 个文件，不需要 Blender）
 
 ```bash
-for f in /home/sb/freemocap_doctor/tests/test_*.py; do printf '%s: ' "$(basename $f)"; PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=/home/sb/freemocap_doctor python3 "$f" > /tmp/ut.out 2>&1; echo "rc=$? $(tail -1 /tmp/ut.out) fails=$(grep -c -E 'FAIL|Traceback|Error' /tmp/ut.out)"; done
+for f in /home/sb/freemocap_doctor/tests/test_*.py; do o=/home/sb/remote_kit_1.7.1/logs/ut_$(basename $f).out; printf '%s: ' "$(basename $f)"; PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=/home/sb/freemocap_doctor python3 "$f" > $o 2>&1; echo "rc=$? $(tail -1 $o) fails=$(grep -c -E 'FAIL|Traceback|Error' $o)"; done
 ```
-每行应是 `rc=0`、`fails=0`（`==== 0 FAIL ====` 这一行本身含 FAIL，算 1 次——这个文件 fails=1 也对）。
+每行应是 `rc=0`、`fails=0`。末行是 `==== 0 FAIL ====` 的文件（test_agent_claims、test_agent_pose_math）fails=1 也对——
+那一行本身含 FAIL。
 
 ## 4. 基准：结果必须与原版逐位一致（速度只是附带）
 
-耗时：bench_baseline ~13 s、bench_wizard ~72 s、bench_export ~44 s；Bash 的 timeout 给 600000 毫秒。bench_wizard 的
-控制台只打出 source_check/source_floor 两行 EXC（正常），其余步骤看后面的 compare 脚本。
+耗时：bench_baseline ~13 s、bench_wizard ~72 s、bench_export ~44 s；六条命令可以用 `;` 串成一个 Bash 调用（顺序执行，
+timeout 给 600000 毫秒）。bench_wizard 的控制台只打出 source_check/source_floor 两行 EXC 和几行
+"Error: 源骨架 没有活动 Action"（正常），其余步骤看后面的 compare 脚本。
 ```bash
 bash /home/sb/remote_kit_1.7.1/tools/mcd.sh run /home/sb/remote_kit_1.7.1/tests/bench_baseline.py -- --label verify
 python3 /home/sb/remote_kit_1.7.1/tests/bench_compare.py /home/sb/remote_kit_1.7.1/logs/bench_orig1.json /home/sb/remote_kit_1.7.1/logs/bench_verify.json | grep -E "^INFO|^GOLDEN|socket|probe|world_dir"
@@ -60,7 +62,8 @@ python3 /home/sb/remote_kit_1.7.1/tests/bench_steps_compare.py /home/sb/remote_k
 | 向导 | `STEPS ALL SAME`（8 步关键帧 + 物体摘要与原版相同；source_check/source_floor 两版都报"源骨架没有活动 Action"，正常） |
 | 导出链 | `STEPS ALL SAME`（mmd_bake / export_prep 关键帧摘要 + 导出 .vmd 字节哈希与原版相同） |
 
-速度只在报告里附上（机器负载会让它浮动 ±10%）；**输出摘要不同 = FAIL**，哪怕更快。
+速度只在报告里附上（机器负载会让它浮动 ±10%；导出步骤比原版慢约 0.3–0.4 s 是正常的：原版导出完存盘直接报错跳过了，
+现在真的存了盘）；**输出摘要不同 = FAIL**，哪怕更快。
 
 ## 5. 文档与提交（只读）
 
@@ -71,7 +74,8 @@ python3 /home/sb/remote_kit_1.7.1/tests/bench_steps_compare.py /home/sb/remote_k
   ```bash
   python3 -c "import json; print('\n'.join(sorted(json.load(open('/home/sb/remote_kit_1.7.1/logs/bench_verify.json'))['golden']['ping']['tools'])))" | while read -r n; do printf '%-18s %s\n' "$n" "$(grep -cw -- "$n" /home/sb/freemocap_doctor/docs/工具手册_agent.md)"; done
   ```
-  0 次 = 缺口；只命中 1 次的，看一眼那一行是不是表格行或小节标题。
+  0 次 = 缺口。只命中 1 次的再看一眼是哪一行（表格行或小节标题 = 有条目；只在正文里顺带提到 = 缺口）：
+  `grep -nw -- '<工具名>' /home/sb/freemocap_doctor/docs/工具手册_agent.md`（几个工具共用一张表格行也算有）。
 
 ## 报告格式
 
