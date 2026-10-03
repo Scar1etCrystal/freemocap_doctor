@@ -27,7 +27,7 @@
    /home/sb/remote_kit_1.7.1/tools/agent hold_pose '{"agent_id":"<ME>","bones":["<owner_bone>"],"frame_range":[A,B],
      "target":"world_dir","world_dir":[0,-1,0],
      "world_axis":"probe:palm.L","secondary_axis":"probe:finger_dir.L",
-     "mode":"replace","blend":4,"expect_version":<最近一次响应的 version（claim 之后就用 claim 返回的）>}'
+     "mode":"replace","blend":4,"expect_version":<第 1 步 probe 响应的 version（据以算参数的那次读；不是 claim 回的）>}'
    ```
    主轴/次轴对照表（**照抄，别自己发明**）：
 
