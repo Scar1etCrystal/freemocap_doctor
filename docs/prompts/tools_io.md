@@ -36,7 +36,10 @@
 - 角度一律**度**；四元数 `(w,x,y,z)`；位置**米**（例外：`slide_report` 用**毫米**）；30 fps。
 - `frame_range` **含两端**：[A,B] = A 到 B 每一帧。
 - 世界：前方 = **−Y**，上 = **+Z**，左右镜像面 X=0。`toward`/`world_dir` 写**目标**方向。
-- `get_series` 里 euler 通道是**弧度**（原始 fcurve 值）；要度用 `get_joint_angles`/`analyze_motion`。
+- `get_series` 取的是**派生信号名**（`get_overview` 的信号表里列着，如 `"pelvis.speed"`、
+  `"left_hand.rot_speed"`、`"foot.L.sole_h"`），**不是** fcurve 路径；它和 `get_joint_angles` 都默认最多
+  60 个点（`max_points`），帧数更多时按步长聚合（响应 `truncated:true`）——要逐帧就把 max_points 调大。
+  两者都属快照类（§5）：读的是原始动作。看当前姿态的角速度/抖动用 `analyze_motion`。
 - 写入都是 NLA delta strip、`op_mode=preview`。**绝不 commit**（commit 是用户的事）。
 - strip 两端各 `blend` 帧是渐入渐出（taper），有效区是 `[A+blend, B−blend]`。复测看内段：
   `err_inner_deg`，别看 `err_max_deg`。
