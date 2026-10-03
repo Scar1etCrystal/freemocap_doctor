@@ -54,7 +54,7 @@ python3 /home/sb/remote_kit_1.7.1/tests/bench_steps_compare.py /home/sb/remote_k
 
 | 项 | 应得 |
 |---|---|
-| e2e | anatomy 17/17 · perfix 17/17 · accent 8/8 · fixlist_timer 7/7 · concurrency 38/38 · bugfixes 32/32 · motion_copy 41/41 · principles 38/38 · overlap 42/42 · foot_lock 15/15 · ground 22/22（共 277），每套 rc=0，没有 `falling back` |
+| e2e | anatomy 17/17 · perfix 17/17 · accent 8/8 · fixlist_timer 7/7 · concurrency 38/38 · bugfixes 32/32 · motion_copy 41/41 · principles 38/38 · overlap 42/42 · foot_lock 15/15 · ground 24/24（共 279），每套 rc=0，没有 `falling back` |
 | 单测 | 13 个文件全过 |
 | agent 层 golden | `GOLDEN DIFF: 408 differences (numeric 400, max |Δ|=7.550e+01)` 且 `GOLDEN DIFF SECTIONS: ['clean_jitter', 'describe', 'effect_check', 'validate']`——只允许这四节、这个数（三个有意的 bug 修复：去抖四元数、effect_check 取样、厚底靴的假"悬空"）；`INFO tools added=[…16 个…] removed=[]` 正常 |
 | 向导 | `STEPS ALL SAME`（8 步关键帧 + 物体摘要与原版相同；source_check/source_floor 两版都报"源骨架没有活动 Action"，正常） |
@@ -78,7 +78,7 @@ python3 /home/sb/remote_kit_1.7.1/tests/bench_steps_compare.py /home/sb/remote_k
 ```
 == 验收报告 ==
 验收对象：<HEAD commit>   现场：SYNC_OK / git 干净（或写明哪里不对）
-e2e:  anatomy 17/17 ✓ perfix 17/17 ✓ … ground 22/22 ✓（共 X/277）  falling back: 无
+e2e:  anatomy 17/17 ✓ perfix 17/17 ✓ … ground 24/24 ✓（共 X/279）  falling back: 无
 单测: 13/13 文件通过
 golden: 408 处，DIFF SECTIONS = [clean_jitter, describe, effect_check, validate] ✓   tools +16/−0
 向导: STEPS ALL SAME ✓（tilt 23.5→4.2 s …）   导出链: STEPS ALL SAME ✓（export_prep 13.9→10.8 s）

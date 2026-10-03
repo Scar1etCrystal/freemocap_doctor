@@ -134,6 +134,21 @@ check("G5 without rest_clearance fix_ground behaves as before (no extra param re
 if r["ok"]:
     call("revert", op_id=r["data"]["op_id"])
 
+# ---- G8: describe / validate judge ground relative to the calibrated contact height ----
+r = call("validate", frame_range=[150, 224])
+ch = (r.get("data") or {}).get("contact_height_mm") or {}
+viol = [(v["kind"], v["side"], len(v["frames"])) for v in (r.get("data") or {}).get("violations", [])]
+check("G8 validate reports the calibration and judges against it",
+      r["ok"] and ch.get("L") == sides["L"]["contact_height_mm"]
+      and ch.get("R") == sides["R"]["contact_height_mm"]
+      and not any(k == "floating" and s == "R" for k, s, _n in viol),
+      f"contact_height_mm={ch} violations={viol}")
+r = call("describe", target=[150, 224])
+flags = [f for f in (r.get("data") or {}).get("flags", []) if f.startswith("foot")]
+check("G8b describe's foot flags are relative ('比正常着地…'), no false R floating",
+      r["ok"] and all("正常着地" in f for f in flags) and not any(f.startswith("foot.R") for f in flags),
+      flags)
+
 # ---- G7: typo'd parameters are rejected with the closest legal name -------------------
 r = call("ground_report", frame_range=[700, 720], treshold_mm=5)
 check("G7 ground_report(treshold_mm=…) → rejected, suggests threshold_mm",
