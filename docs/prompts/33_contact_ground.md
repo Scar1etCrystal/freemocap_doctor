@@ -59,8 +59,8 @@ contact 标注**标定每只脚"正常着地"的高度** `contact_height_mm`，�
 5. ⚠ `fix_ground` 按**快照**（最初烘焙的原始动作）里的脚底高度计算。ground_report 的 warnings 出现
    "快照…与当前姿态差 > 1 mm" = 这只脚这段已经被修过（foot_lock 的 pos/xy+rot、别人的 fix_ground）——
    fix_ground 会按旧高度算错：**不写**，报告给协调者。——**你自己写完 fix_ground 之后**复测时出现这条警告是正常的
-   （快照里还是修前的高度），只是别在同一段再叠一次 fix_ground。`validate` 也是快照、而且按"关节贴地面"判，在穿鞋的
-   模型上没有参考价值——用 ground_report。
+   （快照里还是修前的高度），只是别在同一段再叠一次 fix_ground。`validate` / `describe` 的穿地·悬空提示现在也按同一个标定的着地高度判断，但读的是**快照**（修完不变）——
+   找问题段可以用，修后复测只用 ground_report。
 
 ## C. 顺序
 

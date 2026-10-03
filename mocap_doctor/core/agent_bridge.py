@@ -900,8 +900,13 @@ def _tool_apply_exemplar(ctx, frame_range, ex_id, loc_path, quat_path,
 
 def _tool_validate(ctx, frame_range=None, **_):
     store = get_store()
-    return agent_ops.validate(store.signals, store.frames, frame_range,
-                              floor_z=store.floor_z)
+    heights = agent_query.contact_heights(store)
+    res = agent_ops.validate(store.signals, store.frames, frame_range,
+                             floor_z=store.floor_z,
+                             contact_height={s: h["height_m"] for s, h in heights.items()})
+    if heights:
+        res["contact_height_mm"] = {s: round(h["height_m"] * 1000.0, 1) for s, h in heights.items()}
+    return res
 
 
 def _tool_list_ops(ctx, owner=None, op_id=None, live=None, frames=None,

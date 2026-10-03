@@ -182,40 +182,13 @@ def sole_heights(scene, armature, sides, frames) -> dict:
             for s in sides}
 
 
-def contact_heights(signals, frames, floor_z, scene) -> dict:
-    """每只脚"正常着地"时脚底点离地面的高度（米），从快照（原始动作）标定。
-
-    脚底点是关节中心（踝/前掌/脚尖骨的头尾），不是鞋底：穿厚底鞋的模型着地时它们
-    离地好几厘米（fixture：左 77 mm、右 81.5 mm）。取全片每段 contact 标注里脚底点
-    最低值的中位数 = 这只脚踩实时的高度。少于 3 段标注 → 不标定（按 0 算）。"""
-    ivs = agent_io.scene_intervals(scene)
-    fr = np.asarray(frames)
-    out = {}
-    for s in ("L", "R"):
-        sh = signals.get(f"foot.{s}.sole_h")
-        if sh is None:
-            continue
-        sh = np.asarray(sh, dtype=np.float64)
-        mins = []
-        for it in ivs.get(f"contact.{s}", []):
-            m = (fr >= int(it["start"])) & (fr <= int(it["end"]))
-            if m.any():
-                mins.append(float(sh[m].min()) - float(floor_z))
-        if len(mins) >= 3:
-            arr = np.asarray(mins) * 1000.0
-            out[s] = {"height_m": float(np.median(arr)) / 1000.0, "contacts": len(mins),
-                      "p10_mm": round(float(np.percentile(arr, 10)), 1),
-                      "p90_mm": round(float(np.percentile(arr, 90)), 1)}
-    return out
-
-
 def ground_report(scene, armature, *, frame_range, floor_z, side=None,
                   threshold_mm: float = 10.0, blend: int = 4, snapshot=None,
                   contact_height=None, detail: bool = False) -> dict:
     """Live penetration / floating check - the before/after check for fix_ground.
 
     clearance = 脚底点最低值 − floor_z（mm）。判定相对"这只脚正常着地的高度"
-    contact_height（见 contact_heights）：
+    contact_height（见 agent_query.contact_heights）：
       rel = clearance − contact_height；rel < −threshold = 下沉/穿地（pen_frames）；
       接触段整段 rel > +threshold = 悬空（contacts[].floating）。
     fix_ground_args：穿地 → mode=pen、悬空 → mode=lift，rest_clearance 已填好（米），
@@ -419,7 +392,8 @@ def _tool_ground_report(ctx, frame_range=None, side=None, threshold_mm=10.0,
         sh = store.signals.get(f"foot.{s}.sole_h")
         if sh is not None and int(mask.sum()) == b - a + 1:
             snapshot[s] = np.asarray(sh)[mask]
-    cal = contact_heights(store.signals, store.frames, store.floor_z, ctx["scene"])
+    from . import agent_query
+    cal = agent_query.contact_heights(store)        # 与 describe/validate 同一个标定
     res = ground_report(ctx["scene"], ctx["armature"], frame_range=frame_range,
                         floor_z=store.floor_z, side=side, threshold_mm=threshold_mm,
                         blend=blend, snapshot=snapshot, contact_height=cal,

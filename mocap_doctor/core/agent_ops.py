@@ -2052,6 +2052,7 @@ def validate(
     pen_tol: float = 0.005,
     slide_tol: float = 0.02,
     boundary_jump_m: float = 0.05,
+    contact_height: Mapping[str, float] | None = None,
 ) -> dict:
     """Check the plan's violations on the signal store arrays.
 
@@ -2064,11 +2065,14 @@ def validate(
     violations = []
 
     for side in ("L", "R"):
+        # contact_height：这只脚正常着地时脚底点（关节中心）的离地高度（米，
+        # agent_query.contact_heights 标定）。None/缺省 = 0 = 旧行为。
+        ch = float((contact_height or {}).get(side, 0.0))
         pen = signals.get(f"foot.{side}.pen")
         contact = signals.get(f"contact.{side}")
         speed = signals.get(f"foot.{side}.speed_xy")
         if pen is not None and contact is not None:
-            bad = np.where(win & (contact > 0.5) & (pen > pen_tol))[0]
+            bad = np.where(win & (contact > 0.5) & (pen + ch > pen_tol))[0]
             if len(bad):
                 violations.append({"kind": "penetration", "side": side,
                                    "frames": [int(frames[i]) for i in bad]})
@@ -2080,7 +2084,7 @@ def validate(
         sole = signals.get(f"foot.{side}.sole_h")
         if sole is not None and contact is not None:
             bad = np.where(win & (contact > 0.5)
-                           & (sole - floor_z > 0.02))[0]
+                           & (sole - floor_z - ch > 0.02))[0]
             if len(bad):
                 violations.append({"kind": "floating", "side": side,
                                    "frames": [int(frames[i]) for i in bad]})

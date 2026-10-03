@@ -93,6 +93,36 @@ def build_store(
     return store
 
 
+def contact_heights(store: DataStore) -> dict:
+    """每只脚"正常着地"时脚底点（关节中心）离 floor_z 的高度（米）。
+
+    脚底点是踝/前掌/脚尖骨的头尾，不是鞋底：穿厚底靴的模型（Teto）踩实时它们离地
+    7–8 cm，原来按"贴着 floor_z"判断，每段接触都被报成悬空、穿地永远报不出。取每段
+    contact 标注里脚底点最低值的中位数作参照；不足 3 段 → 不标定（按 0，旧行为）。
+    结果缓存在 store 上（快照不变它就不变）。"""
+    cached = getattr(store, "_contact_heights", None)
+    if cached is not None:
+        return cached
+    out = {}
+    fr = np.asarray(store.frames)
+    for side in ("L", "R"):
+        sole = store.signals.get(f"foot.{side}.sole_h")
+        if sole is None:
+            continue
+        mins = []
+        for item in store.intervals.get(f"contact.{side}", ()):
+            m = (fr >= int(item["start"])) & (fr <= int(item["end"]))
+            if m.any():
+                mins.append(float(sole[m].min()) - float(store.floor_z))
+        if len(mins) >= 3:
+            arr = np.asarray(mins) * 1000.0
+            out[side] = {"height_m": float(np.median(arr)) / 1000.0, "contacts": len(mins),
+                         "p10_mm": round(float(np.percentile(arr, 10)), 1),
+                         "p90_mm": round(float(np.percentile(arr, 90)), 1)}
+    store._contact_heights = out
+    return out
+
+
 def _channel(store: DataStore, name: str) -> np.ndarray:
     if name in store.signals:
         return store.signals[name]
@@ -208,20 +238,29 @@ def _flags(store: DataStore, start: int, end: int) -> list:
     out = []
     fr = store.frames
     win = _window(store, start, end)
+    heights = contact_heights(store)
     for side in ("L", "R"):
+        ch = heights.get(side, {}).get("height_m", 0.0)   # 这只脚正常着地的高度
         pen = store.signals.get(f"foot.{side}.pen")
-        if pen is not None and win.any() and float(pen[win].max()) > 0.005:
-            i = int(np.argmax(pen * win))
-            out.append(f"foot.{side}.pen 在 {int(fr[i])} 帧最深 "
-                       f"{_f(pen[i] * 1000, 1)}mm（穿地）")
+        if pen is not None and win.any():
+            rel_pen = pen + ch                              # 比正常着地低多少
+            if float(rel_pen[win].max()) > 0.005:
+                i = int(np.argmax(rel_pen * win))
+                out.append(f"foot.{side} 在 {int(fr[i])} 帧比正常着地低 "
+                           f"{_f(rel_pen[i] * 1000, 1)}mm（下沉/穿地）" if ch else
+                           f"foot.{side}.pen 在 {int(fr[i])} 帧最深 "
+                           f"{_f(pen[i] * 1000, 1)}mm（穿地）")
         sole = store.signals.get(f"foot.{side}.sole_h")
         contact = store.signals.get(f"contact.{side}")
         if sole is not None and contact is not None:
-            bad = win & (contact > 0.5) & (sole - store.floor_z > 0.02)
+            rel = sole - store.floor_z - ch
+            bad = win & (contact > 0.5) & (rel > 0.02)
             if bad.any():
-                i = int(np.argmax((sole - store.floor_z) * bad))
-                out.append(f"foot.{side} 着地段 {int(fr[i])} 帧还悬空 "
-                           f"{_f((sole[i] - store.floor_z) * 1000, 1)}mm")
+                i = int(np.argmax(rel * bad))
+                out.append(f"foot.{side} 着地段 {int(fr[i])} 帧比正常着地高 "
+                           f"{_f(rel[i] * 1000, 1)}mm（悬空）" if ch else
+                           f"foot.{side} 着地段 {int(fr[i])} 帧还悬空 "
+                           f"{_f(rel[i] * 1000, 1)}mm")
         yawr = store.signals.get(f"foot.{side}.yaw_rate")
         still = store.signals.get(f"foot.{side}.pivot_still")
         if yawr is not None and still is not None:

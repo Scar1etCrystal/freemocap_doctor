@@ -68,7 +68,7 @@ list_ops       确认新 op 在册
 | `get_joint_angles` | `bones` `frame_range` `max_points` | 关节角序列 |
 | `bake_range` | `frame_range` `roles` `point_ids` | 世界位置/四元数原始数组 |
 | `eval_bpy` | `expr` | 现场求值（**只读**，env 有 bpy/scene/armature/pb；无 setattr/`__import__`，要设置用 `obj.__setattr__`） |
-| `validate` | `frame_range` | 穿地/抖动校验 |
+| `validate` | `frame_range` | 穿地/悬空/脚滑校验（快照；穿地/悬空相对每只脚标定的着地高度 `contact_height_mm`，与 ground_report 同一标定） |
 
 ### `probe_anatomy` —— 语义层入口（**朝向类修复第一步必调**）
 
