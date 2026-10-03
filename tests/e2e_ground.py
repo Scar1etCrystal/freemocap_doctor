@@ -134,6 +134,32 @@ check("G5 without rest_clearance fix_ground behaves as before (no extra param re
 if r["ok"]:
     call("revert", op_id=r["data"]["op_id"])
 
+# ---- G6: a legacy file whose base strip lags 1 frame (and whose snapshot cache was baked
+#           against the lag) - the settle must retire that snapshot, not keep using it ----------
+from bl_ext.user_default.mocap_doctor.core import agent_bake, agent_io, agent_ops  # noqa: E402
+anim = rig.animation_data
+base = next((t.strips[0] for t in anim.nla_tracks if t.name == agent_ops.BASE_TRACK and t.strips), None)
+check("G6 the base action sits on the NLA base track by now", base is not None)
+if base is not None:
+    base.action_frame_start = float(base.frame_start) - 1.0     # recreate the old 1-frame lag
+    base.action_frame_end -= 1.0
+    cache = agent_bake.bake_cache_path(data_dir, rig.name, F0, F1, tag="rig")
+    lagged = cache.with_suffix(".lagged")
+    for f in (cache, lagged):
+        if f.exists():
+            f.unlink()                                          # this test's own scratch cache
+    agent_io.build_store_for_scene(scene, rig, settings, spec=agent_io.rig_bake_spec(rig),
+                                   data_dir=data_dir, use_cache=True, tag="rig")
+    check("G6b a snapshot was baked against the lagging base", cache.exists(), cache.name)
+    agent_bridge._STORE = None                                  # a fresh session
+    r = call("ground_report", frame_range=[700, 770])
+    diffs = {s: r["data"]["sides"][s].get("snapshot_diff_max_mm") for s in ("L", "R")} if r["ok"] else {}
+    check("G6c the first read settles the base, retires the lagged snapshot and re-bakes",
+          lagged.exists() and abs(float(base.action_frame_start) - float(base.frame_start)) < 1e-4,
+          f"lagged={lagged.exists()} afs={base.action_frame_start} fs={base.frame_start}")
+    check("G6d the new snapshot matches the live pose again", diffs and max(diffs.values()) <= 0.01,
+          diffs)
+
 fails = [x for x in RESULTS if not x[1]]
 print(f"\n==== {len(RESULTS) - len(fails)}/{len(RESULTS)} PASS ====")
 for name, _ok, detail in fails:

@@ -143,6 +143,9 @@ def get_store(force: bool = False):
     if armature is None:
         raise RuntimeError("没有识别到 RIG 骨架（settings.mmr_rig 为空，"
                            "且场景里没有 RIG-* 骨架）")
+    # 老文件基底 1 帧修正要先于任何快照烘焙：否则快照按滞后的基底烘（或者在第一次
+    # 写入之后才重烘、把那次写入也烘进去）。服务里启动时已做过，这里是 no-op。
+    _settle_base_strip()
     key = (armature.name, scene.frame_start, scene.frame_end, _STORE_EPOCH,
            str(_data_dir(settings)))
     if force or _STORE is None or _STORE_KEY != key:
@@ -1539,9 +1542,28 @@ def _settle_base_strip():
                     _JOURNAL.note(_DATA_VERSION, None, agent_claims.ALL, None,
                                   "base_frame_fix")
                     _STATUS["base_frame_fixed"] = True
+                    _retire_lagged_snapshot(rig, scene, settings)
                 break
     except Exception as exc:  # noqa: BLE001 - never block the server start
         _STATUS["last_error"] = f"base settle: {exc!r}"
+
+
+def _retire_lagged_snapshot(rig, scene, settings):
+    """基底刚被挪了 1 帧：之前按滞后基底烘的快照（磁盘缓存 + 内存 store）整体错一帧
+    （实测验证副本：没人碰过的脚，快照与当前姿态也差 21–76 mm；fix_ground/describe/
+    validate 都按它算）。缓存改名 *.lagged 作废（不删），内存 store 重建。
+    修正只会在一个文件上发生一次（存盘后 gap=0），所以这里也只走一次。"""
+    global _STORE_EPOCH
+    _STORE_EPOCH += 1
+    data_dir = _data_dir(settings)
+    if not data_dir:
+        return
+    start = int(getattr(settings, "mocap_frame_start", 0) or 0) or scene.frame_start
+    end = int(getattr(settings, "mocap_frame_end", 0) or 0) or scene.frame_end
+    path = agent_bake.bake_cache_path(data_dir, rig.name, start, end, tag="rig")
+    if path.exists():
+        path.rename(path.with_suffix(".lagged"))
+        _STATUS["lagged_snapshot_retired"] = str(path)
 
 
 def stop_server() -> dict:
