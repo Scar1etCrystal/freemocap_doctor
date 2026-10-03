@@ -51,7 +51,8 @@ bash $K/tools/mcd.sh server-start <工作文件.blend>  # 起 headless 服务（
 任务：<一句话：帧段 + 部位 + 问题 → 想要的样子>
 scope：<骨/链> × [A,B]。只许写这里。先 claim。
 验收：<剧本里的指标 + 目标值>
-完成后：list_ops 自查 → save → release → 按剧本格式报告
+完成后：list_ops（owner=你，compact）自查 → save（允许：它是协议的一部分）→ release →
+按 tools_io §8 的格式报告；不许改任何源码/文档文件、不启动 Blender
 ```
 
 ## 4. 收单检查（每份报告都过一遍）

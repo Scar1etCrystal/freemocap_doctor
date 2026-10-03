@@ -531,9 +531,11 @@ def _side(ctx, spec, label):
 
 
 def _tool_compare_motion(ctx, a=None, b=None, mirror=False, bone_map=None,
-                         space="local", trim=4, channels="rot", **unknown):
+                         space="local", trim=4, channels="rot", detail=False,
+                         **unknown):
     _reject_unknown("compare_motion", unknown,
-                    ("a", "b", "mirror", "bone_map", "space", "trim", "channels"))
+                    ("a", "b", "mirror", "bone_map", "space", "trim", "channels",
+                     "detail"))
     arm = ctx["armature"]
     if arm is None:
         raise RuntimeError("没有识别到 RIG 骨架")
@@ -545,6 +547,13 @@ def _tool_compare_motion(ctx, a=None, b=None, mirror=False, bone_map=None,
                          b_bones=b_bones, b_range=b_fr,
                          mirror=mirror, bone_map=_resolve_map(ctx, bone_map),
                          space=space, trim=trim, channels=channels)
+    if not detail:
+        # 逐帧数组默认不回（19 骨×46 帧≈10k token，sonnet 实测被它淹没）；
+        # 要看就传 detail:true
+        for row in (res.get("bones") or {}).values():
+            if isinstance(row, dict):
+                row.pop("err_per_frame", None)
+                row.pop("loc_err_per_frame_mm", None)
     summary = (f"compare_motion {res['space']}{'·镜像' if res['mirror'] else ''}："
                f"{len(res['pairs'])} 对骨 err_inner={res['err_inner_deg']}°"
                f"（最差 {res['worst_bone']}→{res['pairs'][res['worst_bone']]}，"
@@ -558,7 +567,7 @@ def _tool_compare_motion(ctx, a=None, b=None, mirror=False, bone_map=None,
             "truncated": False,
             "hint": "复制验收看 err_inner_deg（trim 应 ≥ 写入时的 blend）；"
                     "时间缩放的复制 a 放目标窗、b 放源窗（直接用 motion_copy 返回的 "
-                    "metrics.verify.args）；err_per_frame 与 a 帧段逐帧对齐（frame0 起）"}
+                    "metrics.verify.args）；逐帧误差要 detail:true（与 a 帧段逐帧对齐）"}
 
 
 def _scope_motion_copy(ctx, args):

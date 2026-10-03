@@ -174,7 +174,8 @@ baseA = sample(ARM_R, A0 - 10, A1 + 10)
 IN_A = [A0 + BL, A1 - BL]                      # = overlap metrics.inner_frames
 lagA0 = call("chain_lag", chain="arm.R", frame_range=IN_A)
 n0 = n_strips()
-rA = call("overlap", chain="arm.R", frame_range=[A0, A1], delay=1.0)
+rA = call("overlap", chain="arm.R", frame_range=[A0, A1], delay=1.0, max_delay=3.0,
+          blend=4)   # 显式钉住旧默认：本节专测"末端钳在 max_delay"
 okA = rA.get("ok")
 dA = rA.get("data") or {}
 OP_A = dA.get("op_id")
@@ -228,7 +229,8 @@ lag_increments(lagA0, lagA1,
 
 # ---------- D: dry_run / reapply / revert (overlap) ----------------------------
 n_before, ops_before = n_strips(), len(agent_ops.list_ops(data_dir))
-rD = call("overlap", chain="arm.R", frame_range=[A0, A1], delay=2.0, dry_run=True)
+rD = call("overlap", chain="arm.R", frame_range=[A0, A1], delay=2.0, max_delay=3.0,
+          blend=4, dry_run=True)
 check("D1 dry_run writes nothing",
       rD["ok"] and rD["data"].get("dry_run") is True and n_strips() == n_before
       and len(agent_ops.list_ops(data_dir)) == ops_before
@@ -266,7 +268,8 @@ B0, B1 = 65, 155
 baseB = sample(SPINE_HEAD, B0 - 10, B1 + 10)
 IN_B = [B0 + BL, B1 - BL]
 lagB0 = call("chain_lag", chain="spine_head", frame_range=IN_B)
-rB = call("overlap", chain="spine_head", frame_range=[B0, B1], delay=1.0, max_delay=3.0)
+rB = call("overlap", chain="spine_head", frame_range=[B0, B1], delay=1.0, max_delay=3.0,
+          blend=4)   # 内段按 blend=4 计算
 OP_B = (rB.get("data") or {}).get("op_id")
 afterB = sample(SPINE_HEAD, B0 - 10, B1 + 10)
 innerB = np.arange(B0 + BL, B1 - BL + 1)
@@ -295,7 +298,8 @@ ARM_L = P.chain_preset("arm.L", rig)
 baseC = sample(ARM_L, C0 - 10, C1 + 10)
 IN_C = [C0 + BL, C1 - BL]
 lagC0 = call("chain_lag", chain="arm.L", frame_range=IN_C)
-rC = call("overlap", chain="arm.L", frame_range=[C0, C1], delay=CD, max_delay=CM)
+rC = call("overlap", chain="arm.L", frame_range=[C0, C1], delay=CD, max_delay=CM,
+          blend=4)   # 内段按 blend=4 计算
 afterC = sample(ARM_L, C0 - 10, C1 + 10)
 innerC = np.arange(C0 + BL, C1 - BL + 1)
 errsC = {b: err_shift(baseC, afterC, b, innerC, innerC - lag_of(arm_depth(b), CD, CM))
@@ -476,7 +480,7 @@ rG2 = call("overlap", bones=["torso", "spine_fk", "spine_fk.001"], frame_range=[
 mG2 = (rG2.get("data") or {}).get("metrics", {})
 check("G1 skipped_bones: missing + no_animation; depth over the remaining chain",
       rG["ok"] and mG.get("skipped_bones") == {"spine_fk.002": "missing"}
-      and mG["bones"]["head"]["depth"] == 5 and mG["bones"]["head"]["lag_frames"] == 3
+      and mG["bones"]["head"]["depth"] == 5 and mG["bones"]["head"]["lag_frames"] == 5
       and rG2["ok"] and mG2.get("skipped_bones") == {"torso": "no_animation"}
       and mG2["bones"]["spine_fk"]["lag_frames"] == 0
       and mG2["bones"]["spine_fk.001"]["depth"] == 1,
@@ -515,6 +519,25 @@ check("H3 panel-style reapply(delay) on arm.L op",
 
 # ---------- summary -----------------------------------------------------------
 print(f"elapsed {time.time() - T_START:.1f}s")
+# ---------- Z: 默认值 = 用户原话"每级晚 1~3 帧、越往末端越晚"（不封顶）+ 自动 blend ----
+rZ = call("overlap", chain="spine_head", frame_range=[B0, B1], delay=1.0, dry_run=True)
+mZ = (rZ.get("data") or {}).get("metrics", {})
+lagsZ = [mZ["bones"][bn]["lag_frames"] for bn in ("spine_fk", "spine_fk.001",
+                                                  "spine_fk.003", "neck", "head")
+         if bn in mZ.get("bones", {})]
+check("Z1 default max_delay: every level strictly later toward the tip (no clamp)",
+      rZ["ok"] and len(lagsZ) >= 4 and all(y > x for x, y in zip(lagsZ, lagsZ[1:]))
+      and mZ.get("max_delay_auto") is True,
+      f"lags={lagsZ} max_delay={mZ.get('max_delay')}")
+check("Z2 default blend ≥ 2×max lag (no reverse play in the taper)",
+      mZ.get("blend_auto") is True and mZ.get("blend", 0) >= 2 * max(lagsZ or [0]),
+      f"blend={mZ.get('blend')} max_lag={max(lagsZ or [0])}")
+rZ2 = call("overlap", chain="spine_head", frame_range=[B0, B1], delay=1.0, blend=2,
+           dry_run=True)
+check("Z3 explicit too-small blend → reverse-play warning",
+      any("倒放" in w for w in (rZ2.get("data") or {}).get("metrics", {}).get("warnings", [])),
+      (rZ2.get("data") or {}).get("metrics", {}).get("warnings"))
+
 fails = [r for r in RESULTS if not r[1]]
 print(f"\n==== {len(RESULTS) - len(fails)}/{len(RESULTS)} PASS ====")
 for n, _o, d in fails:

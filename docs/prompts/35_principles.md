@@ -25,6 +25,10 @@
 
 ## 第 2 步：认领 + 写入（每种一个 op）
 
+先 `claim` 你的 scope（第 1 步只读，不用认领）。`suggest.args` 的 `frame_range` **超出你的
+scope 时**：把它缩到 scope 内，`"dry_run":true` 试一次——报错就按错误里的"建议 frame_range"判断：
+建议仍超 scope → 不写，报告需要的范围。
+
 ```
 # 预备（amount 0.10–0.20；lead=提前几帧开始反向；delay=起点后挪几帧）
 {"chain":"arm_nofingers.R","frame_range":[550,603],"main_bone":"upper_arm_fk.R",
@@ -44,7 +48,7 @@
 
 | 工具 | 复测怎么调 | 达标 |
 |---|---|---|
-| anticipation | 与第 1 步**完全相同**（**不要**钉 onset_frame） | `main.onset_frame` ≈ 原值+delay（±1）；`main.counter_move_deg` ≈ amount×amplitude（±35%）；`main.counter_dir_cos` ≈ −1 |
+| anticipation | 与第 1 步**完全相同**（**不要**钉 onset_frame） | `main.onset_frame` ≈ 写入返回的 `metrics.new_onset_frame`（±1）；`main.counter_move_deg` ≈ amount×**修前**amplitude（±35%；修后 amplitude 会把反向位移算进去变大，别用它）；`main.counter_dir_cos` ≈ −1 |
 | follow_through | 钉住**修前的** `onset_frame`、`stop_frame`，再加 `"baseline_op":"<op_id>"` | `vs_baseline.bones[主骨]`：`approach_lobes[0]` ≈ +amount×amplitude；`approach_sign_changes ≥ 2`；`before_stop_max_deg ≈ 0` |
 | overshoot | 钉住修前的 `stop_frame`，加 `baseline_op` | `approach_peak_deg` ≈ amount×amplitude；峰在 stop+peak_after；`approach_sign_changes == 0` |
 
@@ -65,8 +69,8 @@
 - 同一段同一组骨：三个工具可以都加，但**一种一个 op**；顺序：预备 → 过冲/跟随。
   跟随和过冲在同一个停止点上**二选一**（都加会打架）。
 
-## 报告
+## 报告（格式见 tools_io §8；以下只是示例，数字因数据而异）
 ```
-anticipation <链>@[A,B] 主骨 <bone>：起点 564→566，反向 10.9°（幅度 80.8° 的 13%）；op=<id>；看 556–570 帧
-follow_through …：瓣 +12.8/−6.6/+2.9°；op=<id>；看 721–737 帧
+anticipation arm_nofingers.R @[554,603] 主骨 upper_arm_fk.R：起点 565→566、反向 0.0→10.1°（修前幅度 80.8° 的 12.5%）；op=… claim=… save=ok；看 557–600 帧
+follow_through …：第一瓣 +12.8°、变号 3 次、stop 前 0.0°；op=…；看 …
 ```

@@ -245,6 +245,28 @@ r = call("plan_scopes", tasks=[{"name": "armR", "chain": "arm.R", "frames": [100
 check("21c plan_scopes sees live claims", r["data"]["vs_claims"]
       and r["data"]["vs_claims"][0]["held_by"] == ["zz"], r["data"]["vs_claims"])
 
+# ---- op-addressed scope of a mirrored motion_copy must not claim the source arm ----
+agent_bridge._LEASES.clear()
+r = call("motion_copy", agent_id="mc", chain="arm.L", src_range=[405, 450], dst_start=405,
+         mirror=True)
+check("22 mirror copy written", r["ok"], r.get("summary") if r["ok"] else r.get("error"))
+call("release", agent_id="mc")
+call("ab_toggle", agent_id="mc")
+call("ab_toggle", agent_id="mc")
+call("set_influence", agent_id="mc", op_id=r["data"]["op_id"], value=0.8)
+mine = [c for c in call("list_claims")["data"]["claims"] if c["agent_id"] == "mc"]
+claimed = set().union(*[set(c["bones"]) for c in mine if isinstance(c["bones"], list)])
+check("22b op-addressed calls claim only the written (target) bones",
+      claimed and all(b.endswith(".R") for b in claimed),
+      f"{len(claimed)} bones, left-side: {sorted(b for b in claimed if b.endswith('.L'))[:4]}")
+r2 = call("claim", agent_id="other", chain="arm.L", frames=[405, 450])
+check("22c source arm stays claimable by another agent", r2["data"]["granted"], r2["summary"])
+rr = call("reapply", agent_id="mc", op_id=r["data"]["op_id"], overrides={"dst_start": 470})
+mine = [c for c in call("list_claims")["data"]["claims"] if c["agent_id"] == "mc"]
+spans = sorted(tuple(c["frames"]) for c in mine)
+check("22d reapply moving dst_start claims old and new windows",
+      rr["ok"] and (405, 450) in spans and (470, 515) in spans, spans)
+
 fails = [r for r in RESULTS if not r[1]]
 print(f"\n==== {len(RESULTS) - len(fails)}/{len(RESULTS)} PASS ====")
 for n, _o, d in fails:

@@ -54,19 +54,30 @@
 ## 4. 并发协议（3–5 个 agent 同时干活时的规矩）
 
 ```
-ping → claim（你的骨×帧）→ 读（拿 version）→ 写（带 expect_version）→ 复测 → list_ops 自查 → save → release
+ping → 读/探查（确定 scope 和修前基线）→ claim → 写（带 expect_version）→ 复测 → list_ops 自查 → save → release
 ```
-1. `claim {"agent_id":ME,"bones":[...],"frames":[A,B]}`（也可 `"chain":"arm.R"`）。
+0. **修前基线以"写入前最后一次读"为准**（同一 version 下的数字）。别的 agent 写入、
+   服务端维护都可能让实时数字在你两次读之间变化——报告里的"修前"用最后那次。
+1. **先看现场**：`list_ops {"agent_id":"<ME>","frames":[A,B],"live":true,"compact":true}`——你的骨在这段
+   帧上如果已经有**别人的同类修复**（同工具、同骨），**不要再叠一层**：报告给协调者（除非任务明确要求叠加）。
+   不同类的修复（比如别人的朝向修复 + 你的去抖）可以共存。
+2. `claim {"agent_id":ME,"bones":[...],"frames":[A,B]}`（也可 `"chain":"arm.R"`）。
    `data.granted=false` → `data.conflicts` 写着谁占了哪里：换范围或停下报告。
    `warnings` 里出现"层级相关"= 你和别人是父子骨（比如你改前臂、他改手）——可以写，但
    写完在报告里点名对方要复测。
-2. 写调用带 `"expect_version":<上一个响应的 version>`。别人在**不相交**的地方写不会让你过期
+3. 写调用带 `"expect_version":<最近一次响应的 version>`。别人在**不相交**的地方写不会让你过期
    （会在 warnings 里看到"已放行"）。
-3. 你没 claim 就写也行——会**自动认领**（warnings 提示），但别人先占了就 `E_CLAIMED`。
-4. 租约 15 分钟没动静自动过期；你的每次 claim/写入都会续期。干完 `release`。
-5. 只碰自己的 op：`reapply`/`revert`/`set_influence` 别人的 op → `E_OWNER`。
-6. `ab_toggle` 带 agent_id 只静音/恢复**你自己的**修复；不带会动所有人的（别人有 claim 时被拒）。
-7. **段落完成必须 `save`**——headless 进程一关，没存盘的全丢。
+4. 你没 claim 就写也行——会**自动认领**（warnings 提示），但别人先占了就 `E_CLAIMED`。
+5. 租约 15 分钟没动静自动过期；你的每次 claim/写入都会续期。干完 `release`。
+6. 只碰自己的 op：`reapply`/`revert`/`set_influence` 别人的 op → `E_OWNER`。
+7. `ab_toggle` 带 agent_id 只静音/恢复**你自己的**修复；不带会动所有人的（别人有 claim 时被拒）。
+8. **段落完成必须 `save`**（`{"agent_id":"<ME>"}`，不用别的参数）——headless 进程一关，没存盘的全丢。
+   save 存的是**大家共用的同一个 .blend**（含所有 agent 的 preview），这是协议允许的写文件操作；
+   报告里写 `save=ok` 即可。`release {"agent_id":"<ME>"}` 释放你的全部租约。
+9. **写完如何确认没影响别人**：写入响应的 `warnings` 里没有"层级相关"就没有碰到别人租约的
+   父子骨；有的话在报告里点名那个 agent。
+10. **scope 边界**：工具建议的帧段（`suggest`、`interval` 自动外扩的 blend）超出你的 scope 时，
+   **不写**——缩到 scope 内重新 dry_run，或在报告里写清楚需要的范围交给协调者。
 
 ## 5. 读工具：快照类 vs 实时类（最容易踩的坑）
 
@@ -82,13 +93,15 @@ ping → claim（你的骨×帧）→ 读（拿 version）→ 写（带 expect_v
 ### 读（实时类）
 | 工具 | 关键参数 | 看什么 |
 |---|---|---|
-| `probe_anatomy` | `part` `side` `frame_range` `toward` (`bone`/`finger`) | `err_inner_deg` `owner_bone` `confidence` `secondary_axis` |
-| `analyze_motion` | `bones`/`chain` `frame_range` `main_bone` (`onset_frame` `stop_frame` `baseline_op`) | `data.main`: onset/peak/stop 帧、`peak_speed`(°/帧)、`amplitude_deg`、`counter_move_deg`；每骨 `jitter_deg`；`data.suggest.<工具>.args` 可直接用 |
+| `probe_anatomy` | `part` `side` `frame_range` `toward` (`bone`/`finger`) `max_frames`(默认 9) | `err_inner_deg` `owner_bone` `confidence` `secondary_axis`；均匀采样 max_frames 帧、掐头去尾算 inner——长段/快动作复测时把 max_frames 调到 31 |
+| `analyze_motion` | `bones`/`chain` `frame_range` `main_bone` (`onset_frame` `stop_frame` `baseline_op`) | `data.main`: onset/peak/stop 帧、`peak_speed`(°/帧)、`amplitude_deg`、`counter_move_deg`；每骨 `jitter_deg`；`data.suggest.<工具>.args` 可直接用（帧段若超出你的 scope 见 §4 第 10 条）。`truncated:true` 只表示速度序列按 max_points 抽样，数字不受影响 |
 | `compare_motion` | `a:{bones/chain, frame_range}` `b:{…}` `mirror` `bone_map` `space` `trim` | `err_inner_deg`（复制/镜像是否到位） |
 | `chain_lag` | `bones`/`chain` `frame_range` | 每骨相对链内父骨的滞后帧数 |
 | `slide_report` | `side` `frame_range` `threshold_mm` | 每段接触的 `drift_mm`、`flagged`、`foot_lock_args` |
 | `effect_check` | `op_id` | 该 op 在内段采样帧上到底动没动（只答"动了没"，不答"对不对"） |
-| `list_ops` / `list_claims` | – | op（含 owner/alive/status）/ 租约表 |
+| `dry_run:true`（所有新写工具） | 同写工具 | 只算不写，返回 metrics；可带 expect_version（无害） |
+| `list_ops` | `owner` `op_id` `live` `frames` `compact` | **自查用** `{"agent_id":"<ME>","owner":"<ME>","compact":true}`（只回你的 fixes 行，几百字节）；不带过滤 = 全量（可能 50KB+）。fixes 行用 `op_id`，日志行用 `id` |
+| `list_claims` | – | 租约表 + 每个 agent 名下的 op |
 
 ### 写（全部 preview delta strip，可 reapply / revert，都支持 `dry_run:true` 先看效果）
 | 工具 | 关键参数 | 剧本 |
@@ -109,7 +122,7 @@ ping → claim（你的骨×帧）→ 读（拿 version）→ 写（带 expect_v
 ### 管理
 | 工具 | 用途 |
 |---|---|
-| `reapply {op_id, overrides:{…}}` | 改参数重写同一条修复（op_id 不变）。**同骨同帧段要改，一律 reapply，别叠新 op** |
+| `reapply {op_id, overrides:{…}, expect_version}` | 改参数重写同一条修复（op_id 不变）。它也是写调用（带 expect_version）。**同骨同帧段要改，一律 reapply，别叠新 op** |
 | `revert {op_id}` | 撤销你自己的 op |
 | `set_influence {op_id, value}` | 力度（0.5 = 一半，1.5 = 超量） |
 | `claim` / `release` / `list_claims` | 并发租约 |
@@ -128,10 +141,12 @@ ping → claim（你的骨×帧）→ 读（拿 version）→ 写（带 expect_v
 | 加预备/跟随/过冲 | `35_principles.md` |
 | 骨链错时（重叠）/改节奏（时间重映射） | `36_overlap_timewarp.md` |
 
-## 8. 报告格式（所有剧本通用）
+## 8. 报告格式（**唯一**格式；剧本里的报告行只是填好的示例，数字因数据而异，不是目标值）
 
 ```
-<工具> @[A,B] <骨/链>：修前 X → 修后 Y（<哪个指标>）；op=<op_id> claim=<claim_id> save=<路径>；看 A–B 帧
-遗留：<没做完/低置信度/层级冲突要谁复测>
+<工具> @[A,B] <骨/链>：修前 X → 修后 Y（<指标名>）；op=<op_id> claim=<claim_id> save=ok；看 <有效区 a–b> 帧
+遗留：<无 / 没做完的、低置信度、超出 scope 的段、层级冲突要谁复测>
 ```
-看不到数字 = 没验成。报数字，不报感觉。
+- "修前 X" = 写入前最后一次同口径实时读数；"修后 Y" = 同一工具同参数复测。
+- "看 a–b 帧" = 有效区：`[A+blend, B−blend]`（工具返回里有 `inner_frames` 就用它）。
+看不到数字 = 没验成。报数字，不报感觉。最后附"提示词反馈"（若任务块要求）。

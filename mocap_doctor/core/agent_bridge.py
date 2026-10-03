@@ -366,26 +366,46 @@ def _strip_bones(armature, op) -> set:
 
 
 def _op_scope(ctx, op, overrides=None) -> list:
+    """Scope of an op-addressed write (reapply / revert / set_influence /
+    ab_toggle): the bones the op REALLY writes × its old window (+ the new
+    window when a reapply moves it).
+
+    Recorded params are not call args: motion_copy records `bones` = its
+    TARGET bones, while at call time `bones` means sources - feeding recorded
+    params back through WRITE_SCOPES mirrored arm.R back to arm.L and
+    auto-claimed the untouched source arm.  So plugin ops use the strip's
+    fcurve bones + recorded `bones`, never the call-time scope function."""
     arm = ctx["armature"]
+    overrides = dict(overrides or {})
     params = dict(op.get("params") or {})
-    params.update(overrides or {})
-    frames = _frames_of(params) or (tuple(op["frames"]) if op.get("frames") else None)
+    params.update(overrides)
+    old = tuple(int(x) for x in op["frames"]) if op.get("frames") else None
+    new = None
+    if overrides.get("frame_range"):
+        fr = overrides["frame_range"]
+        new = (int(fr[0]), int(fr[1]))
+    elif overrides.get("dst_start") is not None and old is not None:
+        s0 = int(overrides["dst_start"])
+        new = (s0, s0 + (old[1] - old[0]))
     bones = _strip_bones(arm, op)
     tool = op.get("tool")
-    try:
-        if tool in WRITE_SCOPES:
-            for bs, _fr in WRITE_SCOPES[tool](ctx, params):
-                bones |= set(bs or ())
-        elif tool in _LEGACY_WRITES:
-            p2 = dict(params)
-            if tool == "restore_accent":
-                p2["data_path"] = params.get("path")
+    if tool in _LEGACY_WRITES:
+        p2 = dict(params)
+        if tool == "restore_accent":
+            p2["data_path"] = params.get("path")
+        try:
             for bs, _fr in _legacy_scope(tool, ctx, p2):
                 if bs is not agent_claims.ALL:
                     bones |= set(bs)
-    except Exception:
-        pass
-    return [(bones or agent_claims.ALL, frames)]
+        except Exception:
+            pass
+    else:
+        pb = params.get("bones")
+        if isinstance(pb, (list, tuple)):
+            bones |= {b for b in pb if isinstance(b, str)
+                      and arm.pose.bones.get(b) is not None}
+    windows = [w for w in (old, new) if w is not None] or [None]
+    return [(bones or agent_claims.ALL, w) for w in dict.fromkeys(windows)]
 
 
 def _write_scope(name, ctx, args, agent_id, force):
@@ -823,9 +843,14 @@ def _tool_validate(ctx, frame_range=None, **_):
                               floor_z=store.floor_z)
 
 
-def _tool_list_ops(ctx, **_):
+def _tool_list_ops(ctx, owner=None, op_id=None, live=None, frames=None,
+                   compact=None, **_):
     """Op log enriched with live state (track / exponent / mute) so an agent can
-    see exactly what is on the rig without guessing."""
+    see exactly what is on the rig without guessing.
+
+    过滤（都可选；不传 = 旧版全量输出）：owner="<agent_id>"（"none"=无 owner 的
+    历史修复）、op_id、live=true（去掉 reverted 历史）、frames=[a,b]（与之相交）、
+    compact=true（只回 fixes 对账行，不带完整 params/metrics——自查用这个）。"""
     armature = ctx["armature"]
     rows = agent_ops.reconcile(armature, ctx["data_dir"])
     ops = agent_ops.list_ops(ctx["data_dir"])
@@ -833,7 +858,33 @@ def _tool_list_ops(ctx, **_):
     for row in rows:                   # owner 列（只在有 owner 时出现）
         if row.get("op_id") in owners:
             row["owner"] = owners[row["op_id"]]
-    return {"ops": ops, "fixes": rows}
+    if all(v is None for v in (owner, op_id, live, frames, compact)):
+        return {"ops": ops, "fixes": rows}
+
+    def keep(item, oid, fr, own):
+        if owner is not None and (own or "none") != str(owner):
+            return False
+        if op_id and oid != op_id:
+            return False
+        if frames is not None and fr and not agent_claims.frames_overlap(
+                (int(frames[0]), int(frames[1])), fr):
+            return False
+        return True
+    ops = [o for o in ops
+           if keep(o, o.get("id"), o.get("frames"), o.get("owner"))
+           and not (live and o.get("status") == "reverted")]
+    rows = [r for r in rows
+            if keep(r, r.get("op_id"), r.get("frames"), r.get("owner"))]
+    out = {"fixes": rows,
+           "filters": {k: v for k, v in (("owner", owner), ("op_id", op_id),
+                                          ("live", live), ("frames", frames),
+                                          ("compact", compact)) if v is not None}}
+    if not compact:
+        out["ops"] = ops
+    return {"summary": f"{len(rows)} 条修复在场景里"
+                       + ("" if compact else f"，{len(ops)} 条日志记录"),
+            "data": out, "warnings": [], "truncated": False,
+            "hint": "fixes 行：status=preview、alive=true、owner=你 = 写上了"}
 
 
 def _tool_commit(ctx, op_id, **_):
@@ -1232,6 +1283,7 @@ def _dispatch(request: Mapping[str, Any]) -> dict:
         _check_version(args, scope, agent_id, ctx, notes)
         if scope is not None:
             _enforce_claims(name, ctx, scope, agent_id, force, notes)
+            _settle_base_strip()          # 老文件基底 1 帧修正：先于该工具的任何采样
         _LAST_TOOL = name
         _STATUS["last_tool"] = name
         _IN_TOOL = True
@@ -1258,6 +1310,11 @@ def _dispatch(request: Mapping[str, Any]) -> dict:
         if notes:
             payload = dict(payload)
             payload["warnings"] = list(payload.get("warnings") or []) + notes
+        if agent_id and payload.get("hint", "").startswith("看视口"):
+            payload = dict(payload)
+            payload["hint"] = ("用实时类读工具复测（probe_anatomy/analyze_motion/"
+                               "compare_motion/chain_lag/slide_report）→ list_ops "
+                               "owner=你 compact=true 自查 → save。commit 只有用户能做")
         return {"ok": True, "tool": name, "version": _DATA_VERSION,
                 **payload}
     except agent_query.AgentQueryError as exc:
@@ -1372,6 +1429,7 @@ def start_server(port: int = PORT) -> dict:
     _server = _Server((HOST, int(port)), _Handler)
     threading.Thread(target=_server.serve_forever, daemon=True).start()
     _running = True
+    _settle_base_strip()
     if not bpy.app.timers.is_registered(_pump):
         bpy.app.timers.register(_pump, first_interval=TIMER_INTERVAL)
     if not bpy.app.timers.is_registered(_watchdog):
@@ -1379,6 +1437,31 @@ def start_server(port: int = PORT) -> dict:
     if _bump_version not in bpy.app.handlers.depsgraph_update_post:
         bpy.app.handlers.depsgraph_update_post.append(_bump_version)
     return {"running": True, "port": _server.server_address[1]}
+
+
+def _settle_base_strip():
+    """旧文件的 mcd_base 有"基底滞后 1 帧"修正（agent_ops.ensure_base_on_nla 里）。
+    以前它在**第一次写入**时才发生——多 agent 时，谁先写谁就把整条基底挪了 1 帧，
+    其它 agent 写前量的"修前"数字跟着悄悄变（实测：右脚某段漂移 158.7→70.8 mm，
+    没人碰过脚）。服务启动时就做掉，并记一次外部改动，让所有读都从同一基底开始。"""
+    global _DATA_VERSION
+    try:
+        scene, settings = _settings()
+        rig = _rig_armature(settings, scene)
+        anim = getattr(rig, "animation_data", None) if rig is not None else None
+        if anim is None or anim.action is not None:
+            return
+        for tr in anim.nla_tracks:
+            if tr.name == agent_ops.BASE_TRACK and tr.strips:
+                st = tr.strips[0]
+                if agent_ops.settle_base_strip(rig):
+                    _DATA_VERSION += 1
+                    _JOURNAL.note(_DATA_VERSION, None, agent_claims.ALL, None,
+                                  "base_frame_fix")
+                    _STATUS["base_frame_fixed"] = True
+                break
+    except Exception as exc:  # noqa: BLE001 - never block the server start
+        _STATUS["last_error"] = f"base settle: {exc!r}"
 
 
 def stop_server() -> dict:

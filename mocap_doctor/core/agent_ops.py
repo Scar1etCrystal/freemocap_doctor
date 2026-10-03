@@ -59,18 +59,8 @@ def ensure_base_on_nla(armature: Any):
     if action is None:
         for tr in anim.nla_tracks:            # already pushed down
             if tr.name == BASE_TRACK and tr.strips:
-                base_strip = tr.strips[0]
-                # 老文件修复：strip 起点曾被 max(1,f0) 钳过而 action_frame_start
-                # 没同步 → 基底滞后 (frame_start-afs) 帧求值，大角度 delta 直接
-                # 炸出波浪残差。强制 afs=frame_start → sampled_t == f 恒等。
-                if abs(float(base_strip.action_frame_start)
-                       - float(base_strip.frame_start)) > 1e-4:
-                    base_strip.action_frame_end += (
-                        float(base_strip.frame_start)
-                        - float(base_strip.action_frame_start))
-                    base_strip.action_frame_start = \
-                        float(base_strip.frame_start)
-                return base_strip.action
+                settle_base_strip(armature)
+                return tr.strips[0].action
         return None
     # NOTE: Blender 4.x exposes no nla_tracks.move(), so ordering relies on
     # creation order - nla_tracks.new() lands on TOP of the stack (evaluated
@@ -91,6 +81,31 @@ def ensure_base_on_nla(armature: Any):
     strip.action_frame_end = float(fs) + (float(f1) - float(f0))
     anim.action = None
     return action
+
+
+def settle_base_strip(armature: Any) -> bool:
+    """老文件修复：mcd_base 的起点曾被 max(1,f0) 钳过而 action_frame_start 没同步
+    → 基底滞后 (frame_start-afs) 帧求值，大角度 delta 直接炸出波浪残差。强制
+    afs=frame_start → sampled_t == f 恒等。返回是否真的改了。
+
+    **必须在任何采样之前做**：以前它藏在 ensure_base_on_nla 里、在 _write_strip
+    时才发生——那一刻工具早已按"滞后的基底"采样算完 delta，写下去时基底却被挪了
+    1 帧（实测 motion_copy 首写 err_inner 11.9°、残差与逐帧运动量相关 0.97；
+    别的 agent 的"修前"读数也随之变化）。所以 agent_bridge 在服务启动、每次写
+    工具执行前，agent_ops.reapply 在重解前都先调本函数。"""
+    anim = getattr(armature, "animation_data", None)
+    if anim is None or anim.action is not None:
+        return False
+    for tr in anim.nla_tracks:
+        if tr.name == BASE_TRACK and tr.strips:
+            st = tr.strips[0]
+            gap = float(st.frame_start) - float(st.action_frame_start)
+            if abs(gap) > 1e-4:
+                st.action_frame_end += gap
+                st.action_frame_start = float(st.frame_start)
+                return True
+            return False
+    return False
 
 
 def ensure_agent_track(armature: Any, track_name: str | None = None):
@@ -401,6 +416,7 @@ def reapply(data_dir: str | Path, armature: Any, op_id: str, *,
     plugin = REAPPLY_HANDLERS.get(tool)
     if tool not in TUNABLE_PARAMS and plugin is None:
         raise RuntimeError(f"{tool} 不支持参数重写")
+    settle_base_strip(armature)          # 先于任何采样（GUI 参数控件也走这里）
     params = dict(op.get("params") or {})
     params.update(overrides)
     frame_range = params.get("frame_range") or op.get("frames")

@@ -10,9 +10,13 @@
    /home/sb/remote_kit_1.7.1/tools/agent slide_report '{"agent_id":"<ME>","side":"R","threshold_mm":10}'
    ```
    `data.rows` 按漂移从大到小排；每行有 `interval`（如 `contact.R:17`）、`frames`、
-   `drift_mm`（水平漂移，**毫米**）、`flagged`、`foot_lock_args`。只处理 `flagged=true` 的行，
-   且只处理任务分给你的帧段。
-2. `claim bones=["foot_ik.R"] frames=[a−blend, b+blend]`（interval 模式会向两侧各扩 blend 帧写入）。
+   `drift_mm`（foot_ik 头部的世界水平漂移，**毫米**，相对该段接触里最静止的一帧）、`flagged`、
+   `foot_lock_args`。只处理 `flagged=true` 的行。注意 `frame_range` 只是筛选：返回的是**与之相交的
+   整段**接触，drift 按整段算。
+2. `claim bones=["foot_ik.R"] frames=[a−4, b+4]`：interval 模式的**实际写入窗 = 接触段两侧各扩
+   blend 帧**（默认 blend=4）。写入窗超出你的 scope（比如接触段跨了 scope 边界）→ **不写**，
+   在报告"遗留"里列出该段的 interval、drift_mm 和需要的写入窗。拿不准就先 `"dry_run":true`
+   看返回的 `frames`。
 3. **踩实**：
    ```
    /home/sb/remote_kit_1.7.1/tools/agent foot_lock '{"agent_id":"<ME>","interval":"contact.R:17","lock":"xy","expect_version":<v>}'

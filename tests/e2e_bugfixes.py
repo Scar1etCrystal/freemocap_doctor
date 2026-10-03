@@ -217,6 +217,38 @@ check("7b legacy auto-blend strip left exactly as it was (and auto turned off)",
 for r in (r1, r2, r3):
     call("revert", op_id=r["data"]["op_id"])
 
+# ---- 8: old file with a 1-frame-lagged mcd_base: the FIRST write must be exact ------
+# (the legacy correction used to run inside _write_strip - after the tool had
+#  already sampled the lagged base → motion_copy first write err_inner 11.9°)
+def lag_base():
+    agent_ops.ensure_base_on_nla(rig)
+    st = next(t for t in rig.animation_data.nla_tracks if t.name == agent_ops.BASE_TRACK).strips[0]
+    st.action_frame_start = st.frame_start - 1.0
+    st.action_frame_end -= 1.0
+    bpy.context.view_layer.update()
+    return st
+st8 = lag_base()
+check("8 simulated old file: base lags 1 frame", st8.frame_start - st8.action_frame_start == 1.0)
+SRC8, DST8 = [405, 450], 700
+r = call("motion_copy", bones=["left_upper_arm", "left_forearm", "left_hand"],
+         src_range=SRC8, dst_start=DST8)
+cm = call("compare_motion", **r["data"]["metrics"]["verify"]["args"]) if r["ok"] else {"ok": False}
+check("8b first write on an old file is exact (base settled before sampling)",
+      r["ok"] and cm["ok"] and cm["data"]["err_inner_deg"] < 0.05
+      and st8.frame_start == st8.action_frame_start,
+      f"err_inner={cm.get('data', {}).get('err_inner_deg')} (was 11.9° before the fix)")
+check("8c compare_motion default output has no per-frame arrays",
+      cm["ok"] and all("err_per_frame" not in v for v in cm["data"]["bones"].values()),
+      sorted(next(iter(cm["data"]["bones"].values())).keys()) if cm.get("ok") else None)
+op8 = r["data"]["op_id"]
+st8 = lag_base()                                   # lag again, then the GUI path
+agent_ops.reapply(data_dir, rig, op8, scene=scene)
+cm = call("compare_motion", **r["data"]["metrics"]["verify"]["args"])
+check("8d reapply (GUI param path) also settles before re-solving",
+      cm["ok"] and cm["data"]["err_inner_deg"] < 0.05,
+      f"err_inner={cm['data']['err_inner_deg']}")
+call("revert", op_id=op8)
+
 fails = [r for r in RESULTS if not r[1]]
 print(f"\n==== {len(RESULTS) - len(fails)}/{len(RESULTS)} PASS ====")
 for n, _o, d in fails:

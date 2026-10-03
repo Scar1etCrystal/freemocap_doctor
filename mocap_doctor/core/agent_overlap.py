@@ -158,7 +158,7 @@ def _finish(tool, short, armature, smp, desired_q, desired_l, *, params, metrics
 
 
 def overlap(scene, armature, *, frame_range, bones=None, chain=None,
-            delay=1.0, max_delay=3.0, depths=None, strength=1.0, blend=4,
+            delay=1.0, max_delay=None, depths=None, strength=1.0, blend=None,
             op_mode="preview", data_dir=None, track_name=None,
             dry_run=False, record=True, **opts):
     """骨链错时：desired(b, t) = 可见局部旋转(b, t − lag_b)，
@@ -167,13 +167,19 @@ def overlap(scene, armature, *, frame_range, bones=None, chain=None,
     scene = _scene_or_ctx(scene)
     a, b, frames = P.strip_window(frame_range)
     delay = float(delay)
-    max_delay = float(max_delay)
+    # 用户原话"子骨骼比父骨骼晚 1~3 帧……越往末端越晚"：delay 是**每级**的延迟，
+    # 默认不封顶（max_delay=None → 最深一级×delay）。固定封顶 3 帧时 spine_head
+    # 的 neck/head 会被钳成同一个延迟，和"越往末端越晚"相反。
+    auto_cap = max_delay is None
+    max_delay = None if auto_cap else float(max_delay)
     strength = float(strength)
-    blend = int(blend)
+    # blend 默认随最大延迟走（≥2×lag）：taper 区里有效时间 = t − w(t)·lag，其速率
+    # ≈ 1 − 1.5·lag/blend——lag=4、blend=4 时为负，链末端会在窗口开头倒放。
+    auto_blend = blend is None
     if not (0.0 <= delay <= _MAX_FRAMES_SHIFT):
         raise RuntimeError(f"delay={delay} 不合法：每级延迟帧数要在 0~{_MAX_FRAMES_SHIFT:g}，"
                            "常用 0.5~1.5（可小数）")
-    if not (0.0 <= max_delay <= _MAX_FRAMES_SHIFT):
+    if not auto_cap and not (0.0 <= max_delay <= _MAX_FRAMES_SHIFT):
         raise RuntimeError(f"max_delay={max_delay} 不合法：要在 0~{_MAX_FRAMES_SHIFT:g} 帧，"
                            "常用 2~3")
     members, skipped = _members(armature, bones, chain)
@@ -197,6 +203,13 @@ def overlap(scene, armature, *, frame_range, bones=None, chain=None,
                 raise RuntimeError(f"depths[{k!r}]={dv} 越界：深度要在 0~64")
             dmap[str(k)] = dv
 
+    if auto_cap:
+        dmax = max([dmap.get(bn, float(P.depth_in(armature, bn, members)))
+                    for bn in members] or [0.0])
+        max_delay = min(dmax * delay, _MAX_FRAMES_SHIFT)
+    if auto_blend:
+        blend = max(4, int(math.ceil(2.0 * max_delay)))
+    blend = int(blend)
     lo = a - int(math.ceil(max_delay)) - 1
     read = list(range(lo, b + 1))
     smp = P.sample_visible(scene, armature, members, read)
@@ -236,14 +249,24 @@ def overlap(scene, armature, *, frame_range, bones=None, chain=None,
     if b - a + 1 <= 2 * blend + 2:
         warnings.append(f"窗口只有 {b - a + 1} 帧，两端各 {blend} 帧 taper 后几乎没有生效区；"
                         "把 frame_range 放宽到动作前后各多 blend 帧")
+    max_lag_used = max((min((dmap[bn] if bn in dmap else float(P.depth_in(armature, bn, work)))
+                            * delay, max_delay) for bn in work), default=0.0)
+    if max_lag_used > 0 and blend < 1.5 * max_lag_used:
+        warnings.append(f"blend={blend} < 1.5×最大延迟 {max_lag_used:g} 帧：窗口开头链末端会"
+                        f"倒放、结尾会快进；建议 blend ≥ {int(math.ceil(2 * max_lag_used))}"
+                        "（或不传 blend 用自动值）")
+    elif max_lag_used > 0 and blend < 2 * max_lag_used:
+        warnings.append(f"blend={blend} < 2×最大延迟：窗口两端链末端会明显变慢/变快；"
+                        f"建议 blend ≥ {int(math.ceil(2 * max_lag_used))}")
     warnings += _leg_warnings(armature, work)
 
     params = {"bones": list(members), "chain": chain, "frame_range": [a, b],
-              "delay": delay, "max_delay": max_delay,
+              "delay": delay, "max_delay": None if auto_cap else max_delay,
               "depths": dict(dmap) or None, "strength": strength,
-              "blend": blend}
+              "blend": None if auto_blend else blend}
     metrics = {"bones": bones_m, "roots": roots, "skipped_bones": skipped,
                "delay": delay, "max_delay": max_delay,
+               "max_delay_auto": auto_cap, "blend": blend, "blend_auto": auto_blend,
                "max_lag_frames": _num(max((c["lag_frames"] for c in bones_m.values()),
                                           default=0), 3),
                "read_range": [lo, b], "inner_frames": [a + blend, b - blend],

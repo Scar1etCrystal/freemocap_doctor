@@ -38,11 +38,17 @@
    | toe | `"probe:toe.L"` | `"probe:sole.L"` |
    | knee_front / elbow_front | `"probe:knee_front.L"` / `"probe:elbow_front.L"` | 第 1 步返回的 `secondary_axis` **数组**（没有 `probe:s1` 这种写法） |
 
-   记下返回的 `data.op_id` 和顶层 `version`。
+   记下返回的 `data.op_id` 和顶层 `version`。返回 `metrics.bones.<骨>` 各字段含义：
+   `err_max_before_deg/err_max_after_deg`（求解器自评，全帧口径，**不作验收**）、
+   `align_max_deg/align_mean_deg`（主轴需要转多少，信息项）、`flipped_frames`（需转 >150° 的帧数，
+   双轴时正常）、`skipped_flip_frames`（**应为 0**；>0 说明漏传 secondary_axis）、
+   `secondary_keep_deg`（次轴为对准主轴被带动的最大角，信息项，翻转类修复几十度正常）、
+   `probe_fallback_frames`（某帧推不出解剖方向、沿用上一帧；>0 时在报告里提一句）。
 
-4. **复测（必须独立）**：把第 1 步原样再调一遍 → `err_inner_deg`（修后）。
+4. **复测（必须独立）**：把第 1 步原样再调一遍 → `err_inner_deg`（修后）。帧段长（>60 帧）
+   或动作快时加 `"max_frames":31` 采密一点（修前修后用同一个值）。
    目标 < 5°。若 5–15°：`reapply` 调参（见下），**不要再叠一个 hold_pose**。
-5. **自查**：`/home/sb/remote_kit_1.7.1/tools/agent list_ops '{"agent_id":"<ME>"}'` → 你的 op 在 `fixes` 里、`status=preview`、`alive=true`、`owner=<ME>`。
+5. **自查**：`/home/sb/remote_kit_1.7.1/tools/agent list_ops '{"agent_id":"<ME>","owner":"<ME>","compact":true}'` → 你的 op 在 `fixes` 里、`status=preview`、`alive=true`、`owner=<ME>`。
 6. **存盘 + 释放**：`/home/sb/remote_kit_1.7.1/tools/agent save '{"agent_id":"<ME>"}'`，`/home/sb/remote_kit_1.7.1/tools/agent release '{"agent_id":"<ME>"}'`。
 
 ## 调参（reapply，op_id 不变）

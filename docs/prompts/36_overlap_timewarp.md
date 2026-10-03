@@ -6,7 +6,8 @@
 
 用户原话："让骨链错时，子骨骼比父骨骼晚 1~3 帧（脊柱→脖子→头、上臂→前臂→手→手指），越往末端越晚。"
 做法：每根骨在 t 帧取"原动作在 t − lag 帧"的**局部**旋转，lag = min(深度×delay, max_delay)，
-链根不动。小数 delay 用 slerp 插值。
+链根不动。小数 delay 用 slerp 插值。**`delay` 是每级的延迟**（用户说的"晚 1~3 帧"指每级）；
+默认 `max_delay` 不封顶（= 最深一级×delay）、`blend` 自动取 ≥2×最大延迟——**这两个一般不用传**。
 
 1. **dry_run 拿内段**（不写）：
    ```
@@ -20,16 +21,17 @@
    ```
    记每级 `levels[*].lag_frames` 和 `reliable`。
 3. `claim` 链 × [A,B]，然后去掉 dry_run、加 expect_version 写入。
-4. **复测**：第 2 步原样再调。**只看 `reliable=true` 的级**：每级滞后应**增加** ≈ delay（±0.5）。
-   标 `reliable=false` 的级（相关性低/峰在边界）别信，也别因为它去调参。
+4. **复测**：第 2 步原样再调。**只看 `reliable=true` 的级**：每级滞后的**增量 ≈ 该骨 lag − 父骨 lag**
+   （两者都在 dry_run 的 `metrics.bones[*].lag_frames` 里；不封顶时就是 ≈ delay），容差 ±0.5。
+   被你手动 `max_delay` 钳住的级，增量≈0 是对的。标 `reliable=false` 的级别信，也别因为它去调参。
 5. `list_ops` → `save` → `release`。
 
 参数：
-- `delay` 0.5–1.5（每级帧数），`max_delay` 2–3。默认 1 / 3。
-- `arm.L` 默认会把五指都钳在 max_delay（手已经 3 级深）。想要手指**逐节**错开：单独做
-  `chain:"fingers.L"`，或 `max_delay` ≥ 4.5。
-- 窗口两端各 blend 帧里延迟从 0 爬到满值：那几帧会显得先放慢、后加快。帧段两端尽量落在
-  动作较静的地方，或把 blend 调大。
+- `delay` 0.5–1.5（每级帧数，用户说的 1~3 帧上限）。`max_delay`：不传 = 不封顶；想让末端别拖太久
+  才传（例：带手指的 arm.L 深 6 级，delay=1 时指尖晚 6 帧；嫌多就 `max_delay:4`）。
+- `blend`：不传 = 自动（≥2×最大延迟）。taper 区的有效时间速率 ≈ 1 − 1.5·lag/blend：手动给小了
+  （< 1.5×lag）末端会在窗口开头**倒放**、结尾快进——工具会在 warnings 里提示。
+- 自动 blend 变大后有效区 `inner_frames` 会变窄：复测窗口用返回里的 `inner_frames`。
 - 推荐链：`arm.L/R`、`arm_nofingers.L/R`、`spine_head`（脊柱→脖子→头）、`fingers.L/R`。
   **腿是 IK**：`leg.*` 写了看不见（会警告）。
 - 改延迟：`reapply {"op_id":…, "overrides":{"delay":0.5}}`。
