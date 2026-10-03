@@ -1943,6 +1943,12 @@ def sync_fixes_list(settings, scene=None) -> int:
         return 0
     from .. import properties as _props
     rows = agent_ops.reconcile(rig, _data_dir(settings))
+    # owner / 源已变（复制类）只在 op 日志里——面板标签里也带上，GUI 里一眼看出是谁写的、
+    # 哪条复制需要 reapply。没有 owner 的（用户自己的修复）标签不变。
+    try:
+        log = {o.get("id"): o for o in agent_ops.list_ops(_data_dir(settings))}
+    except Exception:  # noqa: BLE001 - 面板刷新绝不因日志读不了而失败
+        log = {}
     coll = settings.agent_fixes
     keep = {item.op_id: (item.exponent, item.muted, item.selected)
             for item in coll}
@@ -1956,6 +1962,10 @@ def sync_fixes_list(settings, scene=None) -> int:
                       or (f"{row['frames'][0]}-{row['frames'][1]} {row['tool']}"
                           if row.get("frames")
                           else f"{row['tool']} {row['strip']}"))
+        o = log.get(item.op_id) or {}
+        tags = ([str(o["owner"])] if o.get("owner") else []) + (["源已变,需reapply"] if o.get("stale") else [])
+        if tags:
+            item.label = f"{item.label} · {' · '.join(tags)}"
         item.strip = row.get("strip") or ""
         item.track = row.get("track") or ""
         item.status = row.get("status") or ""

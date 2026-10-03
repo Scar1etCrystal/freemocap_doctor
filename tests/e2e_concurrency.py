@@ -314,6 +314,9 @@ st = row_of(cid).get("stale") or {}
 check("24b a write inside the copy's source (upper_arm_fk.L 640-670) marks it stale",
       rw2["ok"] and st.get("by") == "w9" and st.get("frames") == [640, 670], st)
 call("release", agent_id="w9")
+agent_bridge.sync_fixes_list(bpy.context.scene.mocap_doctor)
+lbl = next((i.label for i in bpy.context.scene.mocap_doctor.agent_fixes if i.op_id == cid), "")
+check("24d the GUI fix list shows the owner and the stale copy", "cp" in lbl and "源已变" in lbl, lbl)
 rr = call("reapply", agent_id="cp", op_id=cid, overrides={})
 cm = call("compare_motion", op_id=cid)
 check("24c reapply re-copies from the current source and clears the mark",
