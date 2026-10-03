@@ -13,6 +13,7 @@
 #   bash tools/mcd.sh server-stop                        # 停服务（释放锁）
 #   bash tools/mcd.sh server-status                      # ping + 锁 + 内存
 #   bash tools/mcd.sh deploy                             # clone → kit → 沙盒
+#   MCD_CLONE=<wt> MCD_EXT_DIR=<abs> bash tools/mcd.sh deploy-private  # 并行 worker 私有部署
 #   bash tools/mcd.sh status                             # 锁/内存/进程一览
 #
 # 环境变量：MCD_CLONE（git 工作区，默认 /home/sb/freemocap_doctor）
@@ -36,6 +37,12 @@ if [ ! -f "$KIT/sandbox/env.sh" ]; then
 fi
 # 逐条 export、绝对路径（事故 INCIDENT_2026-08-13 的教训：别链式引用未赋值变量）
 source "$KIT/sandbox/env.sh"
+# 并行 worker 隔离：MCD_EXT_DIR=<绝对路径> → 本次 Blender 只从这个私有扩展目录
+# 载入 mocap_doctor（deploy-private 往里同步自己 worktree 的代码），互不覆盖。
+if [ -n "${MCD_EXT_DIR:-}" ]; then
+    case "$MCD_EXT_DIR" in /*) ;; *) echo "[mcd] MCD_EXT_DIR 必须是绝对路径"; exit 1;; esac
+    export BLENDER_USER_EXTENSIONS="$MCD_EXT_DIR"
+fi
 BLENDER_BIN="${BLENDER_BIN:-$(command -v blender || true)}"
 [ -n "$BLENDER_BIN" ] || { echo "[mcd] 找不到 blender"; exit 1; }
 
@@ -179,6 +186,18 @@ case "$cmd" in
     if pgrep -f headless_server.py >/dev/null; then
         echo "[mcd] 注意：headless 服务还在跑旧代码——server-stop 再 server-start 才生效"
     fi
+    ;;
+  deploy-private)
+    # 用法：MCD_CLONE=<你的 worktree> MCD_EXT_DIR=<kit>/sandbox/ext_<名> bash tools/mcd.sh deploy-private
+    [ -n "${MCD_EXT_DIR:-}" ] || { echo "[mcd] deploy-private 需要 MCD_EXT_DIR"; exit 1; }
+    [ -d "$CLONE/mocap_doctor" ] || { echo "[mcd] 没有 clone：$CLONE"; exit 1; }
+    if [ ! -d "$MCD_EXT_DIR/user_default" ]; then
+        mkdir -p "$MCD_EXT_DIR"
+        rsync -a "$KIT/sandbox/extensions/" "$MCD_EXT_DIR/"
+    fi
+    rsync -a --delete --exclude __pycache__ "$CLONE/mocap_doctor/" \
+        "$MCD_EXT_DIR/user_default/mocap_doctor/"
+    echo "[mcd] deploy-private ok：$CLONE → $MCD_EXT_DIR"
     ;;
   status)
     echo "mem_avail=$(mem_avail_mb)MB  (Blender 起跑门槛 ${MIN_FREE_MB}MB)"
