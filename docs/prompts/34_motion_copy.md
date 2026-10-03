@@ -40,10 +40,11 @@
    {"bones":["left_hand"],"src_range":[405,450],"dst_range":[1000,1068]}
    ```
    跨部位：`"bone_map":{"spine_fk":"neck"}`（复制的是相同的关节局部旋转值）。
-4. **验收**：把返回的 `data.metrics.verify.args` **原样**传给 `compare_motion`：
+4. **验收**：按 op 验收（最省事，等价于把写入返回的 `metrics.verify.args` 原样传，不用抄骨名列表）：
    ```
-   /home/sb/remote_kit_1.7.1/tools/agent compare_motion '<verify.args 的 JSON>'
+   /home/sb/remote_kit_1.7.1/tools/agent compare_motion '{"agent_id":"<ME>","op_id":"<op_id>"}'
    ```
+   （写入**之前**的修前基线没有 op_id，用第 1 步 dry_run 返回的 verify.args。）
    `err_inner_deg < 0.05` = 到位（四元数骨有 ~0.005–0.03° 的 float32 噪声，正常）。
    verify.args 里没有 agent_id——调用时在顶层自己补上 `"agent_id":"<ME>"`。
    **不达标**：先 `reapply {"op_id":…, "overrides":{}}`（空 overrides = 按当前现场重算一次）再验；

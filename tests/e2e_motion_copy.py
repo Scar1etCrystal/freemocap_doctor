@@ -401,6 +401,11 @@ cm = call("compare_motion", **vargs)
 check("F4 metrics.verify (a=dst, b=src) verifies the scaled copy (<0.05°)",
       cm["ok"] and cm["data"]["err_inner_deg"] < 0.05,
       f"{cm.get('summary')} args={vargs}")
+cm2 = call("compare_motion", op_id=r["data"]["op_id"])
+check("F5 compare_motion(op_id) == compare_motion(metrics.verify.args)",
+      cm["ok"] and cm2["ok"] and cm2["data"]["err_inner_deg"] == cm["data"]["err_inner_deg"]
+      and cm2["data"]["pairs"] == cm["data"]["pairs"],
+      f"{cm2.get('summary') or cm2.get('error')}")
 cur = sample(["forearm_fk.L", "hand_fk.L"], list(range(990, 1000)) + list(range(1069, 1079)))
 eFo, _ = max_err(cur, base, ["forearm_fk.L", "hand_fk.L"],
                  list(range(990, 1000)) + list(range(1069, 1079)))
@@ -523,6 +528,16 @@ r = call("motion_copy", bones=["left_hand"], src_range=SRC, dst_start=700,
 check("L2 typo'd arg rejected (no silent non-mirror copy)",
       not r["ok"] and "不认识参数" in r["error"]["message"],
       r.get("error", {}).get("message"))
+
+r = call("compare_motion", op_id="no_such_op")
+check("L3 compare_motion(op_id) on an unknown op → actionable error",
+      not r["ok"] and "不存在" in r["error"]["message"], r.get("error", {}).get("message"))
+add_op = next((o for o in agent_ops.list_ops(data_dir)
+               if o.get("tool") == "motion_copy" and (o.get("params") or {}).get("mode") == "add"), None)
+if add_op is not None:
+    r = call("compare_motion", op_id=add_op["id"])
+    check("L4 compare_motion(op_id) on a mode=add copy → explains why not",
+          not r["ok"] and "add" in r["error"]["message"], r.get("error", {}).get("message"))
 
 # ---------- summary --------------------------------------------------------------
 fails = [r for r in RESULTS if not r[1]]

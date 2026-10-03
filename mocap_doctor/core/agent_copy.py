@@ -530,15 +530,42 @@ def _side(ctx, spec, label):
     return bones, spec.get("frame_range")
 
 
+def _verify_args_of_op(ctx, op_id):
+    """op_id → 与 motion_copy 当时返回的 metrics.verify.args 完全相同的验收参数。
+
+    sonnet 实测：手抄 19 骨 × 2 的骨名列表是整个流程里最容易出错的一步；按 op_id
+    验收省掉这一步，而且永远对应 op **当前**的窗口（reapply 挪过也对）。"""
+    from . import agent_ops
+    op = agent_ops.get_op(ctx["data_dir"], str(op_id)) if ctx.get("data_dir") else None
+    if op is None:
+        raise RuntimeError(f"op {op_id} 不存在（看 list_ops）")
+    if op.get("tool") != "motion_copy":
+        raise RuntimeError(f"op {op_id} 是 {op.get('tool')}，compare_motion 按 op_id 只验收 motion_copy")
+    p = op.get("params") or {}
+    if p.get("mode", "replace") != "replace":
+        raise RuntimeError("mode=add 的复制没有逐帧可比的目标（目标 = 原动作 + 源的变化量），"
+                           "用 analyze_motion / effect_check 看效果")
+    fr = op.get("frames") or p.get("frame_range")
+    return {"a": {"bones": list(p["bones"]), "frame_range": [int(fr[0]), int(fr[1])]},
+            "b": {"bones": list(p["src_bones"]), "frame_range": list(p["src_range"])},
+            "mirror": bool(p.get("mirror")), "space": p.get("space", "local"),
+            "trim": int(p.get("blend", 4))}
+
+
 def _tool_compare_motion(ctx, a=None, b=None, mirror=False, bone_map=None,
                          space="local", trim=4, channels="rot", detail=False,
-                         **unknown):
+                         op_id=None, **unknown):
     _reject_unknown("compare_motion", unknown,
                     ("a", "b", "mirror", "bone_map", "space", "trim", "channels",
-                     "detail"))
+                     "detail", "op_id"))
     arm = ctx["armature"]
     if arm is None:
         raise RuntimeError("没有识别到 RIG 骨架")
+    if op_id is not None:
+        if a is not None or b is not None:
+            raise RuntimeError("op_id 和 a/b 二选一：按 op 验收就只给 op_id")
+        va = _verify_args_of_op(ctx, op_id)
+        a, b, mirror, space, trim = va["a"], va["b"], va["mirror"], va["space"], va["trim"]
     a_bones, a_fr = _side(ctx, a, "a")
     if not a_bones or not a_fr:
         raise RuntimeError("a 需要 {bones 或 chain, frame_range}")
