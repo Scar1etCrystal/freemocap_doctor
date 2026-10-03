@@ -38,4 +38,16 @@ with tempfile.TemporaryDirectory() as tmp:
             fails.append(2)
     finally:
         os.chdir(cwd)
+        # work file: foreign path → the currently open file (and heal the setting)
+        st3 = types.SimpleNamespace(data_directory="", work_filepath="F:/proj/shot.blend")
+        got = ns["resolve_work_filepath"](st3)
+        ok3 = got == blend and st3.work_filepath == blend
+        print(("PASS" if ok3 else "FAIL"), "foreign work_filepath → current file:", got)
+        if not ok3:
+            fails.append(3)
+        st4 = types.SimpleNamespace(data_directory="", work_filepath=os.path.join(real, "w.blend"))
+        ok4 = ns["resolve_work_filepath"](st4) == os.path.join(real, "w.blend")
+        print(("PASS" if ok4 else "FAIL"), "valid absolute work_filepath kept")
+        if not ok4:
+            fails.append(4)
 sys.exit(1 if fails else 0)

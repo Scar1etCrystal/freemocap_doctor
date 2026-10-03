@@ -1922,7 +1922,7 @@ class MD_OT_RestoreBeforeStep(Operator):
             label = step_at(target_index).label
             project.restore_checkpoint(
                 checkpoint,
-                settings.work_filepath,
+                project.resolve_work_filepath(settings),
                 resume_step_id=self.step_id,
                 reset_step_id=self.step_id,
                 message=f"已恢复到“{label}”执行前，可以重新运行",
@@ -2184,7 +2184,7 @@ class MD_OT_RestoreLastCheckpoint(Operator):
         settings = _settings(context)
         try:
             _require_project(context)
-            project.restore_checkpoint(settings.last_checkpoint, settings.work_filepath)
+            project.restore_checkpoint(settings.last_checkpoint, project.resolve_work_filepath(settings))
             return {"FINISHED"}
         except Exception as exc:
             self.report({"ERROR"}, str(exc))
@@ -2590,7 +2590,7 @@ class MD_OT_DiscardPreview(Operator):
                 return {"FINISHED"}
             if checkpoint:
                 try:
-                    project.restore_checkpoint(checkpoint, settings.work_filepath)
+                    project.restore_checkpoint(checkpoint, project.resolve_work_filepath(settings))
                     return {"FINISHED"}
                 except Exception as exc:
                     self.report({"ERROR"}, str(exc))
@@ -2599,7 +2599,7 @@ class MD_OT_DiscardPreview(Operator):
             self.report({"ERROR"}, "找不到结构步骤的恢复检查点")
             return {"CANCELLED"}
         try:
-            project.restore_checkpoint(checkpoint, settings.work_filepath)
+            project.restore_checkpoint(checkpoint, project.resolve_work_filepath(settings))
             return {"FINISHED"}
         except Exception as exc:
             self.report({"ERROR"}, str(exc))

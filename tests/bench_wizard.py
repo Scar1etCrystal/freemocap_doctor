@@ -32,8 +32,11 @@ ARGV = sys.argv[sys.argv.index("--") + 1:] if "--" in sys.argv else []
 LABEL = ARGV[ARGV.index("--label") + 1] if "--label" in ARGV else "run"
 REPS = int(ARGV[ARGV.index("--reps") + 1]) if "--reps" in ARGV else 1
 KIT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-FIX = bpy.data.filepath
 SCRATCH = os.path.join(KIT, "sandbox", "tmp", "bench_wizard_data")
+# Steps may save the work file (contacts → save_workfile): run on a throwaway
+# copy so the shared e2e fixture is never overwritten.
+SRC = bpy.data.filepath
+FIX = os.path.join(KIT, "sandbox", "tmp", "bench_wizard_fixture.blend")
 STEPS = ["source_check", "source_floor", "contacts", "global_correction", "tilt",
          "ground_feet", "target_floor", "foot_lock"]
 if "--steps" in ARGV:
@@ -73,6 +76,7 @@ res = {}
 for step in STEPS:
     times, outs = [], []
     for _ in range(REPS):
+        shutil.copyfile(SRC, FIX)          # pristine input every time (contacts saves)
         bpy.ops.wm.open_mainfile(filepath=FIX)
         shutil.rmtree(SCRATCH, ignore_errors=True)
         os.makedirs(SCRATCH, exist_ok=True)
@@ -100,6 +104,9 @@ for step in STEPS:
     print(f"WIZBENCH {step:18s} {res[step]['median_s'] * 1000:9.1f} ms  {outs[0][0]}  "
           f"digest={outs[0][2]}  {outs[0][1]!r}", flush=True)
 shutil.rmtree(SCRATCH, ignore_errors=True)
+for leftover in (FIX, FIX + "1"):
+    if os.path.exists(leftover):
+        os.remove(leftover)
 out = os.path.join(KIT, "logs", f"wizbench_{LABEL}.json")
 json.dump(res, open(out, "w", encoding="utf-8"), ensure_ascii=False, indent=1)
 print(f"WIZBENCH written {out}")

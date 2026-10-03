@@ -176,6 +176,27 @@ def _usable_data_dir(path_text) -> bool:
     return p.is_absolute() and p.is_dir()
 
 
+def resolve_work_filepath(settings):
+    """settings.work_filepath 和 data_directory 一样是别的机器写进去的绝对路径
+    （远程套件里是 ``F:/mocap_ai_doctor/...``）：Linux 上它是相对路径，向导的
+    "Planted 检测"步骤存盘直接失败（或者写进 CWD 下的怪名目录）。只有"本系统
+    绝对路径且所在目录存在"才用它；否则用当前打开的文件并回写自愈。"""
+    stored = getattr(settings, "work_filepath", "") or ""
+    if stored:
+        p = Path(str(stored))
+        if p.is_absolute() and p.parent.is_dir():
+            return stored
+    current = bpy.data.filepath or ""
+    if current:
+        if stored != current:
+            try:
+                settings.work_filepath = current
+            except Exception:
+                pass
+        return current
+    return stored
+
+
 def resolve_data_dir(settings):
     """settings.data_directory 存的是绝对路径——工作文件挪到别的机器/盘符
     后它就是死路径（Linux 上 ``F:\\...`` 只会变成怪名目录）。还在就用；
@@ -183,7 +204,7 @@ def resolve_data_dir(settings):
     stored = settings.data_directory or ""
     if _usable_data_dir(stored):
         return stored
-    fp = bpy.data.filepath or getattr(settings, "work_filepath", "") or ""
+    fp = bpy.data.filepath or resolve_work_filepath(settings) or ""
     if fp:
         derived = str(project_data_dir(fp))
         if stored != derived:
@@ -405,7 +426,8 @@ def create_accepted_checkpoint(scene, step_id, message="预览已接受", label=
 
 def save_workfile(scene):
     settings = scene.mocap_doctor
-    result = bpy.ops.wm.save_as_mainfile(filepath=settings.work_filepath, relative_remap=True)
+    result = bpy.ops.wm.save_as_mainfile(filepath=resolve_work_filepath(settings),
+                                         relative_remap=True)
     if "FINISHED" not in result:
         raise RuntimeError("Unable to save working file")
     save_manifest(scene)
