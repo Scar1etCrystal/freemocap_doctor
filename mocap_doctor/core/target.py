@@ -1258,6 +1258,14 @@ def sole_contact_offsets(
     a flat foot degenerates to `floor + sole_offset` and a toe-stand
     automatically keeps its higher ankle instead of being flattened.
 
+    "Own half" is decided in ARMATURE space (the sign of the ankle bone's
+    ``head_local.x``), never world X: the model is not centred on world X=0
+    (the fixture and the user's work file sit at X~-2.56), and a world-X
+    split put both ankles on the same side, so both searched the whole body
+    and picked the same left-boot vertex - the right foot's ankle->sole vector
+    came out 15.5 cm sideways and the planted anchor height 8-27 mm wrong at
+    3-10 deg of foot roll.
+
     Returns ``{side: Vector}`` or None when the geometry cannot be measured.
     """
 
@@ -1267,6 +1275,7 @@ def sole_contact_offsets(
     if not vertices:
         return None
     mesh_world = mesh_object.matrix_world
+    mesh_to_armature = sample_armature.matrix_world.inverted_safe() @ mesh_world
     step = max(1, len(vertices) // max(1, int(vertex_sample_limit)))
     out: dict[str, Any] = {}
     for side, bone_name in ankle_bones.items():
@@ -1274,13 +1283,14 @@ def sole_contact_offsets(
         if bone is None:
             continue
         head_w = sample_armature.matrix_world @ bone.head_local
-        sign = 1.0 if head_w.x >= 0.0 else -1.0
+        sign = 1.0 if bone.head_local.x >= 0.0 else -1.0
         lowest = None
         lowest_z = None
         for index in range(0, len(vertices), step):
-            v = mesh_world @ vertices[index].co
-            if v.x * sign < 0.0:
+            co = vertices[index].co
+            if (mesh_to_armature @ co).x * sign < 0.0:
                 continue
+            v = mesh_world @ co
             if lowest_z is None or v.z < lowest_z:
                 lowest, lowest_z = v, v.z
         if lowest is None:

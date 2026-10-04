@@ -1450,6 +1450,9 @@ def _run_foot_lock(context, settings):
         sole_dirs=core_target.sole_contact_offsets(
             armature, settings.target_mesh
         ),
+        # Same floor the ground_feet step pins to; without it the anchors
+        # were grounded at Z=0 whatever 地面 Z said.
+        floor_z=settings.target_floor_z,
         foot_bones=TARGET_FOOT_IK,
         frame_start=settings.mocap_frame_start,
         frame_end=settings.mocap_frame_end,
