@@ -12,7 +12,7 @@
     用 bake：按帧把 agent 算出的方向 K 到一支箭头上（只用来看，不读回）。
   - Child Of + 顶点组 不行：只跟平均顶点法线，绕法线的滚转不受控（实测漂 8–35°）。
 
-动作：create（默认）/ bake / list / remove。不碰 RIG 动画数据，不需要 claim。
+动作：create（默认）/ adopt（收编用户自己绑好骨骼父级的箭头）/ bake / list / remove。不碰 RIG 动画数据，不需要 claim。
 """
 from __future__ import annotations
 
@@ -31,7 +31,7 @@ _BIND_BONES = {"palm": ("手首.{s}", "DEF-hand.{s}"),
 # bake 的锚点（箭头放哪）：part -> 取点函数
 _SIDED = ("palm", "back_of_hand", "finger_dir", "knuckle", "hand_axis",
           "sole", "instep", "toe", "knee_front", "elbow_front")
-_ACTIONS = ("create", "bake", "list", "remove")
+_ACTIONS = ("create", "adopt", "bake", "list", "remove")
 
 
 def _settings(ctx):
@@ -161,6 +161,45 @@ def _create(ctx, parts, sides, length, overwrite, frame):
     return rows, warnings
 
 
+def _adopt(ctx, name, part, side, overwrite, frame_range):
+    """把用户自己绑好骨骼父级的箭头收编为标记：改名 MCD_<part>.<side>、打 bound 标签、报它与几何估计的差。"""
+    scene, armature = ctx["scene"], ctx["armature"]
+    if part not in A.MARKER_PARTS:
+        raise RuntimeError(f"adopt 只支持 {A.MARKER_PARTS}；收到 {part!r}")
+    obj = bpy.data.objects.get(str(name))
+    if obj is None or obj.type != "EMPTY":
+        raise RuntimeError(f"找不到空物体 {name!r}")
+    par = obj.parent
+    if par is None or getattr(par, "type", "") != "ARMATURE" or obj.parent_type != "BONE" or not obj.parent_bone:
+        raise RuntimeError(f"{name} 没有骨骼父级（parent_type={obj.parent_type}）：先在 Blender 里 Ctrl+P→骨骼 绑到 手首/足首，"
+                           "或直接用 action=create 让工具建")
+    target = A.marker_name(part, side)
+    existing = bpy.data.objects.get(target)
+    if existing is not None and existing is not obj:
+        if not overwrite:
+            raise RuntimeError(f"{target} 已存在；要用 {name} 顶替加 overwrite=true")
+        bpy.data.objects.remove(existing, do_unlink=True)
+    obj.name = target
+    obj.empty_display_type = "SINGLE_ARROW"
+    obj["mcd_marker"] = "bound"
+    obj["mcd_part"], obj["mcd_side"] = part, side
+    frames = [int(scene.frame_current)]
+    if frame_range is not None:
+        a, b = int(frame_range[0]), int(frame_range[1])
+        n = min(9, b - a + 1)
+        frames = sorted({int(round(a + i * (b - a) / max(1, n - 1))) for i in range(n)})
+    worst = 0.0
+    with preserve_scene_frame(scene):
+        for f in frames:
+            set_scene_frame(scene, f)
+            with A.ignore_markers():
+                g = _world_dir_now(scene, armature, part, side)
+            if g is not None:
+                worst = max(worst, A._angle_deg(A.marker_dir(obj), g))
+    return {"name": obj.name, "was": str(name), "part": part, "side": side,
+            "parent": par.name, "bone": obj.parent_bone, "vs_geometry_max_deg": round(worst, 1), "frames": frames}
+
+
 def _bake(ctx, part, side, frame_range, length):
     scene, armature = ctx["scene"], ctx["armature"]
     if frame_range is None:
@@ -256,7 +295,7 @@ def _remove(parts, sides, all_markers):
 
 def _tool_markers(ctx, action="create", parts=None, sides=None, part=None, side=None,
                   frame_range=None, length=0.15, overwrite=False, frame=None, all=False,
-                  **unknown):
+                  name=None, **unknown):
     P.reject_unknown_args("markers", _tool_markers, unknown)
     action = str(action).lower()
     if action not in _ACTIONS:
@@ -274,6 +313,15 @@ def _tool_markers(ctx, action="create", parts=None, sides=None, part=None, side=
                 "data": {"markers": rows, "frame": f}, "warnings": warnings, "truncated": False,
                 "hint": "在视口里检查：箭头应从掌心/脚底垂直指出。不对就直接旋转箭头（它跟着骨，一帧对准全程有效）；"
                         "之后 probe_anatomy 的 evidence.palm_source/sole_source 会是 marker"}
+    if action == "adopt":
+        if not name or len(parts) != 1 or len(sides) != 1:
+            raise RuntimeError("adopt 需要 name=<你的箭头名> part=palm|sole side=L|R")
+        res = _adopt(ctx, name, parts[0], sides[0], bool(overwrite), frame_range)
+        warn = ([f"{res['name']} 与网格/骨几何估计差 {res['vs_geometry_max_deg']}°（>15°）——确认它是对准掌心/脚底的，"
+                 "还是 action=create 重建"] if res["vs_geometry_max_deg"] > 15 else [])
+        return {"summary": f"adopt {res['was']} → {res['name']}（父级 {res['parent']}/{res['bone']}，与几何估计差 {res['vs_geometry_max_deg']}°）",
+                "data": res, "warnings": warn, "truncated": False,
+                "hint": "之后 probe_anatomy 的 evidence.palm_source/sole_source = marker，以这支箭头为准"}
     if action == "bake":
         if len(parts) != 1:
             raise RuntimeError("bake 一次一个 part（膝/肘/手指等逐帧方向）")

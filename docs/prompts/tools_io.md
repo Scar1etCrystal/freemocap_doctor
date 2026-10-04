@@ -140,7 +140,7 @@ ping → 读/探查（确定 scope 和修前基线）→ claim → 写（带 exp
 | `set_influence {op_id, value}` | 力度（0.5 = 一半，1.5 = 超量） |
 | `claim` / `release` / `list_claims` | 并发租约 |
 | `plan_scopes` | 协调者派单前用（工人不用）；任务可带 `reads`（复制的源窗），写-读重叠报 `kind:"read"`、写者先做 |
-| `markers` | 标记箭头（用户与 agent 共用的"方向定义"）：`action:"create"`（默认；掌心/脚底左右各一支 SINGLE_ARROW 空物体 `MCD_palm.L` …，**骨骼父级**绑在 手首/足首 上，初值 = 网格标定/骨几何；用户在视口里过一眼，不对就直接转它，一帧对准全程有效）/ `"bake"`（`part` `side` `frame_range`：膝/肘/手指等**逐帧 K 帧**的显示箭头，只用来看，修复后要重 bake）/ `"list"`（带 `frame_range` 时报每支与几何估计的最大夹角）/ `"remove"`（`all:true`）。不碰 RIG、不需要 claim。工人任务里一般不用——协调者/用户开工前建好；之后 probe 的 `palm_source:"marker"` 就是以用户的箭头为准 |
+| `markers` | 标记箭头（用户与 agent 共用的"方向定义"）：`action:"create"`（默认；掌心/脚底左右各一支 SINGLE_ARROW 空物体 `MCD_palm.L` …，**骨骼父级**绑在 手首/足首 上，初值 = 网格标定/骨几何；用户在视口里过一眼，不对就直接转它，一帧对准全程有效）/ `"adopt"`（`name` `part` `side`：把用户自己 Ctrl+P→骨骼 绑好的箭头收编为 `MCD_palm.L`，报它与几何估计的差）/ `"bake"`（`part` `side` `frame_range`：膝/肘/手指等**逐帧 K 帧**的显示箭头，只用来看，修复后要重 bake）/ `"list"`（带 `frame_range` 时报每支与几何估计的最大夹角）/ `"remove"`（`all:true`）。不碰 RIG、不需要 claim。工人任务里一般不用——协调者/用户开工前建好；之后 probe 的 `palm_source:"marker"` 就是以用户的箭头为准 |
 | `eval_bpy` / `set_preview` / `ab_toggle` | 调试/GUI 用，工人任务里**不要用**（ab_toggle 见 §4 第 7 条） |
 | `save` | 落盘（段落完成必调） |
 | `commit` | **禁用** |

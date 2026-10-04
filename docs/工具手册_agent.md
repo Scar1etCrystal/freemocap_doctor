@@ -149,7 +149,7 @@ list_ops       确认新 op 在册
 | `foot_lock` | 写 | `interval`("contact.R:7") 或 `side`+`frame_range`, `lock`(xy/xy+rot/pos/pos+rot) `ref` | foot_ik 在接触段钉在参考帧世界位置（xy 默认保留高度） |
 | `claim` / `release` / `list_claims` | 管理 | `bones`/`chain` `frames` `ttl_s` `strict` `check_only` | 并发租约（见下） |
 | `plan_scopes` | 读 | `tasks:[{name, bones/chain, frames}]` | 派单前体检：两两冲突 + 建议并行批次 |
-| `markers` | 管理 | `action`(create/bake/list/remove) `parts` `sides` `part` `side` `frame_range` `length` `overwrite` `all` | 标记箭头：create = 掌心/脚底的骨骼父级箭头（初值网格标定）；bake = 膝/肘等逐帧 K 帧显示箭头；见下节 |
+| `markers` | 管理 | `action`(create/adopt/bake/list/remove) `parts` `sides` `part` `side` `name` `frame_range` `length` `overwrite` `all` | 标记箭头：create = 掌心/脚底的骨骼父级箭头（初值网格标定）；bake = 膝/肘等逐帧 K 帧显示箭头；见下节 |
 
 所有新写工具：只写 `frame_range`（motion_copy 是目标窗）以内；支持 `dry_run:true`；参数全录可
 `reapply`；四元数骨与 Euler 骨都支持。
@@ -165,6 +165,9 @@ list_ops       确认新 op 在册
 - `markers create`：替用户做上面这步。`MCD_palm.L/R`、`MCD_sole.L/R`，SINGLE_ARROW，+Z = 方向，
   父级 = MMD 骨架的 手首/足首（没有则 RIG 的 DEF-hand/DEF-foot），初值 = 网格标定 / 三点脚底法线，
   自定义属性 `mcd_marker="bound"`。已存在的不动（`overwrite:true` 才重建）。
+- `markers adopt {name, part, side}`：用户已经自己把箭头 Ctrl+P→骨骼 绑在 手首.L 上的，直接收编（改名 `MCD_palm.L`、打 bound
+  标签、报它与几何估计的最大夹角）。2026-10-04 用户的 `Empty.187`（骨骼父级 手首.L）：与左掌心皮肤法线 1499 帧全程 0.2–3.2°，
+  与工具的网格标定恒差 2.0°——用户的箭头和工具的定义是同一个方向。
 - **读回规则**：probe / hold_pose 的 `probe:palm.L` 看到合格的 `MCD_palm.L`（有骨骼父级、不是 baked）就以它为准，
   `evidence.palm_source="marker"`、`marker_vs_mesh_deg` = 它与网格标定差多少（用户转过就不是 0）。没父级的箭头
   是静止的世界方向，当定义必错 → 忽略 + warning（`marker_ignored`）。

@@ -172,6 +172,39 @@ check("M13 baked arrow matches probe knee_front per frame (< 0.5°)", worst < 0.
 r = call("markers", action="bake", part="palm", side="R", frame_range=[700, 710])
 check("M13b bake refuses to overwrite a bound marker", not r["ok"] and "绑定" in str(r.get("error")), str(r.get("error"))[:120])
 
+# ---- M15 adopt: the user's own bone-parented arrow becomes the definition
+scene.frame_set(179)
+bpy.context.view_layer.update()
+mine = bpy.data.objects.new("UserArrow.L", None)
+mine.empty_display_type = "SINGLE_ARROW"
+scene.collection.objects.link(mine)
+mmd_arm = settings.mmd_armature
+mine.parent = mmd_arm
+mine.parent_type = "BONE"
+mine.parent_bone = "手首.L"
+mine.matrix_parent_inverse = Matrix.Identity(4)
+bpy.context.view_layer.update()
+with agent_anatomy.ignore_markers():
+    ref = agent_anatomy.probe(scene, rig, part="palm", side="L", frame_range=[179, 179])
+hxl = Vector(agent_anatomy.probe(scene, rig, part="hand_axis", side="L", frame_range=[179, 179])["world_dir"])
+# the user aimed it 10° off the mesh normal (about the hand axis)
+d10 = Matrix.Rotation(math.radians(10.0), 4, hxl) @ Vector(ref["world_dir"])
+mine.matrix_world = Matrix.Translation(Vector((0, 0, 1))) @ d10.to_track_quat("Z", "Y").to_matrix().to_4x4()
+bpy.context.view_layer.update()
+r = call("markers", action="adopt", name="UserArrow.L", part="palm", side="L", frame_range=[150, 230], overwrite=True)
+dd = r.get("data") or {}
+check("M15 adopt renames + tags the user's bone-parented arrow and measures it",
+      r["ok"] and bpy.data.objects.get("MCD_palm.L") is not None and bpy.data.objects.get("UserArrow.L") is None
+      and dd.get("bone") == "手首.L" and 9.0 < dd.get("vs_geometry_max_deg", 0) < 11.0,
+      f"err={r.get('error')} data={dd}")
+pa = agent_anatomy.probe(scene, rig, part="palm", side="L", frame_range=[600, 600])
+check("M15b probe palm.L now uses the adopted arrow (10° from mesh at another frame)",
+      pa["evidence"].get("palm_source") == "marker" and 9.0 < pa["evidence"].get("marker_vs_mesh_deg", 0) < 11.0,
+      f"src={pa['evidence'].get('palm_source')} vs_mesh={pa['evidence'].get('marker_vs_mesh_deg')}")
+r = call("markers", action="adopt", name="MCD_knee_front.L", part="palm", side="L")
+check("M15c adopt refuses an arrow without a bone parent", not r["ok"] and "骨骼父级" in str(r.get("error")),
+      str(r.get("error"))[:100])
+
 # ---- M14 list / remove
 scene.frame_set(179)
 r = call("markers", action="list", frame_range=[150, 230])
