@@ -1413,6 +1413,43 @@ def clean_jitter(
     return _record(data_dir, op) if data_dir else op
 
 
+def _world_delta_to_location(armature: Any, loc_path: str, frame_start: int,
+                             world_delta: np.ndarray, *, z_only: bool = False):
+    """World-space position deltas (T,3) → deltas of the pose bone's LOCAL
+    location channel, per frame (A_t⁻¹·d: armature world matrix ∘ parent pose ∘
+    rest, Blender's own convert_space).  Returns None when no conversion is
+    needed - the old direct write is then exact and stays bit-identical:
+    z_only: local Z already is world Z (A_t·ẑ = ẑ); else: A_t = I.
+    The fixture qualifies for fix_ground (foot_ik rest yaw 4.8°, no tilt);
+    with the global correction applied (-4.2°/3.7°) a 30 mm lift used to come
+    out 2.2 mm sideways."""
+    from mathutils import Matrix
+    from .animation import preserve_scene_frame, set_scene_frame
+
+    path = str(loc_path)
+    if not path.startswith('pose.bones["'):
+        return None
+    pb = armature.pose.bones.get(path.split('"')[1])
+    if pb is None:
+        return None
+    scene = bpy.context.scene
+    n = len(world_delta)
+    mats = np.zeros((n, 3, 3))
+    with preserve_scene_frame(scene):
+        for i in range(n):
+            set_scene_frame(scene, int(frame_start) + i)
+            mats[i] = np.asarray(armature.convert_space(
+                pose_bone=pb, matrix=Matrix.Identity(4),
+                from_space="LOCAL", to_space="WORLD").to_3x3())
+    if z_only:
+        exact = np.abs(mats[:, :, 2] - np.array([0.0, 0.0, 1.0])).max() < 1e-6
+    else:
+        exact = np.abs(mats - np.eye(3)).max() < 1e-6
+    if exact:
+        return None
+    return np.linalg.solve(mats, np.asarray(world_delta, dtype=np.float64)[..., None])[..., 0]
+
+
 def fix_ground(
     armature: Any,
     base_action: Any,
@@ -1441,8 +1478,18 @@ def fix_ground(
     base_z = agent_bake.sample_fcurve_values(base_action, loc_path, 2, start, end)
     if base_z is None:
         raise RuntimeError(f"IK 位置 Z 通道不存在：{loc_path}")
-    # sole and the IK root move together: same world-space delta
-    scalars[(loc_path, 2)] = desired_sole - sole_h
+    # sole and the IK root move together: same world-space delta - a WORLD Z
+    # delta, while the channel is the bone's local location (M24, see
+    # _world_delta_to_location: only converted when local Z is not world Z)
+    dz = desired_sole - sole_h
+    local = _world_delta_to_location(
+        armature, loc_path, start,
+        np.stack([np.zeros_like(dz), np.zeros_like(dz), dz], axis=1), z_only=True)
+    if local is None:
+        scalars[(loc_path, 2)] = dz
+    else:
+        for axis in range(3):
+            scalars[(loc_path, axis)] = local[:, axis]
 
     if pin_xy:
         for axis in (0, 1):
@@ -1451,7 +1498,9 @@ def fix_ground(
             if base is None:
                 continue
             pinned = np.full(len(base), float(np.median(base)))
-            scalars[(loc_path, axis)] = pinned - base  # taper applied in strip
+            pin = pinned - base                      # taper applied in strip
+            prev = scalars.get((loc_path, axis))     # converted lift (tilted rig)
+            scalars[(loc_path, axis)] = pin if prev is None else prev + pin
     name = f"agent_ground_{start}_{end}"
     _track, strip = _write_strip(armature, name, start, scalars=scalars,
                                blend=blend, track_name=track_name)
@@ -2324,9 +2373,11 @@ def apply_exemplar(
         exemplar, target_pos, target_quat, anchor_yaw_deg,
         yaw_scale=yaw_scale, mirror=mirror, blend=blend)
     scalars = {}
+    d_world = desired["pos"] - np.asarray(target_pos)
+    local = _world_delta_to_location(armature, loc_path, start, d_world)   # M24
     for axis in range(3):
-        scalars[(loc_path, axis)] = desired["pos"][:, axis] - \
-            np.asarray(target_pos)[:, axis]
+        scalars[(loc_path, axis)] = (d_world[:, axis] if local is None
+                                     else local[:, axis])
     dq = agent_fx.delta_quat(desired["quat"], np.asarray(target_quat))
     name = f"agent_ex_{exemplar['id']}_{start}"
     _track, strip = _write_strip(

@@ -214,6 +214,11 @@ def swing_twist_deg(basis_quats: np.ndarray, axis: int = 1):
     """
     q = np.asarray(basis_quats, dtype=np.float64)
     q = q / np.linalg.norm(q, axis=1, keepdims=True)
+    # Same rotation, w >= 0 hemisphere: a sign-continuous series that has
+    # wrapped past 180 deg (a body that turned around) has w < 0, and the
+    # twist came out as 2*arccos(-|w|) → ±(180..360) deg, jumping ~715 deg at
+    # the sign change.  Swing / flex / abd are unchanged by the flip.
+    q = np.where(q[:, :1] < 0.0, -q, q)
     col = 1 + int(axis)                    # wxyz: component col = axis+1
     # twist = component along `axis`: t = normalize(w, v*axis)
     t = np.zeros_like(q)

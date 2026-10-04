@@ -20,6 +20,7 @@
   R11 M22/M23  exclusive bind on Windows; HTTP-looking connections dropped;
            optional token
   R12 M16  a corrupt op log is moved aside and reported, never overwritten
+  R13 M24  fix_ground on a tilted rig moves the foot straight down in WORLD space
 
     bash tools/mcd.sh e2e tests/e2e_review_agent.py
 """
@@ -408,6 +409,58 @@ tk = json.loads((out.get("token") or b"{}").decode() or "{}")
 check("R11d MCD_AGENT_TOKEN set: requests without it get E_AUTH, with it pass",
       (nt.get("error") or {}).get("code") == "E_AUTH" and tk.get("ok") is True,
       f"no_token={nt.get('error')} token_ok={tk.get('ok')}")
+
+# ---- R13 / M24 -------------------------------------------------------------------
+# fix_ground writes a WORLD Z delta into foot_ik's LOCAL location: exact only while
+# local Z is world Z.  Tilt the rig like the global correction does (-4.2°/3.7°).
+import math  # noqa: E402
+corr = rig.parent
+rot_fcs = [fc for fc in ((corr.animation_data.action.fcurves
+                          if corr is not None and corr.animation_data
+                          and corr.animation_data.action else ()))
+           if fc.data_path.startswith("rotation")]
+if corr is None:
+    check("R13 tilted rig: fix_ground moves the foot straight down in world space",
+          False, "fixture layout changed: RIG has no parent")
+else:
+    saved = (corr.rotation_mode, tuple(corr.rotation_euler), [fc.mute for fc in rot_fcs])
+    for fc in rot_fcs:
+        fc.mute = True
+    corr.rotation_mode = "XYZ"
+    corr.rotation_euler = (math.radians(-4.2), math.radians(3.7), 0.0)
+    try:
+        a, b = 1300, 1320
+        FRG = list(range(a, b + 1))
+        op = agent_ops.fix_ground(rig, agent_ops.base_action_of(rig),
+                                  'pose.bones["foot_ik.L"].location',
+                                  np.full(len(FRG), 0.03), floor_z=0.0, mode="float",
+                                  frame_range=[a, b], blend=0)
+        tr13, _st13 = agent_ops.find_op_strip(rig, op)
+
+        def _heads():
+            out = []
+            for f in FRG:
+                scene.frame_set(f)
+                out.append(np.array(rig.matrix_world @ rig.pose.bones["foot_ik.L"].head))
+            return np.array(out)
+
+        on = _heads()
+        tr13.mute = True
+        off = _heads()
+        tr13.mute = False
+        d = on - off
+        horiz = float(np.linalg.norm(d[:, :2], axis=1).max())
+        check("R13 tilted rig: fix_ground moves the foot straight down in world space",
+              horiz < 0.0002 and np.allclose(d[:, 2], -0.03, atol=0.0002),
+              f"horizontal={horiz * 1000:.3f} mm vertical={d[:, 2].min() * 1000:.2f}.."
+              f"{d[:, 2].max() * 1000:.2f} mm (old: ~2-3 mm sideways)")
+        agent_ops.delete_op_strip(rig, op)
+    finally:
+        corr.rotation_mode = saved[0]
+        corr.rotation_euler = saved[1]
+        for fc, m in zip(rot_fcs, saved[2]):
+            fc.mute = m
+        scene.frame_set(scene.frame_current)
 
 # ---- R12 / M16 (last: it resets the op log) -------------------------------------
 log = os.path.join(data_dir, "agent_ops.json")
