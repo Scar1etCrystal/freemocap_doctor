@@ -231,16 +231,9 @@ def _focus_preview(scene, frame_range):
 def _base_action(armature):
     """The baseline action - active action, or the mcd_base strip's action once
     it has been pushed onto NLA (active action sits ABOVE tracks and REPLACEd
-    our deltas, so the first write pushes it down)."""
-    anim = getattr(armature, "animation_data", None)
-    if anim is None:
-        return None
-    if anim.action is not None:
-        return anim.action
-    for track in anim.nla_tracks:
-        if track.name == agent_ops.BASE_TRACK and track.strips:
-            return track.strips[0].action
-    return None
+    our deltas, so the first write pushes it down).  Same rule as
+    agent_ops.base_action_of (a foreign active Action over mcd_base raises)."""
+    return agent_ops.base_action_of(armature)
 
 
 def _track_by_name(armature, name):

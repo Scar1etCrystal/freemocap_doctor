@@ -57,12 +57,23 @@ def ensure_base_on_nla(armature: Any):
     if anim is None:
         return None
     action = anim.action
+    base_track = next((tr for tr in anim.nla_tracks
+                       if tr.name == BASE_TRACK and tr.strips), None)
     if action is None:
-        for tr in anim.nla_tracks:            # already pushed down
-            if tr.name == BASE_TRACK and tr.strips:
-                settle_base_strip(armature)
-                return tr.strips[0].action
+        if base_track is not None:            # already pushed down
+            settle_base_strip(armature)
+            return base_track.strips[0].action
         return None
+    if base_track is not None:
+        # The base is already on NLA and an Action became active again (e.g. the
+        # user clicked one in the Action editor).  Pushing it down as a SECOND
+        # REPLACE base on top would bury every fix written so far.
+        base_action = base_track.strips[0].action
+        if action is base_action:             # the base itself: just unassign
+            anim.action = None
+            settle_base_strip(armature)
+            return base_action
+        raise _second_base_error(action)
     # NOTE: Blender 4.x exposes no nla_tracks.move(), so ordering relies on
     # creation order - nla_tracks.new() lands on TOP of the stack (evaluated
     # last), i.e. the track created LATEST wins.  We create the base track
@@ -82,6 +93,13 @@ def ensure_base_on_nla(armature: Any):
     strip.action_frame_end = float(fs) + (float(f1) - float(f0))
     anim.action = None
     return action
+
+
+def _second_base_error(action: Any) -> RuntimeError:
+    return RuntimeError(
+        f"RIG 的基底已在 NLA 轨 {BASE_TRACK} 上，又被指定了活动 Action「{action.name}」："
+        "活动 Action 以 REPLACE 盖在所有修复之上，再压一条基底会把之前的修复全部盖住。"
+        "请先在动作编辑器里取消这个活动 Action（要用它就先合进基底），再写修复")
 
 
 def settle_base_strip(armature: Any) -> bool:
@@ -336,16 +354,20 @@ def get_op(data_dir: str | Path, op_id: str) -> dict | None:
 
 
 def base_action_of(armature: Any) -> Any | None:
-    """基底动作：active action，或已压进 mcd_base strip 的那个。"""
+    """基底动作：active action，或已压进 mcd_base strip 的那个。
+
+    两者并存且不是同一个 action（基底已在 NLA 上、又指定了别的活动 Action）
+    → 报错：按那个活动 Action 采样算出的修复，写下去会被 ensure_base_on_nla 拒绝。"""
     anim = getattr(armature, "animation_data", None)
     if anim is None:
         return None
+    base = next((tr.strips[0].action for tr in anim.nla_tracks
+                 if tr.name == BASE_TRACK and tr.strips), None)
     if anim.action is not None:
+        if base is not None and anim.action is not base:
+            raise _second_base_error(anim.action)
         return anim.action
-    for tr in anim.nla_tracks:
-        if tr.name == BASE_TRACK and tr.strips:
-            return tr.strips[0].action
-    return None
+    return base
 
 
 # 每种写工具暴露给参数面板的可调项：kind = float/int/choice/object/range。
@@ -1891,6 +1913,32 @@ def _desired_world_dir_multi(
     return res
 
 
+def _reject_ancestor_pairs(armature: Any, bones: Sequence[str]) -> None:
+    """world_dir solves every bone of one call against its parent's CURRENT
+    pose; with a parent AND its child in the same call the child's local
+    rotation then rides on the parent's new correction too (double-counted -
+    e.g. [forearm_fk.L, hand_fk.L] left the hand off target).  Refuse it."""
+    from . import agent_pose
+    names = list(dict.fromkeys(bones))
+    for bone in names:
+        anc = set()
+        db = armature.data.bones.get(bone)
+        p = db.parent if db is not None else None
+        while p is not None:
+            anc.add(p.name)
+            p = p.parent
+        try:
+            anc |= set(agent_pose.semantic_ancestors(armature, bone))
+        except Exception:
+            pass
+        clash = [a for a in names if a != bone and a in anc]
+        if clash:
+            raise RuntimeError(
+                f"world_dir 一次调用里同时有 {clash[0]} 和它的后代 {bone}：子骨按父骨"
+                "当前姿态求解，父骨自己的修正会被子骨多转一份。分两次调：先只对 "
+                f"{clash[0]}，再只对 {bone}（第二次按父骨修正后的姿态求解）")
+
+
 def hold_pose(
     armature: Any,
     base_action: Any,
@@ -1945,6 +1993,8 @@ def hold_pose(
     missing = [b for b in bones if b not in pose_names]
     if missing:
         raise RuntimeError(f"scope 越界：骨骼不存在于该骨架 {missing}")
+    if target == "world_dir" and len(set(bones)) > 1:
+        _reject_ancestor_pairs(armature, list(bones))
 
     frames = np.arange(start, end + 1)
     quats: dict[str, np.ndarray] = {}
