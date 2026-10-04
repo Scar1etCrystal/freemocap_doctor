@@ -204,6 +204,20 @@ sys.exit(1 if fails else 0)
 6. `dry_run=True` 不写任何 strip。
 7. `revert` 后可见姿态回到写入前（< 0.01°）。
 
+8. **测试绝不存盘**：别在 e2e 里调 `save`（也别 `bpy.ops.wm.save_*`）——它会把**共享 fixture** 覆盖掉（2026-10-04 一个文档
+   示例校验测试就这样把 fixture_1499.blend 存了一次，原件靠 Blender 的 .blend1 才留住）。要验证 save 的参数，只校验不调用；
+   测完可以比一下 `os.path.getmtime(bpy.data.filepath)` 没变。
+
+**"人看到的 = agent 算的"五条**（2026-10-04 §16，新工具照做）：
+- **读形变链**（ORG-*/DEF-*/MMD 骨 = 网格跟的骨），别读"有 key 但看不见"的控制骨：腿是 IK 时 thigh_fk/shin_fk 看不见，
+  旧 probe 就这样把膝量偏了 40 mm / 13°。写之前看 `agent_anatomy.limb_is_ik`，写看不见的骨要报错。
+- **方向用方向词**：参数收 `forward/char_left/camera/screen_*/viewer`，逐帧用 `agent_view.resolve_direction`
+  解析（角色会转身；"朝镜头"是从部位指向相机，不是相机视线）。不要在工具里写死 −Y。
+- **基底没 key 的通道**（thigh_ik 的 Y 等）：strip 删掉/静音后 Blender 让它停在最后一帧的值上。写这种通道的工具，revert 已经由
+  `agent_ops.settle_unanimated` 兜住；你自己删临时 strip 时也要调它。
+- **网格求值前包 `agent_anatomy.evaluable(mesh)`**：视口里被禁用/隐藏的网格 evaluated_get 给的是静止网格（is_evaluated 照样 True）。
+- **标定只缓存成功结果**，键里带物体指针 + 指纹，`agent_anatomy.reset_caches` 在读文件时清空。
+
 **挑测试帧段**：fixture 1–1499 帧。先用 `mcd.sh run` 跑一个探查脚本：对目标骨链
 `sample_visible` 全段，算 `angular_speed_deg`，找"前后有静止、中间有明显动作
 （峰值 > 3°/帧）"的段落，把帧号硬编码进 e2e（测试要确定性、单个 < 30 s）。

@@ -399,6 +399,7 @@ def _reapply_kwargs(tool: str, params: Mapping[str, Any],
             strength=float(params.get("strength", 1.0)),
             blend=int(params.get("blend", 4)),
             op_mode=status,
+            view=params.get("view", "camera"),
         )
     if tool == "clean_jitter":
         return dict(
@@ -578,6 +579,58 @@ def find_op_strip(armature: Any, op: Mapping[str, Any]):
     return None, None
 
 
+def action_channels(action: Any) -> set:
+    if action is None:
+        return set()
+    return {(fc.data_path, int(fc.array_index)) for fc in action.fcurves}
+
+
+def animated_channels(armature: Any) -> set:
+    """(data_path, index) that the active action or any UNMUTED NLA strip animates."""
+    anim = getattr(armature, "animation_data", None)
+    out: set = set()
+    if anim is None:
+        return out
+    out |= action_channels(anim.action)
+    for tr in anim.nla_tracks:
+        if tr.mute:
+            continue
+        for st in tr.strips:
+            if not st.mute:
+                out |= action_channels(st.action)
+    return out
+
+
+_CHANNEL_DEFAULTS = {"rotation_euler": (0.0, 0.0, 0.0), "location": (0.0, 0.0, 0.0),
+                     "scale": (1.0, 1.0, 1.0), "rotation_quaternion": (1.0, 0.0, 0.0, 0.0),
+                     "rotation_axis_angle": (0.0, 0.0, 1.0, 0.0)}
+
+
+def settle_unanimated(armature: Any, channels) -> int:
+    """Blender 把动画求值结果写回姿态属性：一条 strip 删掉 / 静音之后，只有它动过的通道（基底动作里
+    没 key 的，比如 thigh_ik 的 Y 旋转）会**停在最后一次求值的值上**，每一帧都是那个值。
+    没有别的 strip 再动它的通道就恢复成 RNA 默认值——姿态回到这条 strip 出现之前的样子。
+    （2026-10-04 §16 实测：撤掉一条膝 swivel 后左膝仍偏 3.4°。）返回改了几个分量。"""
+    live = animated_channels(armature)
+    n = 0
+    for path, idx in channels:
+        if (path, idx) in live:
+            continue
+        head, _, prop = str(path).rpartition(".")
+        dflt = _CHANNEL_DEFAULTS.get(prop)
+        if dflt is None or not head:
+            continue
+        try:
+            owner = armature.path_resolve(head)
+            val = getattr(owner, prop)
+            if int(idx) < len(dflt) and abs(float(val[int(idx)]) - dflt[int(idx)]) > 1e-12:
+                val[int(idx)] = dflt[int(idx)]
+                n += 1
+        except Exception:  # noqa: BLE001 - 骨被删了等：不影响撤销本身
+            continue
+    return n
+
+
 def delete_op_strip(armature: Any, op: Mapping[str, Any]) -> bool:
     """Remove an op's strip + its now-empty track + its private action."""
     anim = getattr(armature, "animation_data", None)
@@ -587,11 +640,13 @@ def delete_op_strip(armature: Any, op: Mapping[str, Any]) -> bool:
     if strip is None:
         return False
     act = strip.action
+    chans = action_channels(act)
     track.strips.remove(strip)
     if act is not None and act.users == 0:
         bpy.data.actions.remove(act)
     if len(track.strips) == 0:
         anim.nla_tracks.remove(track)
+    settle_unanimated(armature, chans)
     return True
 
 
@@ -1321,16 +1376,31 @@ def _probe_axis_fn(axis: Any):
 
 def _target_fn(scene: Any, armature: Any, pb: Any,
                world_dir: Any, dir_object: str | None,
-               dir_mode: str):
+               dir_mode: str, origin_fn=None, view: str = "camera",
+               side: str | None = None):
     """返回 callable()->Vector，逐帧求目标方向。
 
     - world_dir 给固定向量：常量目标
+    - world_dir 给方向词（"forward" "camera" "char_left" "screen_up" …，见 agent_view.WORD_TABLE）：
+      逐帧解析——角色会转身、"朝镜头"要从部位指向相机（2026-10-04 §16）
     - dir_object + mode='arrow'：空物体（single-arrow 约定）局部 +Z 轴
     - dir_object + mode='aim'：骨头发射到物体位置
     空物体可 k 动画 → 方向随帧变，本就逐帧解算所以免费支持。
+    origin_fn()：部位位置（"camera"/aim 从这里量；默认骨头部）。
     """
     from mathutils import Vector
 
+    if isinstance(world_dir, str) and not dir_object:
+        from . import agent_view
+        mmd = getattr(getattr(scene, "mocap_doctor", None), "mmd_armature", None)
+        spec = world_dir
+
+        def fn():
+            org = origin_fn() if origin_fn is not None else (armature.matrix_world @ pb.head)
+            return agent_view.resolve_direction(spec, scene=scene, armature=armature,
+                                                origin=org, view=view, mmd=mmd,
+                                                side=side)[0]
+        return fn
     if dir_object:
         obj = bpy.data.objects.get(str(dir_object))
         if obj is None:
@@ -1354,6 +1424,30 @@ def _target_fn(scene: Any, armature: Any, pb: Any,
     return fn
 
 
+def _side_for(axis: Any) -> str | None:
+    """"probe:<part>.L" → "L"（方向词 toes 要知道是哪一侧）。"""
+    if isinstance(axis, str) and axis.startswith("probe:"):
+        side = axis.rpartition(".")[2].strip().upper()
+        return side if side in ("L", "R") else None
+    return None
+
+
+def _origin_fn_for(armature: Any, pb: Any, axis: Any):
+    """"probe:<part>.<side>" 主轴 → 该部位的位置（方向词 "camera" 从这里量，与 probe 复测同一个点）。"""
+    if not (isinstance(axis, str) and axis.startswith("probe:")):
+        return None
+    spec = axis[6:].strip()
+    part, _, side = spec.rpartition(".")
+    if not part:
+        part, side = side, ""
+    from . import agent_anatomy
+
+    def fn():
+        p = agent_anatomy.part_anchor(armature, part, side.upper() or None)
+        return p if p is not None else armature.matrix_world @ pb.head
+    return fn
+
+
 def _desired_world_dir(
     scene: Any,
     armature: Any,
@@ -1365,6 +1459,7 @@ def _desired_world_dir(
     dir_object: str | None = None,
     dir_mode: str = "arrow",
     flip_guard_deg: float = 150.0,
+    view: str = "camera",
 ) -> tuple[np.ndarray, dict]:
     """Per-frame basis quat so the bone's world `axis` points along the target.
 
@@ -1385,7 +1480,9 @@ def _desired_world_dir(
     from .animation import preserve_scene_frame, set_scene_frame
 
     pb = armature.pose.bones[bone]
-    target = _target_fn(scene, armature, pb, dir_vec, dir_object, dir_mode)
+    target = _target_fn(scene, armature, pb, dir_vec, dir_object, dir_mode,
+                        origin_fn=_origin_fn_for(armature, pb, axis), view=view,
+                        side=_side_for(axis))
     lp_fn = _probe_axis_fn(axis)
     ls_fn = _probe_axis_fn(secondary_axis)
     lp_static = None if lp_fn else _axis_vec(axis).normalized()
@@ -1518,6 +1615,7 @@ def _desired_world_dir_multi(
     dir_object: str | None = None,
     dir_mode: str = "arrow",
     flip_guard_deg: float = 150.0,
+    view: str = "camera",
 ) -> dict:
     """_desired_world_dir for several bones in ONE frame sweep (任务2).
 
@@ -1547,7 +1645,9 @@ def _desired_world_dir_multi(
         st[bone] = {
             "pb": pb,
             "target": _target_fn(scene, armature, pb, dir_vec, dir_object,
-                                 dir_mode),
+                                 dir_mode,
+                                 origin_fn=_origin_fn_for(armature, pb, axis),
+                                 view=view, side=_side_for(axis)),
             "out": np.zeros((len(frames), 4)),
             "mets": {"align_max_deg": 0.0, "align_mean_deg": 0.0,
                      "flipped_frames": 0, "skipped_flip_frames": 0,
@@ -1685,6 +1785,7 @@ def hold_pose(
     strip_name: str | None = None,
     record: bool = True,
     dry_run: bool = False,
+    view: str = "camera",
 ) -> dict:
     """通用姿态保持：让若干骨骼在帧段内保持某个姿态（delta strip 实现）。
 
@@ -1749,11 +1850,12 @@ def hold_pose(
             raise RuntimeError("world_dir 需要 scene 与向量或 dir_object")
         world_multi = _desired_world_dir_multi(
             scene, armature, list(bones), frames,
-            np.asarray(world_dir, dtype=np.float64)
-            if world_dir is not None else None,
+            world_dir if isinstance(world_dir, str)
+            else (np.asarray(world_dir, dtype=np.float64)
+                  if world_dir is not None else None),
             axis=world_axis, secondary_axis=secondary_axis,
             dir_object=dir_object, dir_mode=dir_mode,
-            flip_guard_deg=flip_guard_deg)
+            flip_guard_deg=flip_guard_deg, view=view)
 
     for bone in bones:
         cur = cur_by_bone[bone]
@@ -1851,7 +1953,8 @@ def hold_pose(
     if dry_run:
         return {"dry_run": True, "tool": "hold_pose", "frames": [start, end],
                 "params": {"bones": list(bones), "target": target,
-                           "world_dir": list(world_dir) if world_dir is not None else None,
+                           "world_dir": (world_dir if isinstance(world_dir, str)
+                                         else list(world_dir) if world_dir is not None else None),
                            "world_axis": world_axis if isinstance(world_axis, str)
                            else list(world_axis),
                            "mode": mode, "threshold_deg": threshold_deg,
@@ -1869,7 +1972,8 @@ def hold_pose(
         {"bones": list(bones), "target": target,
          "values": {k: list(v) for k, v in (values or {}).items()},
          "ref_frame": ref_frame if target == "from_frame" else None,
-         "world_dir": list(world_dir) if world_dir is not None else None,
+         "world_dir": (world_dir if isinstance(world_dir, str)
+                       else list(world_dir) if world_dir is not None else None),
          "world_axis": (list(world_axis)
                         if not isinstance(world_axis, str) else world_axis),
          "secondary_axis": (
@@ -1880,7 +1984,9 @@ def hold_pose(
          "flip_guard_deg": flip_guard_deg,
          "mode": mode, "threshold_deg": threshold_deg,
          "strength": strength, "blend": blend,
-         "frame_range": [start, end]},
+         "frame_range": [start, end],
+         # view 只在非默认时记（旧 op / golden 的 params 不变）
+         **({"view": view} if view != "camera" else {})},
         (start, end), strip.name, op_mode, metrics,
         track=_track.name)
     if data_dir and record:

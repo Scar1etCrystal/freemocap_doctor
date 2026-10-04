@@ -5,8 +5,10 @@
   M8–M9  用户转动标记 → probe 跟着变；ignore_markers 下回到网格标定
   M10    hold_pose(probe:palm.R) 以标记为准，复测 err_inner < 5°
   M11    没父级的标记被忽略 + warning
-  M12–13 bake knee_front：逐帧 K 帧箭头与 probe 方向一致
+  M12–13 bake knee_front：逐帧 K 帧箭头 = 形变链当帧凸出角平分线，与 probe knee_front 在 髋→踝 垂面上一致
   M14    list / remove
+  M16–18 审查 M20：bake 不再写绑定标记同名物体（MCD_bake_*）；带关键帧的"绑定标记"不读回 + check 报错；
+         create overwrite 清掉旧关键帧后读回正确；adopt 拒绝带关键帧的箭头
 """
 import math
 import os
@@ -157,20 +159,36 @@ check("M11b overwrite=true rebinds it", r["ok"] and mk.parent is not None and mk
       f"status={[x['status'] for x in r['data']['markers']]}")
 
 # ---- M12–M13 bake knee_front (per-frame keyed arrow == probe direction)
-r = call("markers", action="bake", part="knee_front", side="L", frame_range=[700, 760])
-kb = bpy.data.objects.get("MCD_knee_front.L")
+r = call("markers", action="bake", part="knee_front", side="L", frame_range=[200, 260])
+kb = bpy.data.objects.get("MCD_bake_knee_front.L")
 check("M12 bake creates a keyed arrow", r["ok"] and kb is not None and kb.get("mcd_marker") == "baked"
       and kb.animation_data is not None and kb.animation_data.action is not None,
       f"err={r.get('error')} data={r.get('data')}")
-worst = 0.0
-for f in (705, 720, 740, 755):
+worst, worst_sw, bent = 0.0, 0.0, 0
+for f in (205, 215, 225, 235, 245, 255):
     scene.frame_set(f)
     bpy.context.view_layer.update()
-    pk = agent_anatomy.probe(scene, rig, part="knee_front", side="L", frame_range=[f, f])
-    worst = max(worst, ang(zdir(kb), pk["world_dir"]))
-check("M13 baked arrow matches probe knee_front per frame (< 0.5°)", worst < 0.5, f"worst={worst:.3f}°")
+    # bake 显示的是"当帧凸出角平分线"（形变链 ORG-*，= 视口里的膝）；probe knee_front 是膝盖骨朝向
+    # （⊥小腿，弯着时在当帧弯曲平面里）——两者在 髋→踝 垂面上的投影是同一个方向（§16）
+    p0, p1, p2, _c = agent_anatomy.limb_points(rig, "knee", "L")
+    bis = ((p1 - p0).normalized() - (p2 - p1).normalized()).normalized()
+    worst = max(worst, ang(zdir(kb), bis))
+    jd = agent_anatomy._joint_frame(rig, "L", "knee")
+    if jd["evidence"]["bend_deg"] > 35.0:       # 直腿时凸出方向没有定义，只比明显弯着的帧
+        bent += 1
+        e = agent_anatomy.swivel_error_deg(jd["front"], zdir(kb), jd["chord"], pole=jd.get("pole"))
+        if e is not None:
+            worst_sw = max(worst_sw, abs(e))
+check("M13 baked arrow = per-frame convex bisector of the deform chain (< 0.5°), and on bent frames agrees with "
+      "probe knee_front in the swivel plane (< 0.5°)", worst < 0.5 and worst_sw < 0.5,
+      f"vs bisector {worst:.3f}° swivel-plane vs probe {worst_sw:.3f}° ({bent} bent frames)")
 r = call("markers", action="bake", part="palm", side="R", frame_range=[700, 710])
-check("M13b bake refuses to overwrite a bound marker", not r["ok"] and "绑定" in str(r.get("error")), str(r.get("error"))[:120])
+bp = bpy.data.objects.get("MCD_bake_palm.R")
+mk = bpy.data.objects.get("MCD_palm.R")
+check("M13b bake palm writes MCD_bake_palm.R and never touches the bound MCD_palm.R (审查 M20)",
+      r["ok"] and bp is not None and bp.get("mcd_marker") == "baked" and mk.get("mcd_marker") == "bound"
+      and mk.animation_data is None and mk.parent_bone == "手首.R",
+      f"err={r.get('error')} baked={getattr(bp, 'name', None)} bound_anim={mk.animation_data}")
 
 # ---- M15 adopt: the user's own bone-parented arrow becomes the definition
 scene.frame_set(179)
@@ -201,9 +219,57 @@ pa = agent_anatomy.probe(scene, rig, part="palm", side="L", frame_range=[600, 60
 check("M15b probe palm.L now uses the adopted arrow (10° from mesh at another frame)",
       pa["evidence"].get("palm_source") == "marker" and 9.0 < pa["evidence"].get("marker_vs_mesh_deg", 0) < 11.0,
       f"src={pa['evidence'].get('palm_source')} vs_mesh={pa['evidence'].get('marker_vs_mesh_deg')}")
-r = call("markers", action="adopt", name="MCD_knee_front.L", part="palm", side="L")
-check("M15c adopt refuses an arrow without a bone parent", not r["ok"] and "骨骼父级" in str(r.get("error")),
+r = call("markers", action="adopt", name="MCD_bake_knee_front.L", part="palm", side="L")
+check("M15c adopt refuses a baked (keyed, unparented) arrow", not r["ok"] and ("关键帧" in str(r.get("error"))
+                                                                              or "骨骼父级" in str(r.get("error"))),
       str(r.get("error"))[:100])
+st0 = bpy.data.objects.new("UserArrow.static", None)
+st0.empty_display_type = "SINGLE_ARROW"
+scene.collection.objects.link(st0)
+r = call("markers", action="adopt", name="UserArrow.static", part="palm", side="L")
+check("M15d adopt refuses an arrow without a bone parent", not r["ok"] and "骨骼父级" in str(r.get("error")),
+      str(r.get("error"))[:100])
+bpy.data.objects.remove(st0, do_unlink=True)
+
+# ---- M16–M18 审查 M20：带关键帧的"绑定标记"（旧文件里 bake 写到了同名物体上）
+mk = bpy.data.objects["MCD_palm.R"]
+scene.frame_set(100)
+mk.keyframe_insert("rotation_euler", frame=100)
+mk.rotation_euler.x += math.radians(60.0)
+mk.keyframe_insert("rotation_euler", frame=800)
+scene.frame_set(600)
+bpy.context.view_layer.update()
+pr = call("probe_anatomy", part="palm", side="R", frame_range=[600, 600])
+evk = (pr.get("data") or {}).get("evidence") or {}
+ck = call("markers", action="check", frame_range=[100, 900], name="MCD_palm.R")
+rowk = ((ck.get("data") or {}).get("arrows") or [{}])[0]
+check("M16 a keyed 'bound' marker is NOT read back (source=mesh, why=keyed, warning) and check reports it",
+      evk.get("palm_source") == "mesh" and evk.get("marker_ignored_why") == "keyed"
+      and any("关键帧" in w for w in pr.get("warnings", [])) and rowk.get("status") == "error"
+      and any("关键帧" in p for p in rowk.get("problems", [])),
+      f"src={evk.get('palm_source')} why={evk.get('marker_ignored_why')} check={rowk.get('status')} {rowk.get('problems')}")
+r = call("markers", action="create", parts=["palm"], sides=["R"], overwrite=True)
+mk = bpy.data.objects["MCD_palm.R"]
+devs = []
+for f in (300, 900):
+    scene.frame_set(f)
+    bpy.context.view_layer.update()
+    pm = agent_anatomy.probe(scene, rig, part="palm", side="R", frame_range=[f, f])
+    with agent_anatomy.ignore_markers():
+        pg = agent_anatomy.probe(scene, rig, part="palm", side="R", frame_range=[f, f])
+    devs.append((pm["evidence"].get("palm_source"), round(ang(pm["world_dir"], pg["world_dir"]), 3)))
+check("M17 create overwrite:true clears the old keyframes; the rebuilt marker = mesh palm on other frames (< 0.5°)",
+      r["ok"] and mk.animation_data is None and all(s_ == "marker" and d_ < 0.5 for s_, d_ in devs),
+      f"anim={mk.animation_data} per-frame={devs}")
+ua = bpy.data.objects.new("UserArrow.keyed", None)
+ua.empty_display_type = "SINGLE_ARROW"
+scene.collection.objects.link(ua)
+ua.parent, ua.parent_type, ua.parent_bone = settings.mmd_armature, "BONE", "手首.L"
+ua.keyframe_insert("location", frame=10)
+r = call("markers", action="adopt", name="UserArrow.keyed", part="palm", side="L", overwrite=True)
+check("M18 adopt refuses a bone-parented arrow that carries its own keyframes", not r["ok"] and "关键帧" in str(r.get("error")),
+      str(r.get("error"))[:100])
+bpy.data.objects.remove(ua, do_unlink=True)
 
 # ---- M14 list / remove
 scene.frame_set(179)
@@ -212,7 +278,7 @@ rows = (r.get("data") or {}).get("markers", [])
 by = {x["name"]: x for x in rows}
 check("M14 list reports kinds + agreement with geometry", r["ok"] and by.get("MCD_palm.R", {}).get("kind") == "bound"
       and by["MCD_palm.R"].get("valid") is True and by["MCD_palm.R"].get("vs_geometry_max_deg", 99) < 0.5
-      and by.get("MCD_knee_front.L", {}).get("kind") == "baked",
+      and by.get("MCD_bake_knee_front.L", {}).get("kind") == "baked",
       f"{[(x['name'], x.get('kind'), x.get('valid'), x.get('vs_geometry_max_deg')) for x in rows]}")
 r = call("markers", action="remove", all=True)
 check("M14b remove all", r["ok"] and not [o for o in bpy.data.objects if o.name.startswith("MCD_")],

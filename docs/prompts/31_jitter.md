@@ -38,7 +38,8 @@
   `bones.<骨>.jitter_top_frames`（最抖的 5 帧及其抖动角）；加 `"brief":true` 可省掉速度序列。
   注意：真实的快速甩手本身也会让 jitter_deg 偏高（曲率大），别把它当抖动抹掉。
 - 手臂 Euler 骨（`upper_arm_fk/forearm_fk/shoulder`）与四元数骨都支持（`bone=` 平滑该骨的**位置 + 旋转**通道，
-  旋转按骨的模式自动选；所以写入响应的 touched 里会有 location）。腿是 IK：抖的腿改 `foot_ik.L/R`。
+  旋转按骨的模式自动选；所以写入响应的 touched 里会有 location）。腿是 IK：抖的腿改 `foot_ik.L/R`
+  （`thigh_fk/shin_fk/foot_fk` 写了看不见，现在会直接报错）。
 - **已修复的历史 bug**：2026-10-03 前 clean_jitter 对四元数骨（手、脊柱）写的是
   分量差，会把骨头转 150°+。如果在旧文件里看到 `agent_jitter_*` strip 让手乱翻，
   那是旧 bug 的产物——报告给用户，别在上面叠修。
