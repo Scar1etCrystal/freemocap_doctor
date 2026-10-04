@@ -112,6 +112,8 @@ TOOL_DEFS = [
 
 def _socket_call(tool: str, args: dict) -> dict:
     req = {"id": 1, "tool": tool, "args": args}
+    if os.environ.get("MCD_AGENT_TOKEN"):        # 服务端设了 token 才需要（默认关）
+        req["token"] = os.environ["MCD_AGENT_TOKEN"]
     with socket.create_connection((HOST, PORT), timeout=120.0) as sock:
         sock.sendall((json.dumps(req) + "\n").encode("utf-8"))
         buf = b""
@@ -121,6 +123,34 @@ def _socket_call(tool: str, args: dict) -> dict:
                 break
             buf += chunk
     return json.loads(buf.split(b"\n", 1)[0].decode("utf-8"))
+
+
+def _live_tool_names():
+    """ping 返回的服务端工具表（插件工具都在里面）；服务没开 → None。"""
+    try:
+        resp = _socket_call("ping", {})
+    except (OSError, ValueError):
+        return None
+    tools = (resp.get("data") or {}).get("tools") if isinstance(resp, dict) else None
+    return [str(t) for t in tools] if isinstance(tools, list) else None
+
+
+def _tool_list():
+    """tools/list：以服务端 ping 的工具表为准（静态 TOOL_DEFS 只提供描述和参数
+    提示）。白名单曾停在 24 个旧工具，21 个工具经 MCP 一律"未知工具"。"""
+    known = {name: (desc, props) for name, desc, props in TOOL_DEFS}
+    names = _live_tool_names()
+    if names is None:              # 服务没开：先给静态表，调用时再报连不上
+        names = [name for name, _d, _p in TOOL_DEFS]
+    out = []
+    for name in names:
+        desc, props = known.get(name, (
+            f"MoCap Doctor 工具 {name}（参数见 docs/工具手册_agent.md；"
+            "未知参数服务端会报错并给出合法参数名）", {}))
+        out.append({"name": name, "description": desc,
+                    "inputSchema": {"type": "object", "properties": props,
+                                    "additionalProperties": True}})
+    return out
 
 
 def _reply(msg_id, result=None, error=None):
@@ -147,26 +177,27 @@ def _handle(req: dict):
     elif method == "ping":
         _reply(mid, {})
     elif method == "tools/list":
-        _reply(mid, {"tools": [
-            {"name": name, "description": desc,
-             "inputSchema": {"type": "object", "properties": props,
-                             "additionalProperties": True}}
-            for name, desc, props in TOOL_DEFS
-        ]})
+        _reply(mid, {"tools": _tool_list()})
     elif method == "tools/call":
         params = req.get("params") or {}
         name = params.get("name", "")
         args = params.get("arguments") or {}
-        if name not in {t[0] for t in TOOL_DEFS}:
-            _reply(mid, {"content": [{"type": "text",
-                                      "text": f"未知工具 {name}"}],
+        if not name:
+            _reply(mid, {"content": [{"type": "text", "text": "缺工具名"}],
                          "isError": True})
             return
+        # 不再按本地白名单拦：插件工具（motion_copy / foot_lock / markers …）、
+        # claim/release/save/eval_bpy 都在服务端注册，未知工具由服务端回
+        # E_UNKNOWN（带可用工具清单），这里只负责转发。
         try:
             resp = _socket_call(name, args)
             text = json.dumps(resp, ensure_ascii=False)
             _reply(mid, {"content": [{"type": "text", "text": text}],
                          "isError": not resp.get("ok", False)})
+        except ValueError as exc:      # 服务端没回完整的一行（连接被断开）
+            _reply(mid, {"content": [{"type": "text",
+                                      "text": f"工具服务器的回复不完整：{exc}"}],
+                         "isError": True})
         except OSError as exc:
             _reply(mid, {"content": [{"type": "text",
                                       "text": f"连不上 Blender 工具服务器 "

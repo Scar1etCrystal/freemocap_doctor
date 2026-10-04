@@ -19,9 +19,12 @@ Client protocol: one JSON object per line, both directions.
 from __future__ import annotations
 
 import json
+import os
 import queue
+import re
 import socket
 import socketserver
+import sys
 import threading
 import time
 import traceback
@@ -216,15 +219,31 @@ def _redraw():
         pass
 
 
+def _playback_running() -> bool:
+    try:
+        return any(getattr(w.screen, "is_animation_playing", False)
+                   for w in bpy.context.window_manager.windows)
+    except Exception:
+        return False
+
+
+def _toggle_playback():
+    with bpy.context.temp_override():
+        bpy.ops.screen.animation_play()
+
+
 def _focus_preview(scene, frame_range):
     try:
         agent_ops.set_preview(scene, frame_range)
         scene.frame_set(int(frame_range[0]))
     except Exception:
         pass
+    # animation_play() is a TOGGLE: with several agents writing, playback went
+    # on / off / on.  Only start it when it is not running already.
+    if _playback_running():
+        return
     try:
-        with bpy.context.temp_override():
-            bpy.ops.screen.animation_play()
+        _toggle_playback()
     except Exception:
         pass  # playback start is a nicety, never a failure
 
@@ -1603,14 +1622,45 @@ def _watchdog():
     return WATCHDOG_INTERVAL if _running else None
 
 
+# A web page can POST to 127.0.0.1:6211 (text/plain needs no CORS preflight):
+# the body line would be executed - save to any path, eval_bpy.  The JSON-lines
+# protocol never starts with an HTTP request line, so such a connection is
+# dropped before its body is read.  An optional shared token (off by default,
+# protocol unchanged): set MCD_AGENT_TOKEN for Blender and the clients; every
+# request line must then carry "token".
+_HTTP_REQUEST_LINE = re.compile(rb"^[A-Z]{3,10} \S+ HTTP/\d")
+TOKEN_ENV = "MCD_AGENT_TOKEN"
+
+
+def _looks_like_http(line: bytes) -> bool:
+    return bool(_HTTP_REQUEST_LINE.match(line.lstrip(b"\xef\xbb\xbf")))
+
+
 class _Handler(socketserver.StreamRequestHandler):
     def handle(self):
         _STATUS["clients"] += 1
+        token = os.environ.get(TOKEN_ENV) or None
         try:
+            first = True
             for line in self.rfile:
+                if first:
+                    first = False
+                    if _looks_like_http(line):
+                        _STATUS["last_error"] = "拒绝了一个 HTTP 请求（不是 JSON-lines 客户端）"
+                        return
                 try:
                     request = json.loads(line.decode("utf-8"))
-                except json.JSONDecodeError:
+                except (json.JSONDecodeError, UnicodeDecodeError):
+                    continue
+                if not isinstance(request, dict):
+                    continue
+                if token is not None and request.pop("token", None) != token:
+                    self.wfile.write((json.dumps({
+                        "id": request.get("id"), "ok": False, "tool": request.get("tool"),
+                        "error": {"code": "E_AUTH", "message": "token 不对或缺失",
+                                  "fix": f"请求里带 \"token\"（与 Blender 的 {TOKEN_ENV} 相同）"}},
+                        ensure_ascii=False) + "\n").encode("utf-8"))
+                    self.wfile.flush()
                     continue
                 _requests.put((self.wfile, request))
                 _WAKE.set()
@@ -1618,9 +1668,24 @@ class _Handler(socketserver.StreamRequestHandler):
             _STATUS["clients"] -= 1
 
 
+def _bind_flags(platform=None) -> dict:
+    """Windows: SO_REUSEADDR (socketserver sets it when allow_reuse_address)
+    lets a SECOND process bind the same port - two Blenders both "start" the
+    server and requests land on either one, i.e. in the wrong file.  Windows'
+    exclusive bind is SO_EXCLUSIVEADDRUSE.  POSIX SO_REUSEADDR only skips
+    TIME_WAIT and never allows two listeners, so it stays."""
+    win = str(platform if platform is not None else sys.platform).startswith("win")
+    return {"reuse_address": not win, "exclusive": win}
+
+
 class _Server(socketserver.ThreadingTCPServer):
-    allow_reuse_address = True
+    allow_reuse_address = _bind_flags()["reuse_address"]
     daemon_threads = True
+
+    def server_bind(self):
+        if _bind_flags()["exclusive"] and hasattr(socket, "SO_EXCLUSIVEADDRUSE"):
+            self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+        super().server_bind()
 
 
 _server = None
