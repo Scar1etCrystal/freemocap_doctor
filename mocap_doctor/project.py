@@ -4,7 +4,7 @@ import os
 import re
 import uuid
 from datetime import datetime, timezone
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 
 import bpy
 from bpy.app.handlers import persistent
@@ -211,6 +211,28 @@ def resolve_data_dir(settings):
             settings.data_directory = derived
         return derived
     return stored or "."
+
+
+def resolve_project_file(settings, stored, subdir):
+    """Step records keep ABSOLUTE checkpoint / report paths.  Once the project
+    moved (other drive letter, other machine, the Linux kit) the stored path is
+    dead while the file still sits in ``<data dir>/<subdir>/`` under the same
+    name - restore said "找不到检查点" and the air-hint reload "还没有检测结果".
+    Return the stored path if it is a real file on this system, else that name
+    under the current data dir if it exists there, else the stored text (the
+    caller reports it missing)."""
+    text = str(stored or "")
+    if not text:
+        return ""
+    path = Path(text)
+    if path.is_absolute() and path.is_file():
+        return text
+    name = PureWindowsPath(text).name        # splits on "\\" and "/" alike
+    if name:
+        candidate = Path(resolve_data_dir(settings)) / subdir / name
+        if candidate.is_file():
+            return str(candidate)
+    return text
 
 
 def ensure_project_directories(settings):
@@ -424,9 +446,48 @@ def create_accepted_checkpoint(scene, step_id, message="预览已接受", label=
     return path
 
 
+def _same_file(a, b):
+    try:
+        return os.path.normcase(os.path.realpath(str(a))) == os.path.normcase(
+            os.path.realpath(str(b)))
+    except Exception:
+        return str(a) == str(b)
+
+
+def _is_inside(path, root):
+    try:
+        Path(path).resolve().relative_to(Path(root).resolve())
+        return True
+    except Exception:
+        return False
+
+
+def workfile_save_target(settings):
+    """Where save_workfile may write: the file that is actually open.
+
+    The recorded work_filepath is not "the file being edited": with a
+    checkpoint or a copy open, 上一步/下一步 or accepting a step used to save
+    THAT content over the real work file (Blender keeps a single .blend1).
+    Only restore_checkpoint (via _finish_restore) writes back to the work file.
+    Another project file that is open is saved in place; a checkpoint or
+    recovery copy is never written (it is a restore point) - RuntimeError."""
+    target = resolve_work_filepath(settings)
+    current = bpy.data.filepath or ""
+    if current and target and not _same_file(current, target):
+        data_dir = resolve_data_dir(settings)
+        for sub, label in (("checkpoints", "检查点"), ("recovery", "恢复副本")):
+            if _is_inside(current, Path(data_dir) / sub):
+                raise RuntimeError(
+                    f"当前打开的是项目的{label}（{Path(current).name}），不是工作文件"
+                    f"（{Path(target).name}）——为了不覆盖工作文件，没有保存。要回到这个"
+                    "状态请在工作文件里用「恢复检查点」；要继续工作请打开工作文件")
+        return current
+    return target
+
+
 def save_workfile(scene):
     settings = scene.mocap_doctor
-    result = bpy.ops.wm.save_as_mainfile(filepath=resolve_work_filepath(settings),
+    result = bpy.ops.wm.save_as_mainfile(filepath=workfile_save_target(settings),
                                          relative_remap=True)
     if "FINISHED" not in result:
         raise RuntimeError("Unable to save working file")
@@ -665,10 +726,12 @@ def restore_checkpoint(
     message="",
 ):
     global _RESTORE_WORK_PATH, _RESTORE_RESUME_STEP_ID, _RESTORE_RESET_STEP_ID, _RESTORE_MESSAGE
+    settings = bpy.context.scene.mocap_doctor
+    # moved project: same file name under the current data dir (see resolve_project_file)
+    checkpoint = resolve_project_file(settings, checkpoint, "checkpoints")
     checkpoint = str(Path(checkpoint).resolve())
     if not Path(checkpoint).is_file():
         raise FileNotFoundError(checkpoint)
-    settings = bpy.context.scene.mocap_doctor
     recovery_root = ensure_project_directories(settings) / "recovery"
     sequences = []
     for item in recovery_root.glob("*.blend"):

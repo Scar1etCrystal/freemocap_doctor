@@ -627,9 +627,11 @@ def _mute_mmr_constraints(armature, rig):
 def _write_effective_contact_report(scene):
     settings = scene.mocap_doctor
     record = project.find_step_record(settings, "contacts", create=False)
-    if record is None or not record.artifact_path or not Path(record.artifact_path).is_file():
+    report_path = (project.resolve_project_file(settings, record.artifact_path, "reports")
+                   if record is not None else "")
+    if not report_path or not Path(report_path).is_file():
         raise RuntimeError("找不到本次 planted 自动检测报告，请先运行检测")
-    with Path(record.artifact_path).open("r", encoding="utf-8") as handle:
+    with Path(report_path).open("r", encoding="utf-8") as handle:
         raw_report = json.load(handle)
     additions = {}
     deletions = {}
@@ -1891,7 +1893,10 @@ class MD_OT_NavigateStep(Operator):
             settings,
             step_at(settings.current_step).id,
         )
-        project.save_workfile(context.scene)
+        # Browsing a page is UI state: no 190 MB .blend save per click (0.3 s
+        # here, longer on Windows).  The page index goes to the manifest; the
+        # .blend is marked dirty and saved with the next real change.
+        project.save_manifest(context.scene)
         return {"FINISHED"}
 
 
@@ -1916,7 +1921,8 @@ class MD_OT_RestoreBeforeStep(Operator):
             for record in settings.steps:
                 index = STEP_INDEX.get(record.step_id, -1)
                 if index < target_index and record.status == "ACCEPTED" and record.checkpoint:
-                    path = Path(record.checkpoint)
+                    path = Path(project.resolve_project_file(
+                        settings, record.checkpoint, "checkpoints"))
                     if path.is_file():
                         candidates.append((index, path))
             if not candidates:
@@ -1955,15 +1961,16 @@ class MD_OT_ReloadAirHints(Operator):
                     "要重新载入请先在标注编辑器里清空腾空区间"
                 )
             record = project.find_step_record(settings, "contacts", create=False)
-            if (
-                record is None
-                or not record.artifact_path
-                or not Path(record.artifact_path).is_file()
-            ):
+            report_path = (
+                project.resolve_project_file(settings, record.artifact_path, "reports")
+                if record is not None
+                else ""
+            )
+            if not report_path or not Path(report_path).is_file():
                 raise RuntimeError(
                     "还没有 planted 检测结果；请先运行「Planted 检测与修订」"
                 )
-            with Path(record.artifact_path).open("r", encoding="utf-8") as handle:
+            with Path(report_path).open("r", encoding="utf-8") as handle:
                 report = json.load(handle)
             frames = []
             for frame in range(
@@ -1983,7 +1990,12 @@ class MD_OT_ReloadAirHints(Operator):
                     "检测结果里没有「双脚同时离地」的帧——这段数据里跳跃被抹平了，"
                     "自动提示帮不上忙，请在视频里手动标注腾空区间"
                 )
-            annotation.set_air_auto_ranges(scene, frames_to_ranges(frames))
+            # The track was checked empty above, but its "initialized" flag
+            # survives a manual clear - without force_effective the reload
+            # filled only the hidden auto channel and said "已载入 N 帧".
+            annotation.set_air_auto_ranges(
+                scene, frames_to_ranges(frames), force_effective=True
+            )
             settings.status_message = f"已载入 {len(frames)} 帧腾空提示初稿"
             self.report({"INFO"}, settings.status_message)
             return {"FINISHED"}
@@ -2270,11 +2282,14 @@ class MD_OT_EnterAnnotationMode(Operator):
                 record = project.find_step_record(
                     context.scene.mocap_doctor, "contacts", create=False
                 )
-                if (
-                    record is None
-                    or not record.artifact_path
-                    or not Path(record.artifact_path).is_file()
-                ):
+                report_path = (
+                    project.resolve_project_file(
+                        context.scene.mocap_doctor, record.artifact_path, "reports"
+                    )
+                    if record is not None
+                    else ""
+                )
+                if not report_path or not Path(report_path).is_file():
                     raise RuntimeError("请先运行 planted 自动检测，再打开区间标注")
             elif self.channel_group == "AIR":
                 # Airborne spans are read off the video, not off the data, so
@@ -2367,12 +2382,15 @@ class MD_OT_MMDBake(Operator):
             rig_animation = rig.animation_data
             # agent 修复轨 = 有意的修正，visual_keying 求值 NLA 栈时会被烘进去，
             # 所以放行；只拦不认识的轨。
+            # 空轨不动画任何东西：用户工作文件的 RIG 上有 103 条空 NlaTrack.*，
+            # 把它们算进来默认的自动 Bake 直接报错。只拦有 strip 的陌生轨。
             foreign_tracks = []
             if rig_animation:
                 from .core import agent_ops
                 foreign_tracks = [
                     t.name for t in rig_animation.nla_tracks
-                    if not agent_ops.is_agent_track_name(t.name)
+                    if len(t.strips) > 0
+                    and not agent_ops.is_agent_track_name(t.name)
                     and t.name != agent_ops.BASE_TRACK
                 ]
             if foreign_tracks:
