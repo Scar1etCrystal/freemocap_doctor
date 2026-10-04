@@ -186,18 +186,22 @@ def build_store_for_scene(
 
     bake = None
     path = None
+    fingerprint = None
     if data_dir and use_cache:
         path = agent_bake.bake_cache_path(
             data_dir, getattr(armature, "name", "armature"),
             start or scene.frame_start, end or scene.frame_end, tag=tag,
         )
-        bake = agent_bake.load_bake(path)
+        # 缓存键只有骨架名 + 帧范围 + 版本：重跑向导步骤 / 恢复检查点后同一个
+        # npz 还会被读出来——加基底内容指纹，不符就重烘
+        fingerprint = agent_bake.snapshot_fingerprint(armature)
+        bake = agent_bake.load_bake(path, fingerprint=fingerprint)
     if bake is None:
         bake = agent_bake.bake_bone_samples(
             scene, armature, spec["bones"], spec["points"], start, end
         )
         if path is not None:
-            agent_bake.save_bake(path, bake)
+            agent_bake.save_bake(path, bake, fingerprint=fingerprint)
 
     floor_z = float(getattr(settings, "source_floor_z", 0.0) or 0.0)
     interval_masks = scene_intervals(scene)

@@ -214,6 +214,11 @@ def swing_twist_deg(basis_quats: np.ndarray, axis: int = 1):
     """
     q = np.asarray(basis_quats, dtype=np.float64)
     q = q / np.linalg.norm(q, axis=1, keepdims=True)
+    # Same rotation, w >= 0 hemisphere: a sign-continuous series that has
+    # wrapped past 180 deg (a body that turned around) has w < 0, and the
+    # twist came out as 2*arccos(-|w|) → ±(180..360) deg, jumping ~715 deg at
+    # the sign change.  Swing / flex / abd are unchanged by the flip.
+    q = np.where(q[:, :1] < 0.0, -q, q)
     col = 1 + int(axis)                    # wxyz: component col = axis+1
     # twist = component along `axis`: t = normalize(w, v*axis)
     t = np.zeros_like(q)
@@ -265,10 +270,16 @@ def slerp_array(q0: np.ndarray, q1: np.ndarray, t: float) -> np.ndarray:
 
 
 def slerp_series(edge0: np.ndarray, edge1: np.ndarray, n: int) -> np.ndarray:
-    """(n,4) slerp ramp between two boundary quats."""
+    """(n,4) slerp bridge for the n frames BETWEEN two good boundary quats.
+
+    t = (k+1)/(n+1): the boundaries are the good neighbours themselves, so the
+    bridge must not include them.  (The old i/(n-1) put copies of the good
+    frames into the first/last bad frame - a stall then a double step at every
+    repaired spike: one bad frame of a 2 deg/frame move came out 8 deg instead
+    of 10.)  Same rule as pkl_hand's bridge strategy."""
     out = np.zeros((n, 4))
     for i in range(n):
-        out[i] = slerp_array(edge0, edge1, i / max(1, n - 1))
+        out[i] = slerp_array(edge0, edge1, (i + 1) / float(n + 1))
     return out
 
 

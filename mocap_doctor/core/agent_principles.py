@@ -735,6 +735,7 @@ def analyze_motion(scene, armature, *, bones, frame_range, main_bone=None,
       main.overshoot_deg 是相对窗口末端位姿量的绝对值，stop 后原动作还在漂时不准。
 
     baseline_tracks：要临时静音的轨（某个 op 的轨），读完恢复原静音状态。"""
+    mask = extra.pop("mask_tracks", None)    # 桥内部参数（见 vs_baseline），不对外
     a, b, frames = P.strip_window(frame_range)
     bones = P.resolve_pose_bones(armature, bones)
     onset_frac, stop_frac = float(onset_frac), float(stop_frac)
@@ -828,13 +829,24 @@ def analyze_motion(scene, armature, *, bones, frame_range, main_bone=None,
         "bones": rows, "suggest": sug,
     }
     if baseline_tracks:
+        # mask_tracks：该 op 之后叠在同骨同帧上层的修复。"当前 − 该 op 之前"两边都不能
+        # 含它们，否则差值里混进别人的修复（四元数骨上还会被共轭搅乱）
+        mask = list(mask or [])
         olds = [bool(t.mute) for t in baseline_tracks]
+        mask_olds = [bool(t.mute) for t in mask]
+        cur = smp
         try:
+            if mask:
+                for t in mask:
+                    t.mute = True
+                cur = P.sample_visible(scene, armature, names, frames)
             for t in baseline_tracks:
                 t.mute = True
             base = P.sample_visible(scene, armature, names, frames)
         finally:
             for t, m in zip(baseline_tracks, olds):
+                t.mute = m
+            for t, m in zip(mask, mask_olds):
                 t.mute = m
             scene.frame_set(int(scene.frame_current))   # 当前帧按恢复后的轨重算
         bsp = _speed(base["quat"][main], smooth)
@@ -846,7 +858,7 @@ def analyze_motion(scene, armature, *, bones, frame_range, main_bone=None,
             "baseline_events": {"onset_frame": None if bev["onset"] is None else a + bev["onset"],
                                 "peak_frame": a + bev["peak"],
                                 "stop_frame": None if bev["stop"] is None else a + bev["stop"]},
-            "bones": {bn: _baseline_report(base["quat"][bn], smp["quat"][bn], a,
+            "bones": {bn: _baseline_report(base["quat"][bn], cur["quat"][bn], a,
                                            o=bo, p=bev["peak"], s=bs,
                                            axis_frames=int(axis_frames))
                       for bn in names},
@@ -919,6 +931,13 @@ def _tool_analyze_motion(ctx, **args):
         if track is None:
             raise RuntimeError(f"baseline_op {baseline_op} 的 strip 不在场景里（已 revert？）")
         tracks = [track]
+        # 该 op 之后、写同骨同帧的上层修复：vs_baseline 两边都把它们静音
+        newer = set(agent_ops.newer_same_bone_tracks(
+            ctx["armature"], track.name, agent_ops.op_written_bones(ctx["armature"], op),
+            [tuple(op["frames"])] if op.get("frames") else [None]))
+        mask = [t for t in ctx["armature"].animation_data.nla_tracks if t.name in newer]
+        if mask:
+            rest["mask_tracks"] = mask
     res, warnings, trunc = analyze_motion(ctx["scene"], ctx["armature"],
                                           bones=names, baseline_tracks=tracks,
                                           **rest)
@@ -932,6 +951,8 @@ def _tool_analyze_motion(ctx, **args):
                f"过冲 {m['overshoot_deg']}°")
     if baseline_op:
         res["vs_baseline"]["op_id"] = str(baseline_op)
+        if rest.get("mask_tracks"):
+            res["vs_baseline"]["muted_newer_tracks"] = [t.name for t in rest["mask_tracks"]]
         vb = res["vs_baseline"]["bones"][res["main_bone"]]
         summary += (f"；vs {baseline_op}：最大差 {vb['max_diff_deg']}°，接近轴峰 "
                     f"{vb['approach_peak_deg']}° @ {vb['approach_peak_frame']}，"

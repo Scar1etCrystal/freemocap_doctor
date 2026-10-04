@@ -150,5 +150,95 @@ class DetectTests(unittest.TestCase):
         self.assertLessEqual(len(res["L"]), 1)
 
 
+class ReviewFixTests(unittest.TestCase):
+    """2026-10-04 review: M11 (adjacent segments), M29 (aa path), M18 (numpy 2 pkl)."""
+
+    def test_adjacent_segments_do_not_contaminate_each_other(self):
+        # two HaMeR flips 3 frames apart on a smooth right-wrist path (review
+        # repro): each segment's reference window used to average the OTHER
+        # segment's bad frames in → 44 deg error; a 30-frame gap stayed ≤2.2 deg
+        frames = 120
+        t = np.arange(frames)
+        good = np.stack([0.3 * np.sin(t / 15.0), 0.2 * np.cos(t / 20.0),
+                         0.1 + 0.002 * t], axis=1)
+        bad = np.zeros((frames, 63))
+        bad[:, 60:63] = good
+        for a, b in ((40, 49), (53, 60)):
+            bad[a:b + 1, 60:63] = good[a:b + 1] + np.array([0.0, 2.2, 0.0])
+        data = {"smpl_params_global": {
+            "body_pose": bad.astype(np.float32),
+            "left_hand_pose": np.zeros((frames, 45), np.float32),
+            "right_hand_pose": np.zeros((frames, 45), np.float32)}}
+        segs = [{"side": "right", "start": 40, "end": 49, "strategy": "bridge", "channel": "wrist"},
+                {"side": "right", "start": 53, "end": 60, "strategy": "bridge", "channel": "wrist"}]
+        with tempfile.TemporaryDirectory() as td:
+            src, dst = Path(td) / "m.pkl", Path(td) / "o.pkl"
+            with src.open("wb") as f:
+                pickle.dump(data, f)
+            pkl_hand.repair_pkl(src, dst, segs)
+            with dst.open("rb") as f:
+                out = pickle.load(f)["smpl_params_global"]["body_pose"][:, 60:63]
+        out = np.asarray(out, dtype=np.float64)
+        err = [float(pkl_hand.mat_geo_deg(pkl_hand.rotvec_to_mat(out[f]),
+                                          pkl_hand.rotvec_to_mat(good[f])))
+               for f in range(40, 61)]
+        self.assertLess(max(err), 6.0, [round(e, 1) for e in err])
+
+    def test_no_neighbour_segment_keeps_the_old_window(self):
+        q = pkl_hand.aa_to_quat(np.random.RandomState(1).randn(30, 3) * 0.3)
+        a = pkl_hand.repair_quats(q, 10, 14, "bridge", {})
+        b = pkl_hand.repair_quats(q, 10, 14, "bridge", {}, exclude={25, 26})
+        self.assertTrue(np.array_equal(a, b))
+
+    def test_smooth_aa_path_keeps_the_rotation_across_180(self):
+        z = np.array([0.0, 0.0, 1.0])
+        true_deg = np.arange(170.0, 201.0, 5.0)
+        true_rv = np.radians(true_deg)[:, None] * z
+        canon = pkl_hand.quat_to_aa(pkl_hand.aa_to_quat(true_rv))  # ≤180 deg form
+        out = pkl_hand.smooth_aa_path(canon[1:].copy(), true_rv[0])
+        err = [float(pkl_hand.mat_geo_deg(pkl_hand.rotvec_to_mat(o),
+                                          pkl_hand.rotvec_to_mat(r)))
+               for o, r in zip(out, true_rv[1:])]
+        self.assertLess(max(err), 1e-6, err)            # old -aa: up to 40 deg
+        jumps = np.linalg.norm(np.diff(np.vstack([true_rv[:1], out]), axis=0), axis=1)
+        self.assertLess(float(jumps.max()), np.radians(6.0))
+
+    def test_numpy2_pickle_loads_under_blender_numpy(self):
+        """A protocol-5 pkl written by numpy >= 2 references numpy._core.numeric,
+        which Blender 4.5's numpy 1.26 lacks.  Checked with Blender's own
+        bundled interpreter when it is on this machine (not Blender itself)."""
+        import glob
+        import os
+        import subprocess
+        import sys
+        data = {"smpl_params_global": {"body_pose": np.arange(12, dtype=np.float32).reshape(2, 6)}}
+        with tempfile.TemporaryDirectory() as td:
+            p = Path(td) / "np2.pkl"
+            with p.open("wb") as f:
+                pickle.dump(data, f, protocol=5)
+            got = pkl_hand.load_pickle(p)                 # this interpreter
+            self.assertTrue(np.array_equal(got["smpl_params_global"]["body_pose"],
+                                           data["smpl_params_global"]["body_pose"]))
+            if int(np.__version__.split(".")[0]) < 2:
+                return
+            cands = sorted(glob.glob(os.path.expanduser(
+                "~/Downloads/blender-4.5*/4.5/python/bin/python3.11")))
+            if not cands:
+                print("SKIP numpy 1.26 cross-check: no Blender-bundled python found")
+                return
+            root = str(Path(__file__).resolve().parents[1])
+            code = ("import pickle,sys\n"
+                    "sys.path.insert(0, %r)\n"
+                    "from mocap_doctor.core import pkl_hand\n"
+                    "try:\n pickle.load(open(%r,'rb'), encoding='latin1'); print('PLAIN_OK')\n"
+                    "except ModuleNotFoundError as e: print('PLAIN_FAILS', e)\n"
+                    "d = pkl_hand.load_pickle(%r)\n"
+                    "print('COMPAT', d['smpl_params_global']['body_pose'].sum())\n") % (root, str(p), str(p))
+            out = subprocess.run([cands[-1], "-c", code], capture_output=True, text=True,
+                                 timeout=60).stdout
+            self.assertIn("PLAIN_FAILS", out, out)        # the bug: plain load fails
+            self.assertIn("COMPAT 66.0", out, out)        # the fix: loads, same data
+
+
 if __name__ == "__main__":
     unittest.main()

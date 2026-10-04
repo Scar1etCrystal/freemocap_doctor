@@ -63,8 +63,13 @@ _batching = False     # 批量拖动时抑制逐条 frame_set（12 条 × 全场
 
 def set_quietly(settings, prop, value):
     """设置属性但不触发其 update 回调——同步批量滑块的显示值用，
-    回写会把勾选行各不相同的力度抹平。"""
+    回写会把勾选行各不相同的力度抹平。值没变就不写（不产生 depsgraph 更新）。"""
     global _quiet
+    try:
+        if getattr(settings, prop) == value:
+            return
+    except Exception:
+        pass
     _quiet = True
     try:
         setattr(settings, prop, value)
@@ -98,7 +103,13 @@ def _update_fix_exponent(item, context):
     """Per-fix strength: rewrite that strip's delta curves to delta^value.
 
     strip.influence caps at 1.0, so real strength means scaling the rotation
-    angle inside the action - axis-angle scaling keeps direction, adds gain."""
+    angle inside the action - axis-angle scaling keeps direction, adds gain.
+
+    Quiet writes (the fix list mirroring the scene, set_quietly) must not
+    rewrite the strip: every 1 s list rebuild used to re-run this for every
+    row - all keys rewritten + 2 frame_sets, counted as an "external" edit."""
+    if _quiet:
+        return
     try:
         from .core import agent_ops
         settings = getattr(getattr(context, "scene", None), "mocap_doctor", None)
@@ -115,6 +126,8 @@ def _update_fix_exponent(item, context):
 
 def _update_fix_muted(item, context):
     """Per-fix A/B: mute just this fix's track."""
+    if _quiet:
+        return
     try:
         settings = getattr(getattr(context, "scene", None), "mocap_doctor", None)
         track, _strip = _agent_fix_strip(settings, item)
@@ -372,6 +385,13 @@ def _update_param(item, context):
         _agent_fix_error(exc, "参数")
 
 
+def _put(item, name, value):
+    """Write only when different: an unchanged mirror must not tag the scene
+    (each write is a depsgraph update the agent server would count)."""
+    if getattr(item, name) != value:
+        setattr(item, name, value)
+
+
 def sync_param_item(item, op_id, spec, value):
     """quiet-write：把 op params 里的一项刷进镜像条目（tick 同步用）。
 
@@ -379,24 +399,28 @@ def sync_param_item(item, op_id, spec, value):
     global _param_quiet
     _param_quiet = True
     try:
-        item.op_id = str(op_id)
-        item.key = str(spec["key"])
-        item.kind = str(spec["kind"])
-        item.label = str(spec.get("label") or spec["key"])
-        item.options = json.dumps(spec.get("options") or [])
+        _put(item, "op_id", str(op_id))
+        _put(item, "key", str(spec["key"]))
+        _put(item, "kind", str(spec["kind"]))
+        _put(item, "label", str(spec.get("label") or spec["key"]))
+        _put(item, "options", json.dumps(spec.get("options") or []))
         if item.kind == "float":
-            item.fval = float(value) if value is not None else 0.0
+            v = float(value) if value is not None else 0.0
+            if abs(float(item.fval) - v) > 1e-7 * max(1.0, abs(v)):
+                item.fval = v
         elif item.kind == "int":
-            item.ival = int(value) if value is not None else 0
+            _put(item, "ival", int(value) if value is not None else 0)
         elif item.kind == "range":
             pair = list(value or [0, 0])[:2]
-            item.ival = int(pair[0])
-            item.ival2 = int(pair[-1])
+            _put(item, "ival", int(pair[0]))
+            _put(item, "ival2", int(pair[-1]))
         elif item.kind == "choice":
-            item.sval = "" if value is None else str(value)
+            _put(item, "sval", "" if value is None else str(value))
         elif item.kind == "object":
-            item.sval = "" if value is None else str(value)
-            item.obj = bpy.data.objects.get(item.sval) if item.sval else None
+            _put(item, "sval", "" if value is None else str(value))
+            obj = bpy.data.objects.get(item.sval) if item.sval else None
+            if item.obj != obj:
+                item.obj = obj
     finally:
         _param_quiet = False
 

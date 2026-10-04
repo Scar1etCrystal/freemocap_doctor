@@ -22,6 +22,7 @@ from .animation import (
     EPSILON,
     _fcurves,
     bone_path,
+    add_missing_keys,
     cache_fcurve_values,
     current_view_layer,
     ensure_action,
@@ -615,6 +616,77 @@ def _lerp_angle(current: float, target: float, strength: float) -> float:
     return current + difference * strength
 
 
+def _action_rotation_sampler(rig: Any, bone_names: Sequence[str]) -> Any:
+    """frame -> pose rotation read straight off the active Action's F-curves,
+    or None when that would not equal what a frame_set leaves in the pose
+    properties (then the caller keeps its frame sweep).
+
+    Equal when: the Action is evaluated alone at full strength (no tweak mode,
+    influence 1, REPLACE, no unmuted NLA strip underneath that could matter),
+    no driver touches the channel, and an unanimated (or muted) channel keeps
+    its static property value.  Euler and quaternion bones only - the values
+    and the mathutils conversions are exactly get_pose_quaternion's."""
+
+    anim = getattr(rig, "animation_data", None)
+    action = getattr(anim, "action", None) if anim is not None else None
+    if action is None or getattr(anim, "use_tweak_mode", False):
+        return None
+    if float(getattr(anim, "action_influence", 1.0)) != 1.0:
+        return None
+    if str(getattr(anim, "action_blend_type", "REPLACE")) != "REPLACE":
+        return None
+    if getattr(anim, "use_nla", True) and any(
+        not track.mute and len(track.strips) > 0 for track in anim.nla_tracks
+    ):
+        return None
+    slots = getattr(action, "slots", None)
+    if slots is not None and (
+        len(slots) != 1 or getattr(anim, "action_slot", None) is None
+    ):
+        # legacy action.fcurves is the first slot's channelbag: with several
+        # slots (or none bound) it may not be what animates this rig
+        return None
+    channels: dict[str, tuple[str, list]] = {}
+    for name in bone_names:
+        pose_bone = rig.pose.bones[name]
+        mode = str(pose_bone.rotation_mode)
+        if mode == "QUATERNION":
+            prop, count = "rotation_quaternion", 4
+        elif mode == "AXIS_ANGLE":
+            return None
+        else:
+            prop, count = "rotation_euler", 3
+        path = bone_path(name, prop)
+        static = list(getattr(pose_bone, prop))
+        chans = []
+        for index in range(count):
+            if anim.drivers.find(path, index=index) is not None:
+                return None
+            fcurve = get_fcurve(action, path, index)
+            group = getattr(fcurve, "group", None) if fcurve is not None else None
+            if fcurve is not None and (
+                fcurve.mute or not fcurve.is_valid or (group is not None and group.mute)
+            ):
+                fcurve = None
+            chans.append((fcurve, float(static[index])))
+        channels[name] = (mode, chans)
+
+    def sample(name: str, frame: int) -> Any:
+        mode, chans = channels[name]
+        values = [
+            float(fcurve.evaluate(frame)) if fcurve is not None else static
+            for fcurve, static in chans
+        ]
+        if mode == "QUATERNION":
+            quaternion = Quaternion(values)
+        else:
+            quaternion = Euler(values, mode).to_quaternion()
+        quaternion.normalize()
+        return quaternion
+
+    return sample
+
+
 def damp_foot_ik_tilt(
     scene: Any,
     rig: Any,
@@ -652,13 +724,21 @@ def damp_foot_ik_tilt(
         bone: {} for bone in valid
     }
     view_layer = current_view_layer()
+    # P1: the read pass only needs foot_ik's own rotation channels - straight
+    # off the F-curves when that is provably the same value (~1500 whole-scene
+    # frame_sets saved, 4.3 s -> ~1 s); otherwise the original sweep.
+    sampler = _action_rotation_sampler(rig, valid)
     with preserve_scene_frame(scene, view_layer):
         for frame in range(start, end + 1):
-            set_scene_frame(scene, frame, view_layer)
+            if sampler is None:
+                set_scene_frame(scene, frame, view_layer)
             for bone_name in valid:
-                euler = get_pose_quaternion(
-                    rig.pose.bones[bone_name]
-                ).to_euler("XYZ")
+                quaternion = (
+                    get_pose_quaternion(rig.pose.bones[bone_name])
+                    if sampler is None
+                    else sampler(bone_name, frame)
+                )
+                euler = quaternion.to_euler("XYZ")
                 samples[bone_name][frame] = (
                     float(euler.x),
                     float(euler.y),
@@ -813,18 +893,16 @@ def repair_mesh_floor_lift_v3_safe(
 
     # 任务2：原来先单独扫一遍只为读 original_z、删旧 Z 曲线、再扫第二遍量网格
     # （第二遍里又把 Z 显式设回 original_z）。合成一遍：旧曲线还在时 frame_set
-    # 给出的 Z 就是 original_z[frame]，再显式设一次同值 → 求值状态与原来第二遍
-    # 逐位相同；旧曲线在循环后再删。省掉 1499 次整场景求值。
+    # 给出的 Z 就是 original_z[frame]，求值状态与原来第二遍逐位相同；旧曲线在
+    # 循环后再删。省掉 1499 次整场景求值。
+    # P2：之后保留的"把同一个值显式设回去 + view_layer.update()"也去掉——值没变，
+    # 只是逼整棵子树（Teto 网格）每帧再算一遍（bench 摘要逐位相同）。
     minimum_by_frame: dict[int, float | None] = {}
     mesh_by_frame: dict[int, str | None] = {}
     with preserve_scene_frame(scene, view_layer):
         for frame in range(start, end + 1):
             set_scene_frame(scene, frame, view_layer)
             original_z[frame] = float(correction.location.z)
-            # explicitly pin that frame's clean baseline before evaluating the mesh
-            correction.location.z = original_z[frame]
-            if view_layer is not None:
-                view_layer.update()
             minimum: float | None = None
             minimum_mesh: str | None = None
             for mesh in meshes:
@@ -943,55 +1021,71 @@ def analyze_foot_ik_drift(
     results: dict[str, list[dict[str, Any]]] = {"L": [], "R": []}
     missing: list[str] = []
     view_layer = current_view_layer()
-    with preserve_scene_frame(scene, view_layer):
-        for side in ("L", "R"):
-            bone_name = foot_bones[side]
-            if rig.pose.bones.get(bone_name) is None:
-                missing.append(bone_name)
+    # P3: one frame sweep for both feet (the L and R segments overlap: 1711
+    # frame_sets → the 1156 of their union); the per-frame positions and every
+    # number below are the same as sweeping segment by segment.
+    plan: dict[str, list[tuple[int, int, int, int]]] = {"L": [], "R": []}
+    wanted: dict[int, set[str]] = {}
+    for side in ("L", "R"):
+        bone_name = foot_bones[side]
+        if rig.pose.bones.get(bone_name) is None:
+            missing.append(bone_name)
+            continue
+        for raw_start, raw_end in _normalize_side_ranges(
+            planted_ranges, side, start, end
+        ):
+            segment_start = raw_start + int(trim_segment_ends)
+            segment_end = raw_end - int(trim_segment_ends)
+            if segment_end - segment_start + 1 < int(min_segment_len):
                 continue
-            for raw_start, raw_end in _normalize_side_ranges(
-                planted_ranges, side, start, end
-            ):
-                segment_start = raw_start + int(trim_segment_ends)
-                segment_end = raw_end - int(trim_segment_ends)
-                if segment_end - segment_start + 1 < int(min_segment_len):
-                    continue
-                positions: list[tuple[int, Any]] = []
-                for frame in range(segment_start, segment_end + 1):
-                    set_scene_frame(scene, frame, view_layer)
-                    location = pose_bone_world_location(rig, bone_name)
-                    if location is not None:
-                        positions.append((frame, location))
-                if not positions:
-                    continue
-                anchor = positions[0][1]
-                maximum = 0.0
-                total = 0.0
-                previous = anchor
-                for _, location in positions[1:]:
-                    maximum = max(
-                        maximum,
-                        math.hypot(location.x - anchor.x, location.y - anchor.y),
-                    )
-                    total += math.hypot(
-                        location.x - previous.x,
-                        location.y - previous.y,
-                    )
-                    previous = location
-                final = positions[-1][1]
-                results[side].append(
-                    {
-                        "frames": [segment_start, segment_end],
-                        "source_frames": [raw_start, raw_end],
-                        "length": segment_end - segment_start + 1,
-                        "max_drift_xy_m": round(maximum, 5),
-                        "end_drift_xy_m": round(
-                            math.hypot(final.x - anchor.x, final.y - anchor.y),
-                            5,
-                        ),
-                        "total_xy_motion_m": round(total, 5),
-                    }
+            plan[side].append((raw_start, raw_end, segment_start, segment_end))
+            for frame in range(segment_start, segment_end + 1):
+                wanted.setdefault(frame, set()).add(side)
+    located: dict[tuple[str, int], Any] = {}
+    with preserve_scene_frame(scene, view_layer):
+        for frame in sorted(wanted):
+            set_scene_frame(scene, frame, view_layer)
+            for side in sorted(wanted[frame]):
+                location = pose_bone_world_location(rig, foot_bones[side])
+                if location is not None:
+                    located[(side, frame)] = location
+    for side in ("L", "R"):
+        for raw_start, raw_end, segment_start, segment_end in plan[side]:
+            positions: list[tuple[int, Any]] = [
+                (frame, located[(side, frame)])
+                for frame in range(segment_start, segment_end + 1)
+                if (side, frame) in located
+            ]
+            if not positions:
+                continue
+            anchor = positions[0][1]
+            maximum = 0.0
+            total = 0.0
+            previous = anchor
+            for _, location in positions[1:]:
+                maximum = max(
+                    maximum,
+                    math.hypot(location.x - anchor.x, location.y - anchor.y),
                 )
+                total += math.hypot(
+                    location.x - previous.x,
+                    location.y - previous.y,
+                )
+                previous = location
+            final = positions[-1][1]
+            results[side].append(
+                {
+                    "frames": [segment_start, segment_end],
+                    "source_frames": [raw_start, raw_end],
+                    "length": segment_end - segment_start + 1,
+                    "max_drift_xy_m": round(maximum, 5),
+                    "end_drift_xy_m": round(
+                        math.hypot(final.x - anchor.x, final.y - anchor.y),
+                        5,
+                    ),
+                    "total_xy_motion_m": round(total, 5),
+                }
+            )
     for side in ("L", "R"):
         results[side].sort(key=lambda item: item["max_drift_xy_m"], reverse=True)
     return {
@@ -1258,6 +1352,14 @@ def sole_contact_offsets(
     a flat foot degenerates to `floor + sole_offset` and a toe-stand
     automatically keeps its higher ankle instead of being flattened.
 
+    "Own half" is decided in ARMATURE space (the sign of the ankle bone's
+    ``head_local.x``), never world X: the model is not centred on world X=0
+    (the fixture and the user's work file sit at X~-2.56), and a world-X
+    split put both ankles on the same side, so both searched the whole body
+    and picked the same left-boot vertex - the right foot's ankle->sole vector
+    came out 15.5 cm sideways and the planted anchor height 8-27 mm wrong at
+    3-10 deg of foot roll.
+
     Returns ``{side: Vector}`` or None when the geometry cannot be measured.
     """
 
@@ -1267,6 +1369,7 @@ def sole_contact_offsets(
     if not vertices:
         return None
     mesh_world = mesh_object.matrix_world
+    mesh_to_armature = sample_armature.matrix_world.inverted_safe() @ mesh_world
     step = max(1, len(vertices) // max(1, int(vertex_sample_limit)))
     out: dict[str, Any] = {}
     for side, bone_name in ankle_bones.items():
@@ -1274,13 +1377,14 @@ def sole_contact_offsets(
         if bone is None:
             continue
         head_w = sample_armature.matrix_world @ bone.head_local
-        sign = 1.0 if head_w.x >= 0.0 else -1.0
+        sign = 1.0 if bone.head_local.x >= 0.0 else -1.0
         lowest = None
         lowest_z = None
         for index in range(0, len(vertices), step):
-            v = mesh_world @ vertices[index].co
-            if v.x * sign < 0.0:
+            co = vertices[index].co
+            if (mesh_to_armature @ co).x * sign < 0.0:
                 continue
+            v = mesh_world @ co
             if lowest_z is None or v.z < lowest_z:
                 lowest, lowest_z = v, v.z
         if lowest is None:
@@ -1660,24 +1764,8 @@ def _settle_pelvis_for_reach(
         if abs(corr) > PELVIS_DEADBAND
     }
     for curve, cache in zip(loc_curves, loc_cache):
-        missing_keys = [f for f in needed_frames if f not in cache]
-        if not missing_keys:
-            continue
-        existing = {
-            int(key.as_pointer()) for key in curve.keyframe_points
-        }
-        curve.keyframe_points.add(len(missing_keys))
-        fresh = [
-            key
-            for key in curve.keyframe_points
-            if int(key.as_pointer()) not in existing
-        ]
-        for key, frame in zip(fresh, sorted(missing_keys)):
-            key.co.x = float(frame)
-            key.co.y = 0.0
-            key.interpolation = "LINEAR"
-            cache[frame] = key
-        curve.update()
+        # add() reallocates the key array: new keys = the last n, cache rebuilt
+        add_missing_keys(curve, needed_frames, cache)
 
     written = 0
     for frame, corr in zip(frames, corrected):
@@ -2204,24 +2292,10 @@ def stabilize_planted_feet(
         all_curves = [*setup["loc_curves"], *setup["rot_curves"]]
         all_caches = [*setup["loc_cache"], *setup["rot_cache"]]
         for curve, cache in zip(all_curves, all_caches):
-            missing = [f for f in frames_needed if f not in cache]
-            if not missing:
-                continue
-            existing = {
-                int(key.as_pointer()) for key in curve.keyframe_points
-            }
-            curve.keyframe_points.add(len(missing))
-            fresh = [
-                key
-                for key in curve.keyframe_points
-                if int(key.as_pointer()) not in existing
-            ]
-            for key, frame in zip(fresh, sorted(missing)):
-                key.co.x = float(frame)
-                key.co.y = 0.0
-                key.interpolation = "LINEAR"
-                cache[frame] = key
-            curve.update()
+            # add() reallocates the key array and update() re-sorts it: the
+            # new keys are the last n, and the cache must be rebuilt (the
+            # old as_pointer() diff rewrote the curve's FIRST keys instead)
+            add_missing_keys(curve, frames_needed, cache)
 
     def _write(corrections, measured):
         written = 0
@@ -2327,7 +2401,14 @@ def stabilize_planted_feet(
         frames_written = _write(_corrections(measured), measured)
         print(f"[STAB] wrote corrections: {frames_written} frames", flush=True)
 
-        post = _measure(work_frames)
+        # P3: _interior_residuals reads only the weight-1 interiors (anchors sit
+        # inside them) - the blend rings need no second measurement
+        post = _measure(sorted({
+            frame
+            for side in ("L", "R")
+            for segment in segments[side]
+            for frame in range(segment["frames"][0], segment["frames"][1] + 1)
+        }))
         max_pos, max_rot, after_rows = _interior_residuals(post)
         iterations.append(
             {

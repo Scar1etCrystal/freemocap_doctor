@@ -19,9 +19,12 @@ Client protocol: one JSON object per line, both directions.
 from __future__ import annotations
 
 import json
+import os
 import queue
+import re
 import socket
 import socketserver
+import sys
 import threading
 import time
 import traceback
@@ -64,6 +67,7 @@ _STATUS = {"clients": 0, "last_tool": "", "last_error": ""}
 _LEASES = agent_claims.LeaseTable()
 _JOURNAL = agent_claims.WriteJournal()
 _IN_TOOL = False            # True while a tool runs: its own frame_set must not bump
+_IN_SYNC = False            # True while the fix-list timer mirrors the scene (same rule)
 _LAST_FRAME_SEEN = None     # frame-only depsgraph updates (scrub/playback) ≠ edits
 _ANC_CACHE: dict = {}       # armature name → {bone: ancestors(actual ∪ semantic)}
 # 任务2：信号库的输入是 npz 缓存 + 标注区间 + 设置，agent 写 delta 动不了其中
@@ -174,7 +178,7 @@ def _bump_version(scene=None, depsgraph=None):
     that carry no Action edit.  What is left is an EXTERNAL change (the user
     edited something) → journal row with unscoped bones = stale for all."""
     global _DATA_VERSION, _LAST_BUMP, _LAST_FRAME_SEEN
-    if _IN_TOOL:
+    if _IN_TOOL or _IN_SYNC:
         return
     try:
         frame = int(scene.frame_current) if scene is not None else None
@@ -215,15 +219,31 @@ def _redraw():
         pass
 
 
+def _playback_running() -> bool:
+    try:
+        return any(getattr(w.screen, "is_animation_playing", False)
+                   for w in bpy.context.window_manager.windows)
+    except Exception:
+        return False
+
+
+def _toggle_playback():
+    with bpy.context.temp_override():
+        bpy.ops.screen.animation_play()
+
+
 def _focus_preview(scene, frame_range):
     try:
         agent_ops.set_preview(scene, frame_range)
         scene.frame_set(int(frame_range[0]))
     except Exception:
         pass
+    # animation_play() is a TOGGLE: with several agents writing, playback went
+    # on / off / on.  Only start it when it is not running already.
+    if _playback_running():
+        return
     try:
-        with bpy.context.temp_override():
-            bpy.ops.screen.animation_play()
+        _toggle_playback()
     except Exception:
         pass  # playback start is a nicety, never a failure
 
@@ -231,16 +251,9 @@ def _focus_preview(scene, frame_range):
 def _base_action(armature):
     """The baseline action - active action, or the mcd_base strip's action once
     it has been pushed onto NLA (active action sits ABOVE tracks and REPLACEd
-    our deltas, so the first write pushes it down)."""
-    anim = getattr(armature, "animation_data", None)
-    if anim is None:
-        return None
-    if anim.action is not None:
-        return anim.action
-    for track in anim.nla_tracks:
-        if track.name == agent_ops.BASE_TRACK and track.strips:
-            return track.strips[0].action
-    return None
+    our deltas, so the first write pushes it down).  Same rule as
+    agent_ops.base_action_of (a foreign active Action over mcd_base raises)."""
+    return agent_ops.base_action_of(armature)
 
 
 def _track_by_name(armature, name):
@@ -744,42 +757,34 @@ def _tool_effect_check(ctx, track_name=None, op_id=None, bones=None,
         if not frames:
             # 默认采样落在 taper 之外：strip 两端各 blend 帧权重从 0 渐升，
             # 端点权重恰为 0——旧版采 [起, 中, 止] 必然报"1/3 帧有变化"。
+            # 工具自己报了生效段（overlap 的 metrics.inner_frames、motion_copy 的
+            # inner_range）就用它：overlap 的自动 blend 在 params 里记成 None，
+            # 按 0 算会采到 taper 端点。
             fr = op.get("frames")
-            bl = int((op.get("params") or {}).get("blend", 4) or 0)
-            lo, hi = fr[0] + bl, fr[1] - bl
-            if hi < lo:
-                lo, hi = fr[0], fr[1]
+            mets = op.get("metrics") or {}
+            inner = mets.get("inner_frames") or mets.get("inner_range")
+            if inner and int(inner[1]) >= int(inner[0]):
+                lo, hi = int(inner[0]), int(inner[1])
+            else:
+                bl = (op.get("params") or {}).get("blend", 4)
+                if bl is None:
+                    bl = mets.get("blend", 0)
+                bl = int(bl or 0)
+                lo, hi = fr[0] + bl, fr[1] - bl
+                if hi < lo:
+                    lo, hi = fr[0], fr[1]
             frames = sorted({lo, (lo + hi) // 2, hi})
     if track_name is None:
-        # 没指定就查所有 agent 轨（A/B 语义：全部修复一起 mute）
+        # 没指定就查所有 agent 轨（A/B 语义：全部修复一起 mute——一次 A/B，
+        # 不再逐轨测再取最大：既与文档一致，求值次数也从 6×轨数 降到 6）
         armature_anim = getattr(armature, "animation_data", None)
         names = [t.name for t in (armature_anim.nla_tracks if armature_anim else ())
                  if agent_ops.is_agent_track_name(t.name)]
         if not names:
             raise RuntimeError("RIG 上没有 agent 轨")
-        merged = None
-        for nm in names:
-            res = agent_ops.effect_check(ctx["scene"], armature,
-                                         track_name=nm,
-                                         bones=list(bones), frames=list(frames))
-            if merged is None:
-                merged = res
-                merged["tracks"] = [nm]
-            else:
-                merged["tracks"].append(nm)
-                for a, b in zip(merged["per_frame"], res["per_frame"]):
-                    for bone, cell in b["bones"].items():
-                        cur = a["bones"].get(bone)
-                        if cur is None or cell["pos_mm"] > cur["pos_mm"] \
-                                or cell["rot_deg"] > cur["rot_deg"]:
-                            a["bones"][bone] = cell
-                    a["moved"] = a["moved"] or b["moved"]
-        hits = sum(1 for r in merged["per_frame"] if r["moved"])
-        merged["verdict"] = f"{hits}/{len(merged['per_frame'])} 帧有变化"
-        merged["pass"] = hits == len(merged["per_frame"])
-        merged["moved_any"] = hits > 0
-        merged["track"] = "all"
-        res = merged
+        res = agent_ops.effect_check(ctx["scene"], armature, track_names=names,
+                                     bones=list(bones), frames=list(frames))
+        res["tracks"] = names
         label = f"全部 agent 轨({len(names)})"
     else:
         res = agent_ops.effect_check(ctx["scene"], armature,
@@ -1633,6 +1638,9 @@ def _dispatch(request: Mapping[str, Any]) -> dict:
         _check_version(args, scope, agent_id, ctx, notes)
         if scope is not None:
             if not dry:
+                # 坏掉的 op 日志在写 strip 之前就报出来（M16）：否则 strip 写上了、
+                # 记账失败，留下一条"未登记"的孤儿
+                agent_ops._load_oplog(ctx["data_dir"])
                 _enforce_claims(name, ctx, scope, agent_id, force, notes)
             if name not in _OP_TOOLS and name != "ab_toggle":
                 notes.extend(_stack_warnings(name, ctx, scope, agent_id))
@@ -1754,14 +1762,45 @@ def _watchdog():
     return WATCHDOG_INTERVAL if _running else None
 
 
+# A web page can POST to 127.0.0.1:6211 (text/plain needs no CORS preflight):
+# the body line would be executed - save to any path, eval_bpy.  The JSON-lines
+# protocol never starts with an HTTP request line, so such a connection is
+# dropped before its body is read.  An optional shared token (off by default,
+# protocol unchanged): set MCD_AGENT_TOKEN for Blender and the clients; every
+# request line must then carry "token".
+_HTTP_REQUEST_LINE = re.compile(rb"^[A-Z]{3,10} \S+ HTTP/\d")
+TOKEN_ENV = "MCD_AGENT_TOKEN"
+
+
+def _looks_like_http(line: bytes) -> bool:
+    return bool(_HTTP_REQUEST_LINE.match(line.lstrip(b"\xef\xbb\xbf")))
+
+
 class _Handler(socketserver.StreamRequestHandler):
     def handle(self):
         _STATUS["clients"] += 1
+        token = os.environ.get(TOKEN_ENV) or None
         try:
+            first = True
             for line in self.rfile:
+                if first:
+                    first = False
+                    if _looks_like_http(line):
+                        _STATUS["last_error"] = "拒绝了一个 HTTP 请求（不是 JSON-lines 客户端）"
+                        return
                 try:
                     request = json.loads(line.decode("utf-8"))
-                except json.JSONDecodeError:
+                except (json.JSONDecodeError, UnicodeDecodeError):
+                    continue
+                if not isinstance(request, dict):
+                    continue
+                if token is not None and request.pop("token", None) != token:
+                    self.wfile.write((json.dumps({
+                        "id": request.get("id"), "ok": False, "tool": request.get("tool"),
+                        "error": {"code": "E_AUTH", "message": "token 不对或缺失",
+                                  "fix": f"请求里带 \"token\"（与 Blender 的 {TOKEN_ENV} 相同）"}},
+                        ensure_ascii=False) + "\n").encode("utf-8"))
+                    self.wfile.flush()
                     continue
                 _requests.put((self.wfile, request))
                 _WAKE.set()
@@ -1769,9 +1808,24 @@ class _Handler(socketserver.StreamRequestHandler):
             _STATUS["clients"] -= 1
 
 
+def _bind_flags(platform=None) -> dict:
+    """Windows: SO_REUSEADDR (socketserver sets it when allow_reuse_address)
+    lets a SECOND process bind the same port - two Blenders both "start" the
+    server and requests land on either one, i.e. in the wrong file.  Windows'
+    exclusive bind is SO_EXCLUSIVEADDRUSE.  POSIX SO_REUSEADDR only skips
+    TIME_WAIT and never allows two listeners, so it stays."""
+    win = str(platform if platform is not None else sys.platform).startswith("win")
+    return {"reuse_address": not win, "exclusive": win}
+
+
 class _Server(socketserver.ThreadingTCPServer):
-    allow_reuse_address = True
+    allow_reuse_address = _bind_flags()["reuse_address"]
     daemon_threads = True
+
+    def server_bind(self):
+        if _bind_flags()["exclusive"] and hasattr(socket, "SO_EXCLUSIVEADDRUSE"):
+            self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+        super().server_bind()
 
 
 _server = None
@@ -1881,6 +1935,7 @@ def ensure_layout(settings=None, scene=None) -> dict:
 
 FIXLIST_INTERVAL = 1.0
 _LAST_FIXLIST = 0.0          # wall-clock of last _fixlist_tick
+_FIXLIST_SYNCED = None       # (scene, rig, data dir) the empty list was last synced for
 
 # ---- 参数控件防抖重写 + 方向空物体监视 ------------------------------------
 # 修复条目的参数控件（properties.MD_PG_AgentParam）不直接调 reapply：
@@ -1892,6 +1947,49 @@ PARAM_DEBOUNCE = 0.25
 _PARAM_PENDING: dict = {}      # (op_id, key) -> value
 _PARAM_LAST_EDIT = 0.0
 _EMPTY_WATCH: dict = {}        # op_id -> 方向物体 matrix 签名
+
+
+def _dir_object_signature(obj) -> tuple:
+    """What the user can EDIT on a direction object - not where it happens to be
+    at the current frame.  The old signature was the current-frame matrix_world:
+    an animated or bone-parented arrow (both documented) changed it on every
+    scrub / playback stop and re-ran the whole op (75 f ≈ 0.3 s, 300 f ≈ 1 s)
+    for an identical result.  Parent + parent inverse + constraints + (keyed:
+    the action's keys | static: matrix_basis)."""
+    import hashlib
+    parts = [obj.parent.name if obj.parent is not None else "",
+             str(obj.parent_type), str(getattr(obj, "parent_bone", "") or "")]
+    parts += [round(float(v), 5) for row in obj.matrix_parent_inverse for v in row]
+    for con in getattr(obj, "constraints", ()):
+        parts += [con.type, con.name, bool(con.mute), round(float(con.influence), 5),
+                  getattr(getattr(con, "target", None), "name", ""),
+                  str(getattr(con, "subtarget", "") or "")]
+    anim = getattr(obj, "animation_data", None)
+    act = getattr(anim, "action", None) if anim is not None else None
+    if act is not None:
+        h = hashlib.sha1()
+        for fc in act.fcurves:
+            n = len(fc.keyframe_points)
+            buf = np.empty(2 * n, dtype=np.float32)
+            h.update(f"{fc.data_path}[{fc.array_index}]:{n}:{fc.mute}".encode())
+            for prop in ("co", "handle_left", "handle_right"):
+                fc.keyframe_points.foreach_get(prop, buf)
+                h.update(buf.tobytes())
+            ip = np.empty(n, dtype=np.int32)
+            fc.keyframe_points.foreach_get("interpolation", ip)
+            h.update(ip.tobytes())
+        parts.append(h.hexdigest())
+        # channels the action does not drive are static edits: keep them
+        keyed = {(fc.data_path, fc.array_index) for fc in act.fcurves}
+        parts.append(str(obj.rotation_mode))
+        for prop in ("location", "rotation_euler", "rotation_quaternion",
+                     "rotation_axis_angle", "scale"):
+            for i, v in enumerate(getattr(obj, prop)):
+                if (prop, i) not in keyed:
+                    parts.append(round(float(v), 5))
+    else:
+        parts += [round(float(v), 5) for row in obj.matrix_basis for v in row]
+    return tuple(parts)
 
 
 def schedule_param_apply(op_id, key, value):
@@ -1935,9 +2033,7 @@ def _param_tick():
             obj = bpy.data.objects.get(str(dob))
             if obj is None:
                 continue
-            mw = obj.matrix_world
-            sig = (tuple(round(v, 5) for v in mw.translation)
-                   + tuple(round(v, 5) for v in mw.to_quaternion()))
+            sig = _dir_object_signature(obj)
             prev = _EMPTY_WATCH.get(op.get("id"))
             _EMPTY_WATCH[op["id"]] = sig
             if prev is not None and prev != sig:
@@ -2019,7 +2115,7 @@ def _fixlist_tick():
     Draw may only read; every mutation (NLA migration, collection rebuild)
     happens here.  Stale = op log revision moved ahead of the list, or the
     list is empty while the rig exists (fresh file)."""
-    global _LAST_FIXLIST
+    global _LAST_FIXLIST, _IN_SYNC, _FIXLIST_SYNCED
     _LAST_FIXLIST = time.time()
     try:
         scene = bpy.context.scene
@@ -2028,11 +2124,25 @@ def _fixlist_tick():
         settings = getattr(scene, "mocap_doctor", None)
         if settings is None or not settings.initialized:
             return FIXLIST_INTERVAL
+        rig = _rig_armature(settings, scene)
+        key = (scene.as_pointer(), rig.name if rig is not None else None,
+               str(_data_dir(settings)))
+        # 空列表只在"这个文件/骨架/日志目录还没同步过"时算过期——以前列表为空时
+        # 条件恒真，每秒重建一次并写场景属性，每秒把数据版本号 +1（"外部改动"）
         stale = (int(settings.agent_fixes_rev) != int(settings.agent_ops_rev)
-                 or (len(settings.agent_fixes) == 0
-                     and _rig_armature(settings, scene) is not None))
+                 or (len(settings.agent_fixes) == 0 and rig is not None
+                     and key != _FIXLIST_SYNCED))
         if stale:
-            ensure_layout(settings, scene)
+            # 先把还没求值的改动（用户刚做的编辑）在标志外求值掉，照常记版本
+            bpy.context.view_layer.update()
+            # 镜像场景状态不是编辑：期间（含把这些写入求值掉的 update）不记版本
+            _IN_SYNC = True
+            try:
+                ensure_layout(settings, scene)
+                _FIXLIST_SYNCED = key
+                bpy.context.view_layer.update()
+            finally:
+                _IN_SYNC = False
     except Exception as exc:  # noqa: BLE001 - a timer must never die
         _STATUS["last_error"] = f"fixlist: {exc!r}"
     return FIXLIST_INTERVAL
@@ -2040,8 +2150,14 @@ def _fixlist_tick():
 
 def _on_file_loaded(*_args):
     """A file load can outlive the startup registration - re-arm the timer."""
+    global _STORE, _STORE_EPOCH, _FIXLIST_SYNCED
     _PARAM_PENDING.clear()
     _EMPTY_WATCH.clear()       # 新文件里旧签名无意义
+    _FIXLIST_SYNCED = None
+    # 内存里的信号库属于上一个文件（恢复检查点 = 重新打开文件）：作废，下次读
+    # 按新文件的基底指纹决定用缓存还是重烘
+    _STORE = None
+    _STORE_EPOCH += 1
     try:
         agent_anatomy.reset_caches()     # 掌心/铰链标定是"这个文件、这套骨架"的（审查 M21）
         from . import agent_view
@@ -2085,11 +2201,19 @@ def _bump_ops_rev_from(settings):
         pass
 
 
+def _same_float(a, b) -> bool:
+    return abs(float(a) - float(b)) <= 1e-6 * max(1.0, abs(float(b)))
+
+
 def sync_fixes_list(settings, scene=None) -> int:
     """Rebuild the panel's fix list from op log + live NLA state.
 
     Values already shown are preserved by op_id, so a rebuild never fights the
-    slider the user is dragging (drags do not touch agent_ops_rev)."""
+    slider the user is dragging (drags do not touch agent_ops_rev).  It mirrors
+    the scene - it must not edit it: an unchanged list is not rewritten, and
+    力度/静音 are written quietly (their update callbacks re-write the strip
+    and frame_set, which the server counted as an external edit → E_STALE for
+    every other agent, once per second while the list was empty)."""
     scene = scene or bpy.context.scene
     rig = _rig_armature(settings, scene)
     if rig is None:
@@ -2105,38 +2229,60 @@ def sync_fixes_list(settings, scene=None) -> int:
     coll = settings.agent_fixes
     keep = {item.op_id: (item.exponent, item.muted, item.selected)
             for item in coll}
-    active_id = (coll[settings.agent_fix_index].op_id
-                 if 0 <= settings.agent_fix_index < len(coll) else "")
-    coll.clear()
+    want = []
     for row in rows:
-        item = coll.add()
-        item.op_id = row["op_id"] or ""
-        item.label = (row.get("label")
-                      or (f"{row['frames'][0]}-{row['frames'][1]} {row['tool']}"
-                          if row.get("frames")
-                          else f"{row['tool']} {row['strip']}"))
-        o = log.get(item.op_id) or {}
+        op_id = row["op_id"] or ""
+        label = (row.get("label")
+                 or (f"{row['frames'][0]}-{row['frames'][1]} {row['tool']}"
+                     if row.get("frames")
+                     else f"{row['tool']} {row['strip']}"))
+        o = log.get(op_id) or {}
         tags = ([str(o["owner"])] if o.get("owner") else []) + (["源已变,需reapply"] if o.get("stale") else [])
         if tags:
-            item.label = f"{item.label} · {' · '.join(tags)}"
-        item.strip = row.get("strip") or ""
-        item.track = row.get("track") or ""
-        item.status = row.get("status") or ""
-        item.alive = bool(row.get("alive"))
-        item.frames = f"{row['frames'][0]}-{row['frames'][1]}" if row.get("frames") else ""
-        prev = keep.get(item.op_id)
+            label = f"{label} · {' · '.join(tags)}"
+        prev = keep.get(op_id)
         if prev is not None and not row.get("alive"):
-            item.exponent, item.muted = prev[0], prev[1]   # 丢失行：保住调过的值
+            exponent, muted = prev[0], prev[1]   # 丢失行：保住调过的值
         else:
-            item.exponent = float(row.get("exponent", 1.0) or 1.0)
-            item.muted = bool(row.get("muted"))
-        item.selected = bool(prev[2]) if prev is not None else False
-    settings.agent_fixes_rev = int(settings.agent_ops_rev)
-    if active_id:
-        for i, item in enumerate(coll):
-            if item.op_id == active_id:
-                _props.set_quietly(settings, "agent_fix_index", i)
-                break
+            exponent = float(row.get("exponent", 1.0))   # 0 = 力度静音，别显示成 1
+            muted = bool(row.get("muted"))
+        want.append({
+            "op_id": op_id, "label": label,
+            "strip": row.get("strip") or "", "track": row.get("track") or "",
+            "status": row.get("status") or "", "alive": bool(row.get("alive")),
+            "frames": (f"{row['frames'][0]}-{row['frames'][1]}"
+                       if row.get("frames") else ""),
+            "exponent": exponent, "muted": muted,
+            "selected": bool(prev[2]) if prev is not None else False,
+        })
+
+    def _same_row(item, w):
+        return (item.op_id == w["op_id"] and item.label == w["label"]
+                and item.strip == w["strip"] and item.track == w["track"]
+                and item.status == w["status"] and bool(item.alive) == w["alive"]
+                and item.frames == w["frames"] and bool(item.muted) == w["muted"]
+                and bool(item.selected) == w["selected"]
+                and _same_float(item.exponent, w["exponent"]))
+
+    if len(coll) != len(want) or not all(_same_row(i, w) for i, w in zip(coll, want)):
+        active_id = (coll[settings.agent_fix_index].op_id
+                     if 0 <= settings.agent_fix_index < len(coll) else "")
+        coll.clear()
+        for w in want:
+            item = coll.add()
+            for name in ("op_id", "label", "strip", "track", "status", "alive",
+                         "frames"):
+                setattr(item, name, w[name])
+            _props.set_quietly(item, "exponent", w["exponent"])
+            _props.set_quietly(item, "muted", w["muted"])
+            _props.set_quietly(item, "selected", w["selected"])
+        if active_id:
+            for i, item in enumerate(coll):
+                if item.op_id == active_id:
+                    _props.set_quietly(settings, "agent_fix_index", i)
+                    break
+    if int(settings.agent_fixes_rev) != int(settings.agent_ops_rev):
+        settings.agent_fixes_rev = int(settings.agent_ops_rev)
     if settings.agent_fix_index >= len(coll):
         _props.set_quietly(settings, "agent_fix_index", max(0, len(coll) - 1))
     return len(coll)
