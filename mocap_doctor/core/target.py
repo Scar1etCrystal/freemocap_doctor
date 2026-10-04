@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+import json
 import math
 import statistics
 from typing import Any
@@ -19,6 +20,7 @@ except ImportError:  # pragma: no cover - module is executed inside Blender.
 
 from .animation import (
     EPSILON,
+    _fcurves,
     bone_path,
     cache_fcurve_values,
     current_view_layer,
@@ -105,6 +107,105 @@ DEFAULT_EXCLUDED_MESH_KEYWORDS = (
     "Camera",
     "Light",
 )
+
+
+# Root pivot (silently applied when the retarget milestone is recorded).  The
+# ARP bmap maps the source pelvis - location AND rotation - onto torso_root,
+# whose head sits at the MMD センター height: on Teto that is ~0.39 m BELOW the
+# hip joints, while the SMPL-X pelvis joint is ~0.09 m ABOVE them.  The same
+# pelvis tilt about the low pivot swings the hips against their own sway:
+# 0001-0999 frames 151-277 measure 0.19 m of hip sway on the source and 0.07 m
+# (out of phase) on Teto.  The fix keeps every rotation and shifts torso_root so
+# the rotation acts about the hips bone head; child pose = rest + R0 loc +
+# R0 R(q) S d, so loc += d - R(q) S d with d = hips head - torso_root head in
+# torso_root's rest frame.  Foot IK targets are untouched (separate chains).
+ROOT_PIVOT_BONE = "hips"
+ROOT_PIVOT_MARK = "mcd_root_pivot_fix"
+
+
+def fix_root_pivot(
+    armature: Any,
+    action: Any | None = None,
+    *,
+    root_bone: str = DEFAULT_PELVIS_BONE,
+    pivot_bone: str = ROOT_PIVOT_BONE,
+    force: bool = False,
+) -> dict[str, Any]:
+    """Re-pivot the retarget's baked root rotation about ``pivot_bone``'s head.
+
+    Idempotent: the action is marked and a second call is a no-op unless
+    ``force``.  Returns a report; ``skipped`` explains why nothing was written
+    (no root animation, unexpected bone layout, already applied).
+    """
+    action = action if action is not None else get_action(armature, required=False)
+    report: dict[str, Any] = {"operation": "fix_root_pivot", "armature": getattr(armature, "name", ""),
+                              "root_bone": root_bone, "pivot_bone": pivot_bone}
+    if action is None:
+        report["skipped"] = "no action"
+        return report
+    report["action"] = action.name
+    previous = action.get(ROOT_PIVOT_MARK)
+    if previous and not force:
+        report["skipped"] = "already applied"
+        report["previous"] = json.loads(previous) if isinstance(previous, str) else str(previous)
+        return report
+    bones = armature.data.bones
+    if root_bone not in bones or pivot_bone not in bones:
+        report["skipped"] = "bones missing"
+        return report
+    root, pivot = bones[root_bone], bones[pivot_bone]
+    chain, bone = [], pivot.parent
+    while bone is not None and bone.name != root_bone:
+        chain.append(bone.name)
+        bone = bone.parent
+    if bone is None:
+        report["skipped"] = f"{pivot_bone} is not under {root_bone}"
+        return report
+    animated = sorted({name for name in [pivot_bone, *chain]
+                       for fcurve in _fcurves(action) if fcurve.data_path.startswith(bone_path(name) + ".")})
+    if animated:
+        # The fix assumes a rigid offset between the two heads.
+        report["skipped"] = f"bones between root and pivot are animated: {animated}"
+        return report
+    rest = root.matrix_local.to_3x3().normalized()
+    offset = rest.transposed() @ (pivot.head_local - root.head_local)
+    loc = [get_fcurve(action, bone_path(root_bone, "location"), i) for i in range(3)]
+    quat = [get_fcurve(action, bone_path(root_bone, "rotation_quaternion"), i) for i in range(4)]
+    scale = [get_fcurve(action, bone_path(root_bone, "scale"), i) for i in range(3)]
+    if any(fc is None for fc in quat):
+        report["skipped"] = "no quaternion rotation on root"
+        return report
+    frames = sorted({int(round(key.co.x)) for fc in quat + loc if fc is not None for key in fc.keyframe_points})
+    deltas = []
+    for frame in frames:
+        q = Quaternion([fc.evaluate(frame) for fc in quat]).normalized()
+        s = Vector([fc.evaluate(frame) if fc is not None else 1.0 for fc in scale])
+        scaled = Vector((offset.x * s.x, offset.y * s.y, offset.z * s.z))
+        deltas.append(offset - q.to_matrix() @ scaled)
+    pose_root = armature.pose.bones.get(root_bone)
+    for axis in range(3):
+        fcurve = loc[axis]
+        if fcurve is None:
+            fcurve = ensure_fcurve(action, bone_path(root_bone, "location"), axis, group=root_bone)
+            base = float(pose_root.location[axis]) if pose_root is not None else 0.0
+            for frame in frames:
+                fcurve.keyframe_points.insert(frame, base, options={"FAST"})
+            loc[axis] = fcurve
+        before = {frame: float(fcurve.evaluate(frame)) for frame in frames}
+        cache = keyframe_map(fcurve)
+        for frame, delta in zip(frames, deltas):
+            set_fcurve_value(fcurve, frame, before[frame] + float(delta[axis]), cache=cache)
+    update_action(action)
+    magnitude = [delta.length for delta in deltas]
+    report.update({
+        "frames": len(frames),
+        "pivot_offset_m": [round(float(v), 4) for v in (pivot.head_local - root.head_local)],
+        "max_shift_m": round(max(magnitude), 4) if magnitude else 0.0,
+        "mean_shift_m": round(sum(magnitude) / len(magnitude), 4) if magnitude else 0.0,
+    })
+    action[ROOT_PIVOT_MARK] = json.dumps({k: report[k] for k in ("root_bone", "pivot_bone", "frames",
+                                                                  "pivot_offset_m", "max_shift_m")})
+    return report
 
 
 def ensure_global_correction_empty(

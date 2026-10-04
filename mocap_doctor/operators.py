@@ -2141,6 +2141,29 @@ class MD_OT_PklHandRepair(Operator):
             return {"CANCELLED"}
 
 
+def _silent_root_pivot_fix(context, settings):
+    """重定向里程碑时静默修正骨盆旋转支点（core_target.fix_root_pivot）。
+
+    ARP 映射把源骨盆的旋转放在 torso_root（センター高度，比髋关节低 ~0.39 m）上转，胯部左右摆被反向抵掉；
+    这里只平移 torso_root、让旋转绕 hips 头生效，旋转与脚 IK 都不动。找不到 Rig/动作就跳过，不阻断记录。
+    """
+    try:
+        rig = _require_object(settings, "mmr_rig", "ARMATURE", OBJECT_NAMES["mmr_rig"])
+    except RuntimeError:
+        return "（未找到 MMR Rig，未做骨盆支点修正）"
+    action = getattr(getattr(rig, "animation_data", None), "action", None)
+    if action is None:
+        return "（MMR Rig 没有活动 Action，未做骨盆支点修正）"
+    report = core_target.fix_root_pivot(rig, action)
+    if settings.initialized:
+        project.write_report(context.scene, "retarget_root_pivot", report)
+    if report.get("skipped") == "already applied":
+        return "（骨盆支点已修正过）"
+    if report.get("skipped"):
+        return f"（未做骨盆支点修正：{report['skipped']}）"
+    return f"；已修正骨盆旋转支点（{report['frames']} 帧，最大平移 {report['max_shift_m'] * 100:.1f} cm）"
+
+
 class MD_OT_CreateCheckpoint(Operator):
     bl_idname = "mocap_doctor.create_checkpoint"
     bl_label = "记录当前状态"
@@ -2152,8 +2175,11 @@ class MD_OT_CreateCheckpoint(Operator):
         old_step = context.scene.mocap_doctor.current_step
         try:
             settings = _require_project(context)
+            note = ""
             if self.step_id:
                 _require_restore_before_rerun(context.scene, self.step_id)
+                if self.step_id == "retarget":
+                    note = _silent_root_pivot_fix(context, settings)
                 settings.current_step = clamp_step(STEP_INDEX.get(self.step_id, settings.current_step) + 1)
                 path = project.create_accepted_checkpoint(
                     context.scene,
@@ -2164,7 +2190,7 @@ class MD_OT_CreateCheckpoint(Operator):
             else:
                 path = project.create_checkpoint(context.scene, self.label)
             project.save_workfile(context.scene)
-            settings.status_message = f"已记录检查点：{path.name}"
+            settings.status_message = f"已记录检查点：{path.name}{note}"
             self.report({"INFO"}, settings.status_message)
             return {"FINISHED"}
         except Exception as exc:
