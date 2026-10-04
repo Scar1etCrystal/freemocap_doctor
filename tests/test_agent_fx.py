@@ -105,5 +105,29 @@ class ExemplarTests(unittest.TestCase):
                            agent_fx.match_signature(sig, cand_diff))
 
 
+class SlerpBridgeTests(unittest.TestCase):
+    """hold_pose mode=outlier bridges the bad frames BETWEEN two good neighbours
+    (review M5): the neighbours themselves are not part of the bridge."""
+
+    @staticmethod
+    def _q(deg):
+        a = np.radians(deg)
+        return np.array([np.cos(a / 2), 0.0, 0.0, np.sin(a / 2)])
+
+    @staticmethod
+    def _deg(q):
+        return np.degrees(2 * np.arctan2(q[:, 3], q[:, 0]))
+
+    def test_three_bad_frames_of_a_steady_move(self):
+        # 2 deg/frame: good frames at 6 and 14 deg → bad frames are 8/10/12
+        out = agent_fx.slerp_series(self._q(6.0), self._q(14.0), 3)
+        self.assertTrue(np.allclose(self._deg(out), [8.0, 10.0, 12.0], atol=1e-9),
+                        self._deg(out))           # old i/(n-1): [6, 10, 14]
+
+    def test_single_bad_frame_is_the_midpoint(self):
+        out = agent_fx.slerp_series(self._q(8.0), self._q(12.0), 1)
+        self.assertAlmostEqual(float(self._deg(out)[0]), 10.0, places=9)  # old: 8
+
+
 if __name__ == "__main__":
     unittest.main()
