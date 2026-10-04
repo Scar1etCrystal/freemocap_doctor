@@ -26,12 +26,15 @@ def call(tool: str, args: dict | None = None, timeout: float = 120.0) -> dict:
     req = {"id": 1, "tool": tool, "args": args or {}}
     with socket.create_connection((HOST, PORT), timeout=timeout) as sock:
         sock.sendall((json.dumps(req) + "\n").encode("utf-8"))
-        buf = b""
-        while b"\n" not in buf:
-            chunk = sock.recv(65536)
+        parts = []
+        while True:               # list+join：大响应（bake_range）不再 O(n²) 拼接
+            chunk = sock.recv(1 << 20)
             if not chunk:
                 break
-            buf += chunk
+            parts.append(chunk)
+            if b"\n" in chunk:
+                break
+    buf = b"".join(parts)
     return json.loads(buf.split(b"\n", 1)[0].decode("utf-8"))
 
 

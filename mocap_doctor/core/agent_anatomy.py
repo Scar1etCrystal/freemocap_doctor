@@ -366,6 +366,185 @@ def probe(scene: Any, armature: Any, *, part: str, side: str | None = None,
       bone_axis                                    —— 需 bone（任意骨六根主轴）
       finger（finger_dir + finger 名）              —— 单根手指指向
     toward 可选：解析目标方向并附 err_deg（修后复测就是同一调用加 toward）。
+
+    任务2：原版对同一组采样帧扫 4 遍（取方向 / 局部主轴 / 次轴 / toward 误差），
+    每遍都 frame_set。每帧求值是确定的，所以这里一遍扫帧里把 4 样都算掉
+    （≈4× 少 frame_set），输出与 _probe_slow 逐位相同（bench golden 校验）。
+    唯一不能合并的情形——owner 骨在采样帧间变化——回落到 _probe_slow。
+    """
+    part = str(part).strip().lower()
+    if part not in _PARTS and part != "finger":
+        raise RuntimeError(f"未知 part {part!r}，可用：{_PARTS} + finger")
+    part_in = part
+    if part == "finger":
+        part = "finger_dir"
+    side_n = (side or "").upper() or None
+    frames = _sample_frames(scene, frame_range, max_frames)
+    key_map = {"palm": "palm", "back_of_hand": "back",
+               "finger_dir": "finger_dir", "knuckle": "knuckle",
+               "sole": "sole", "instep": "instep", "toe": "toe",
+               "knee_front": "front", "elbow_front": "front",
+               "body_forward": "forward"}
+    key = None if part == "bone_axis" else key_map[part]
+    sec_key = {"palm": "finger_dir", "back_of_hand": "finger_dir",
+               "sole": "toe", "instep": "toe",
+               "knee_front": "s1", "elbow_front": "s1"}.get(part)
+
+    frames_data = []
+    owner = None
+    extra = []          # per frame: (owner_used, local_key, local_sec, t2|exc)
+    with preserve_scene_frame(scene):
+        for f in frames:
+            set_scene_frame(scene, f)
+            if part in ("palm", "back_of_hand", "finger_dir", "knuckle"):
+                if side_n not in ("L", "R"):
+                    raise RuntimeError(f"{part} 需要 side='L'/'R'")
+                if part == "finger_dir" and finger:
+                    d = _finger_frame(armature, side_n, finger)
+                else:
+                    d = _hand_frame(armature, side_n)
+                if d is not None and "_owner" not in d:
+                    d["_owner"] = f"hand_fk.{side_n}"
+            elif part in ("sole", "instep", "toe"):
+                if side_n not in ("L", "R"):
+                    raise RuntimeError(f"{part} 需要 side='L'/'R'")
+                d = _foot_frame(armature, side_n)
+                if d is not None:
+                    d["_owner"] = f"foot_ik.{side_n}"
+            elif part in ("knee_front", "elbow_front"):
+                if side_n not in ("L", "R"):
+                    raise RuntimeError(f"{part} 需要 side='L'/'R'")
+                kind = "knee" if part == "knee_front" else "elbow"
+                d = _joint_frame(armature, side_n, kind)
+                if d is not None and d.get("owner"):
+                    d["_owner"] = d["owner"]
+            elif part == "body_forward":
+                d = _body_forward(armature, scene)
+            elif part == "bone_axis":
+                if not bone:
+                    raise RuntimeError("bone_axis 需要 bone=<骨名>")
+                pb = armature.pose.bones.get(bone)
+                if pb is None:
+                    raise RuntimeError(f"骨不存在：{bone}")
+                rot = (armature.matrix_world @ pb.matrix).to_quaternion()
+                d = {"_axes": {k: rot @ Vector(v)
+                               for k, v in _AXIS_SET.items()},
+                     "_owner": bone}
+            if d:
+                frames_data.append((f, d))
+                if d.get("_owner"):
+                    owner = d["_owner"]
+                # 同一帧顺手算后三遍要的量（用"到目前为止的 owner"，事后核对）
+                lk = ls = t2 = None
+                if owner and key:
+                    if d.get(key) is not None:
+                        lk = _local_of(armature, owner, d[key])
+                    if sec_key and d.get(sec_key) is not None:
+                        ls = _local_of(armature, owner, d[sec_key])
+                if toward is not None and key and d.get(key) is not None:
+                    try:
+                        t2, _ = _resolve_toward(
+                            scene, armature, toward,
+                            _pw(armature, owner, "head") if owner else None)
+                    except Exception as exc:  # noqa: BLE001 - replayed below
+                        t2 = exc
+                extra.append((owner, lk, ls, t2))
+
+    if not frames_data:
+        raise RuntimeError(f"{part} 所需骨骼在场景里不存在（side={side_n}）")
+    if any(e[0] != owner for e in extra):
+        return _probe_slow(scene, armature, part=part_in, side=side,
+                           bone=bone, finger=finger, frame_range=frame_range,
+                           toward=toward, max_frames=max_frames)
+
+    out: dict[str, Any] = {"part": part, "side": side_n,
+                           "frames_sampled": frames,
+                           "owner_bone": owner}
+
+    if part == "bone_axis":
+        last = frames_data[-1][1]["_axes"]
+        out["axes"] = {k: [round(x, 4) for x in v] for k, v in last.items()}
+        out["confidence"] = 1.0
+    else:
+        agg = _aggregate([d for _, d in frames_data], key)
+        if not agg:
+            raise RuntimeError(f"{part} 在所采帧上推不出方向")
+        out.update(agg)
+        confs = [d.get("confidence", 0.0) for _, d in frames_data]
+        out["confidence"] = round(min(confs), 2)
+        out["evidence"] = dict(frames_data[0][1].get("evidence", {}))
+        if out["spread_deg"] > 45:
+            out["evidence"]["spread_note"] = \
+                "方向随帧变化大，修复会逐帧对齐，属正常"
+        alts = [d.get("alternatives") for _, d in frames_data
+                if d.get("alternatives")]
+        if alts:
+            out["alternatives"] = alts[0]
+
+    if owner and key:
+        locals_ = [e[1] for (_f, d), e in zip(frames_data, extra)
+                   if d.get(key) is not None and e[1] is not None]
+        if locals_:
+            lm = _norm(sum(locals_, Vector((0.0, 0.0, 0.0))))
+            out["local_axis"] = [round(v, 4) for v in lm]
+            out["local_spread_deg"] = round(
+                max(_angle_deg(lm, v) for v in locals_), 1)
+            if sec_key:
+                secs = [e[2] for (_f, d), e in zip(frames_data, extra)
+                        if d.get(sec_key) is not None and e[2] is not None]
+                if secs:
+                    sm = _norm(sum(secs, Vector((0.0, 0.0, 0.0))))
+                    out["secondary_axis"] = [round(v, 4) for v in sm]
+                    out["secondary_name"] = sec_key
+            out["hold_pose_args"] = _hold_pose_args(part, side_n, owner, out, finger)
+
+    if toward is not None and key:
+        head_pos = _pw(armature, owner, "head") if owner else None
+        tv, how = _resolve_toward(scene, armature, toward, head_pos)
+        out["toward_resolved"] = [round(v, 4) for v in tv] if tv else None
+        out["toward_how"] = how
+        if tv is not None:
+            errs = []
+            for (_f, d), e in zip(frames_data, extra):
+                if d.get(key) is None:
+                    continue
+                if isinstance(e[3], Exception):
+                    raise e[3]
+                if e[3] is not None:
+                    errs.append(_angle_deg(d[key], e[3]))
+            if errs:
+                out["err_max_deg"] = round(max(errs), 1)
+                out["err_mean_deg"] = round(float(np.mean(errs)), 1)
+                frames_ok = [f for f, d in frames_data
+                             if d.get(key) is not None]
+                out["err_per_frame"] = [
+                    [int(f), round(e, 1)]
+                    for f, e in zip(frames_ok, errs)]
+                inner = out["err_per_frame"][1:-1] \
+                    if len(out["err_per_frame"]) >= 5 \
+                    else out["err_per_frame"]
+                if inner:
+                    out["err_inner_deg"] = round(
+                        max(e for _, e in inner), 1)
+    return out
+
+
+def _probe_slow(scene: Any, armature: Any, *, part: str, side: str | None = None,
+          bone: str | None = None, finger: str | None = None,
+          frame_range: Sequence[int] | None = None, toward: Any = None,
+          max_frames: int = 9) -> dict:
+    """原版（多遍扫帧）实现：owner 在采样帧间不一致时的兜底，也是逐位对照基准。
+
+    解剖探头入口。返回世界方向、owner 骨局部向量、置信度、证据。
+
+    part:
+      palm / back_of_hand / finger_dir / knuckle   —— 需 side
+      sole / instep / toe                          —— 需 side
+      knee_front / elbow_front                     —— 需 side
+      body_forward                                 —— 全身
+      bone_axis                                    —— 需 bone（任意骨六根主轴）
+      finger（finger_dir + finger 名）              —— 单根手指指向
+    toward 可选：解析目标方向并附 err_deg（修后复测就是同一调用加 toward）。
     """
     part = str(part).strip().lower()
     if part not in _PARTS and part != "finger":
@@ -488,10 +667,7 @@ def probe(scene: Any, armature: Any, *, part: str, side: str | None = None,
                     sm = _norm(sum(secs, Vector((0.0, 0.0, 0.0))))
                     out["secondary_axis"] = [round(v, 4) for v in sm]
                     out["secondary_name"] = sec_key
-            out["hold_pose_args"] = {"bones": [owner],
-                                     "world_axis": out["local_axis"]}
-            if out.get("secondary_axis"):
-                out["hold_pose_args"]["secondary_axis"] = out["secondary_axis"]
+            out["hold_pose_args"] = _hold_pose_args(part, side, owner, out, finger)
 
     # toward：解析目标 + 误差角（修后复测同一调用）
     if toward is not None and key:
@@ -540,6 +716,34 @@ _FRAME_KEYS = {"palm": "palm", "back_of_hand": "back",
                "sole": "sole", "instep": "instep", "toe": "toe",
                "knee_front": "front", "elbow_front": "front",
                "body_forward": "forward"}
+
+
+# probe 返回的 hold_pose_args = 推荐写法（与剧本 30 的表一致）：逐帧 probe 主轴 + 次轴
+_HOLD_AXES = {"palm": ("palm", "finger_dir"), "back_of_hand": ("back_of_hand", "finger_dir"),
+              "finger_dir": ("finger_dir", "palm"), "knuckle": ("knuckle", "palm"),
+              "sole": ("sole", "toe"), "instep": ("instep", "toe"), "toe": ("toe", "sole"),
+              "knee_front": ("knee_front", None), "elbow_front": ("elbow_front", None)}
+
+
+def _hold_pose_args(part, side, owner, out, finger=None) -> dict:
+    """"可直接展开给 hold_pose"的参数必须是推荐写法：逐帧 "probe:<part>.<side>" 轴。
+
+    以前给的是全段平均的固定局部轴——解剖方向相对控制骨随帧变（手指实测散布 ~70°），
+    均值轴对齐后每帧留几十度残差；照抄返回值的弱模型会踩这个坑（sonnet 第三轮指出）。
+    单根手指（finger=）/ bone_axis / body_forward 没有对应的 probe 轴，仍给均值轴。"""
+    spec = _HOLD_AXES.get(part) if (side in ("L", "R") and not finger) else None
+    if spec is None:
+        args = {"bones": [owner], "world_axis": out["local_axis"]}
+        if out.get("secondary_axis"):
+            args["secondary_axis"] = out["secondary_axis"]
+        return args
+    main, sec = spec
+    args = {"bones": [owner], "world_axis": f"probe:{main}.{side}"}
+    if sec:
+        args["secondary_axis"] = f"probe:{sec}.{side}"
+    elif out.get("secondary_axis"):
+        args["secondary_axis"] = out["secondary_axis"]       # 膝/肘：次轴用探出的局部向量
+    return args
 
 
 def frame_probe_fn(part: str, side: str | None = None):

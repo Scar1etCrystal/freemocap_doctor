@@ -162,14 +162,49 @@ def project_data_dir(work_filepath):
     return work.parent / ".mocap_doctor" / _safe_name(work.stem)
 
 
+def _usable_data_dir(path_text) -> bool:
+    """存的目录只有"在本系统上是绝对路径且存在"才算数。
+
+    Windows 写进 .blend 的 ``F:/...`` 在 Linux 上是**相对**路径：is_dir() 会按
+    当前工作目录解析——只要哪段代码曾按原样 mkdir 过（向导步骤写报告/
+    检查点就会），它就"存在"了，自愈从此失效：op 日志去了 CWD 下的怪名
+    目录，blend 里的 agent strip 全变成"未登记"孤儿（2026-10-03 在远程
+    套件上实测复现）。"""
+    if not path_text:
+        return False
+    p = Path(str(path_text))
+    return p.is_absolute() and p.is_dir()
+
+
+def resolve_work_filepath(settings):
+    """settings.work_filepath 和 data_directory 一样是别的机器写进去的绝对路径
+    （远程套件里是 ``F:/mocap_ai_doctor/...``）：Linux 上它是相对路径，向导的
+    "Planted 检测"步骤存盘直接失败（或者写进 CWD 下的怪名目录）。只有"本系统
+    绝对路径且所在目录存在"才用它；否则用当前打开的文件并回写自愈。"""
+    stored = getattr(settings, "work_filepath", "") or ""
+    if stored:
+        p = Path(str(stored))
+        if p.is_absolute() and p.parent.is_dir():
+            return stored
+    current = bpy.data.filepath or ""
+    if current:
+        if stored != current:
+            try:
+                settings.work_filepath = current
+            except Exception:
+                pass
+        return current
+    return stored
+
+
 def resolve_data_dir(settings):
     """settings.data_directory 存的是绝对路径——工作文件挪到别的机器/盘符
     后它就是死路径（Linux 上 ``F:\\...`` 只会变成怪名目录）。还在就用；
     不在就按当前 blend 位置重推并回写自愈。"""
     stored = settings.data_directory or ""
-    if stored and Path(stored).is_dir():
+    if _usable_data_dir(stored):
         return stored
-    fp = bpy.data.filepath or getattr(settings, "work_filepath", "") or ""
+    fp = bpy.data.filepath or resolve_work_filepath(settings) or ""
     if fp:
         derived = str(project_data_dir(fp))
         if stored != derived:
@@ -179,7 +214,7 @@ def resolve_data_dir(settings):
 
 
 def ensure_project_directories(settings):
-    root = Path(settings.data_directory)
+    root = Path(resolve_data_dir(settings))
     for name in ("checkpoints", "reports", "recovery", "logs", "tmp"):
         (root / name).mkdir(parents=True, exist_ok=True)
     return root
@@ -217,7 +252,7 @@ def save_manifest(scene):
     if not settings.initialized or not settings.data_directory:
         return
     atomic_write_json(
-        Path(settings.data_directory) / "project.json",
+        Path(resolve_data_dir(settings)) / "project.json",
         {
             "schema_version": "mocap_doctor_project_v1",
             "state_authority": "blend_scene",
@@ -391,7 +426,8 @@ def create_accepted_checkpoint(scene, step_id, message="预览已接受", label=
 
 def save_workfile(scene):
     settings = scene.mocap_doctor
-    result = bpy.ops.wm.save_as_mainfile(filepath=settings.work_filepath, relative_remap=True)
+    result = bpy.ops.wm.save_as_mainfile(filepath=resolve_work_filepath(settings),
+                                         relative_remap=True)
     if "FINISHED" not in result:
         raise RuntimeError("Unable to save working file")
     save_manifest(scene)

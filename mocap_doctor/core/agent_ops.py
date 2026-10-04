@@ -59,18 +59,8 @@ def ensure_base_on_nla(armature: Any):
     if action is None:
         for tr in anim.nla_tracks:            # already pushed down
             if tr.name == BASE_TRACK and tr.strips:
-                base_strip = tr.strips[0]
-                # 老文件修复：strip 起点曾被 max(1,f0) 钳过而 action_frame_start
-                # 没同步 → 基底滞后 (frame_start-afs) 帧求值，大角度 delta 直接
-                # 炸出波浪残差。强制 afs=frame_start → sampled_t == f 恒等。
-                if abs(float(base_strip.action_frame_start)
-                       - float(base_strip.frame_start)) > 1e-4:
-                    base_strip.action_frame_end += (
-                        float(base_strip.frame_start)
-                        - float(base_strip.action_frame_start))
-                    base_strip.action_frame_start = \
-                        float(base_strip.frame_start)
-                return base_strip.action
+                settle_base_strip(armature)
+                return tr.strips[0].action
         return None
     # NOTE: Blender 4.x exposes no nla_tracks.move(), so ordering relies on
     # creation order - nla_tracks.new() lands on TOP of the stack (evaluated
@@ -91,6 +81,31 @@ def ensure_base_on_nla(armature: Any):
     strip.action_frame_end = float(fs) + (float(f1) - float(f0))
     anim.action = None
     return action
+
+
+def settle_base_strip(armature: Any) -> bool:
+    """老文件修复：mcd_base 的起点曾被 max(1,f0) 钳过而 action_frame_start 没同步
+    → 基底滞后 (frame_start-afs) 帧求值，大角度 delta 直接炸出波浪残差。强制
+    afs=frame_start → sampled_t == f 恒等。返回是否真的改了。
+
+    **必须在任何采样之前做**：以前它藏在 ensure_base_on_nla 里、在 _write_strip
+    时才发生——那一刻工具早已按"滞后的基底"采样算完 delta，写下去时基底却被挪了
+    1 帧（实测 motion_copy 首写 err_inner 11.9°、残差与逐帧运动量相关 0.97；
+    别的 agent 的"修前"读数也随之变化）。所以 agent_bridge 在服务启动、每次写
+    工具执行前，agent_ops.reapply 在重解前都先调本函数。"""
+    anim = getattr(armature, "animation_data", None)
+    if anim is None or anim.action is not None:
+        return False
+    for tr in anim.nla_tracks:
+        if tr.name == BASE_TRACK and tr.strips:
+            st = tr.strips[0]
+            gap = float(st.frame_start) - float(st.action_frame_start)
+            if abs(gap) > 1e-4:
+                st.action_frame_end += gap
+                st.action_frame_start = float(st.frame_start)
+                return True
+            return False
+    return False
 
 
 def ensure_agent_track(armature: Any, track_name: str | None = None):
@@ -152,6 +167,12 @@ def _write_strip(
         )
 
     anim = armature.animation_data or armature.animation_data_create()
+    # Blender 的 NLA auto-blend：新 strip 与相邻轨上的 strip **部分**重叠时，会把
+    # 两条的 blend_in/out 自动改成重叠帧数——先写的修复被悄悄削弱、新修复也到不了
+    # 位（实测 spine 65–155 + 手 75–165：旧修复偏 16°，新修复差 53°）。taper 已经
+    # 烘在 delta 曲线里，strip 自身的 blend 必须恒为 0：写前给全部 agent/基底 strip
+    # 拍快照，写后关掉 auto-blend 并逐条还原——任何一次写入都不改动别的修复。
+    blend_snap = _blend_snapshot(anim)
     track = None
     if track_name:
         for tr in anim.nla_tracks:
@@ -163,11 +184,72 @@ def _write_strip(
         track.name = track_name or name
     strip = track.strips.new(name, int(frame_start), action)
     strip.blend_type = "COMBINE"
-    strip.use_auto_blend = True
+    strip.use_auto_blend = False
+    strip.blend_in = 0.0
+    strip.blend_out = 0.0
     strip.extrapolation = "NOTHING"
     if not track_name:
         track.name = strip.name    # mirror the uniquified strip name (.001 on clash)
+    _blend_restore(anim, blend_snap)
     return track, strip
+
+
+def _maybe_write_strip(dry_run, *args, **kwargs):
+    """dry_run=True → 什么都不写，返回 (None, None)。"""
+    if dry_run:
+        return None, None
+    return _write_strip(*args, **kwargs)
+
+
+def _pred_change(scalars=None, quats=None) -> dict:
+    """dry_run 用：delta 的最大旋转（度）/ 位移（米），在 taper 之前量。"""
+    rot = 0.0
+    loc = 0.0
+    for dq in (quats or {}).values():
+        w = np.clip(np.abs(np.asarray(dq)[:, 0]), 0.0, 1.0)
+        if len(w):
+            rot = max(rot, float(np.degrees(2.0 * np.arccos(w)).max()))
+    for (path, _i), d in (scalars or {}).items():
+        d = np.abs(np.asarray(d, dtype=np.float64))
+        if not len(d):
+            continue
+        if str(path).endswith(".rotation_euler"):
+            rot = max(rot, float(np.degrees(d.max())))
+        elif str(path).endswith(".location"):
+            loc = max(loc, float(d.max()))
+    return {"pred_rot_change_max_deg": round(rot, 2),
+            "pred_loc_change_max_m": round(loc, 4)}
+
+
+def _blend_snapshot(anim) -> list:
+    out = []
+    for tr in anim.nla_tracks:
+        if not (is_agent_track_name(tr.name) or tr.name == BASE_TRACK):
+            continue
+        for st in tr.strips:
+            out.append((tr.name, st.name, float(st.blend_in),
+                        float(st.blend_out)))
+    return out
+
+
+def _blend_restore(anim, snap) -> int:
+    """Turn auto-blend off on every snapshotted strip and put its blend values
+    back.  Returns how many strips had been changed by Blender."""
+    fixed = 0
+    for tname, sname, bi, bo in snap:
+        for tr in anim.nla_tracks:
+            if tr.name != tname:
+                continue
+            for st in tr.strips:
+                if st.name != sname:
+                    continue
+                if st.use_auto_blend:
+                    st.use_auto_blend = False
+                if float(st.blend_in) != bi or float(st.blend_out) != bo:
+                    st.blend_in = bi
+                    st.blend_out = bo
+                    fixed += 1
+    return fixed
 
 
 # ---------------------------------------------------------------------------
@@ -194,10 +276,22 @@ def _save_oplog(data_dir: str | Path, ops: Sequence[Mapping[str, Any]]) -> None:
                     encoding="utf-8")
 
 
+# ---- plugin hooks -----------------------------------------------------------
+# agent_bridge sets CURRENT_OWNER (the calling agent_id) around a write tool so
+# every op written in that call carries an "owner" - revert/reapply by another
+# agent is then refused.  None (GUI / legacy callers) = no owner key at all, so
+# old logs and old callers see byte-identical ops.
+CURRENT_OWNER: str | None = None
+# Tools living in plugin modules (agent_motion / agent_copy / ...) register
+# their re-solve function here:  fn(armature, base_action, *, params,
+# frame_range, status, scene, track_name) -> op dict (NOT recorded).
+REAPPLY_HANDLERS: dict = {}
+
+
 def _new_op(tool: str, params: Mapping[str, Any], frames,
             strip_name: str, status: str, metrics: Mapping | None,
             track: str | None = None) -> dict:
-    return {
+    op = {
         "id": f"{tool}_{int(time.time() * 1000) % 10**9}",
         "tool": tool,
         "params": dict(params),
@@ -208,6 +302,9 @@ def _new_op(tool: str, params: Mapping[str, Any], frames,
         "metrics": dict(metrics or {}),
         "ts": time.strftime("%Y-%m-%d %H:%M:%S"),
     }
+    if CURRENT_OWNER:
+        op["owner"] = str(CURRENT_OWNER)
+    return op
 
 
 def _record(data_dir, op) -> dict:
@@ -343,8 +440,10 @@ def reapply(data_dir: str | Path, armature: Any, op_id: str, *,
     if op is None:
         raise RuntimeError(f"op 不存在：{op_id}")
     tool = op.get("tool")
-    if tool not in TUNABLE_PARAMS:
+    plugin = REAPPLY_HANDLERS.get(tool)
+    if tool not in TUNABLE_PARAMS and plugin is None:
         raise RuntimeError(f"{tool} 不支持参数重写")
+    settle_base_strip(armature)          # 先于任何采样（GUI 参数控件也走这里）
     params = dict(op.get("params") or {})
     params.update(overrides)
     frame_range = params.get("frame_range") or op.get("frames")
@@ -352,7 +451,8 @@ def reapply(data_dir: str | Path, armature: Any, op_id: str, *,
     if base_action is None:
         raise RuntimeError("找不到基底动作（active action / mcd_base）")
 
-    kwargs = _reapply_kwargs(tool, params, frame_range, op.get("status"))
+    kwargs = (None if plugin is not None
+              else _reapply_kwargs(tool, params, frame_range, op.get("status")))
     old_track_name = op.get("track")
     old_strip_name = op.get("strip")
 
@@ -367,13 +467,23 @@ def reapply(data_dir: str | Path, armature: Any, op_id: str, *,
                 break
     old_strip = (track.strips.get(old_strip_name)
                  if track is not None and old_strip_name else None)
+    old_exp = 1.0                  # set_influence 的力度：重写后要保留
+    try:
+        if old_strip is not None and old_strip.action is not None:
+            old_exp = float(old_strip.action.get("applied_exp", 1.0) or 1.0)
+    except Exception:
+        old_exp = 1.0
     _SHIFT = 100000
     if old_strip is not None:
         old_strip.frame_start += _SHIFT
         old_strip.frame_end += _SHIFT
     res = None
     try:
-        if tool == "hold_pose":
+        if plugin is not None:
+            res = plugin(armature, base_action, params=params,
+                         frame_range=frame_range, status=op.get("status"),
+                         scene=scene, track_name=old_track_name)
+        elif tool == "hold_pose":
             res = hold_pose(armature, base_action, scene=scene, data_dir=None,
                             record=False, track_name=old_track_name, **kwargs)
         elif tool == "clean_jitter":
@@ -404,12 +514,21 @@ def reapply(data_dir: str | Path, armature: Any, op_id: str, *,
                     res["strip"] = new_strip.name
                 except Exception:
                     pass
+            if new_strip is not None and abs(old_exp - 1.0) > 1e-9:
+                set_strip_exponent(new_strip, old_exp)
     op["params"] = params
     op["params"]["frame_range"] = [int(frame_range[0]), int(frame_range[1])]
     op["frames"] = [int(frame_range[0]), int(frame_range[1])]
     if res is not None:
         op["strip"] = res.get("strip", op["strip"])
         op["metrics"] = res.get("metrics", {})
+        if plugin is not None:
+            # 插件工具的写入窗不一定等于 params.frame_range（motion_copy 写的是
+            # 目标窗 dst_start..），以插件自己回报的 frames/params 为准
+            if res.get("params"):
+                op["params"] = dict(res["params"])
+            if res.get("frames"):
+                op["frames"] = [int(res["frames"][0]), int(res["frames"][1])]
     op["ts"] = time.strftime("%Y-%m-%d %H:%M:%S")
     _save_oplog(data_dir, ops)
     return op
@@ -719,9 +838,22 @@ def set_strip_exponent(strip: Any, exponent: float) -> dict:
             fc.update()      # 重算贝塞尔手柄，保持原插值类型
         touched += 1
 
+    # Euler / location delta 在 Combine 下相加 → 线性缩放即"力度"。
+    # （旧版只缩四元数通道：手臂 Euler 修复、位置修复拖力度毫无反应）
+    scalar_touched = 0
+    for fc in action.fcurves:
+        dp = fc.data_path
+        if not (dp.endswith(".rotation_euler") or dp.endswith(".location")):
+            continue
+        for kp in fc.keyframe_points:
+            kp.co = (kp.co[0], kp.co[1] / e_prev * float(exponent))
+        fc.update()
+        scalar_touched += 1
+
     action["applied_exp"] = float(exponent)
     strip.influence = 1.0    # 力度烘进曲线，influence 不再当旋钮
-    return {"touched": touched, "exponent": float(exponent)}
+    return {"touched": touched, "scalar_touched": scalar_touched,
+            "exponent": float(exponent)}
 
 
 def locked_exclusions(data_dir: str | Path) -> list:
@@ -795,6 +927,8 @@ def effect_check(
     return {"track": track_name,
             "verdict": f"{hits}/{len(per_frame)} 帧有变化",
             "pass": hits == len(per_frame),
+            # 局部修复（重音/跟随/踩实）前后段本来就不动：写上没写上看 moved_any
+            "moved_any": hits > 0,
             "per_frame": per_frame}
 
 
@@ -815,6 +949,7 @@ def restore_accent(
     op_mode: str = "preview",
     data_dir: str | Path | None = None,
     track_name: str | None = None,
+    dry_run: bool = False,
 ) -> dict:
     """Force-feel methods on a delta strip.
 
@@ -873,7 +1008,7 @@ def restore_accent(
             new[:, c] = _reshape(cur[:, c], raw_c)
         new /= np.linalg.norm(new, axis=1, keepdims=True)
         dq = agent_fx.delta_quat(new, cur)
-        _track, strip = _write_strip(armature, name, start, quats={path: dq},
+        _track, strip = _maybe_write_strip(dry_run, armature, name, start, quats={path: dq},
                                      blend=blend, track_name=track_name)
         ang = np.degrees(2 * np.arccos(np.clip(
             np.abs(np.sum(cur * new, axis=1)), 0.0, 1.0)))
@@ -891,7 +1026,7 @@ def restore_accent(
         for c in range(3):
             raw_c = None if raw3 is None else raw3[:, c]
             new[:, c] = _reshape(cur[:, c], raw_c)
-        _track, strip = _write_strip(
+        _track, strip = _maybe_write_strip(dry_run, 
             armature, name, start,
             scalars={(path, i): new[:, i] - cur[:, i] for i in range(3)},
             blend=blend, track_name=track_name)
@@ -904,17 +1039,20 @@ def restore_accent(
         if cur is None:
             raise RuntimeError(f"通道不存在：{path}[{index}]")
         new = _reshape(cur, raw_values)
-        _track, strip = _write_strip(
+        _track, strip = _maybe_write_strip(dry_run, 
             armature, name, start,
             scalars={(path, int(index)): new - cur},
             blend=blend, track_name=track_name)
         metrics = accent.accent_metrics(cur, new, raw_values)
 
-    op = _new_op("restore_accent",
-                 {"path": path, "index": index, "method": method,
-                  "strength": strength, "impact_frame": impact_frame,
-                  "retime_speed": retime_speed, "retime_split": retime_split,
-                  "blend": blend, "frame_range": [start, end]},
+    params = {"path": path, "index": index, "method": method,
+              "strength": strength, "impact_frame": impact_frame,
+              "retime_speed": retime_speed, "retime_split": retime_split,
+              "blend": blend, "frame_range": [start, end]}
+    if dry_run:
+        return {"dry_run": True, "tool": "restore_accent", "frames": [start, end],
+                "params": params, "metrics": metrics}
+    op = _new_op("restore_accent", params,
                  (start, end), strip.name, op_mode, metrics,
                  track=_track.name)
     return _record(data_dir, op) if data_dir else op
@@ -935,28 +1073,69 @@ def clean_jitter(
     mode: str = "preview",
     data_dir: str | Path | None = None,
     track_name: str | None = None,
+    dry_run: bool = False,
 ) -> dict:
-    """Zero-phase smooth each channel inside the window; write deltas."""
+    """Zero-phase smooth each channel inside the window; write deltas.
+
+    rotation_quaternion paths are smoothed as ONE 4-vector (sign-continuous,
+    renormalised) and written as a true quaternion delta conj(cur)⊗new.  The
+    old per-component ``new - cur`` scalars were garbage on a Combine strip:
+    Blender normalises the strip's 4 values and multiplies, so a near-zero
+    component difference became an arbitrary rotation (measured 145–172°
+    mean error and 20–120× MORE jitter on hand_fk.L / spine_fk.001).
+    Euler / location channels add under Combine, so scalar deltas are right.
+    """
     start, end = int(frame_range[0]), int(frame_range[1])
     scalars = {}
+    quats = {}
+    qpaths = []
     for path, index in paths:
+        if str(path).endswith(".rotation_quaternion"):
+            if path not in qpaths:
+                qpaths.append(path)
+            continue
         cur = agent_bake.sample_fcurve_values(base_action, path, index, start, end)
         if cur is None:
             continue
         new = agent_fx.clean_jitter_values(cur, strength=strength,
                                            width=width, blend=blend)
         scalars[(path, index)] = new - cur
-    if not scalars:
+    for path in qpaths:
+        comps = [agent_bake.sample_fcurve_values(base_action, path, i,
+                                                 start, end)
+                 for i in range(4)]
+        if any(c is None for c in comps):
+            continue
+        cur = np.stack(comps, axis=1)
+        cur /= np.linalg.norm(cur, axis=1, keepdims=True)
+        for i in range(1, len(cur)):
+            if float(cur[i] @ cur[i - 1]) < 0:
+                cur[i] = -cur[i]
+        new = cur.copy()
+        for c in range(4):
+            new[:, c] = agent_fx.clean_jitter_values(
+                cur[:, c], strength=strength, width=width, blend=blend)
+        new /= np.linalg.norm(new, axis=1, keepdims=True)
+        quats[path] = agent_fx.delta_quat(new, cur)
+    if not scalars and not quats:
         raise RuntimeError("没有任何通道在动作里")
+    if dry_run:
+        return {"dry_run": True, "tool": "clean_jitter", "frames": [start, end],
+                "params": {"paths": [list(p) for p in paths], "strength": strength,
+                           "width": width, "blend": blend,
+                           "frame_range": [start, end]},
+                "metrics": {"channel_count": len(scalars) + 4 * len(quats),
+                            **_pred_change(scalars, quats)}}
     name = f"agent_jitter_{start}_{end}"
     _track, strip = _write_strip(armature, name, start, scalars=scalars,
-                               blend=blend, track_name=track_name)
+                               quats=quats, blend=blend,
+                               track_name=track_name)
     op = _new_op("clean_jitter",
                  {"paths": [list(p) for p in paths], "strength": strength,
                   "width": width, "blend": blend,
                   "frame_range": [start, end]},
                  (start, end), strip.name, mode,
-                 {"channel_count": len(scalars)},
+                 {"channel_count": len(scalars) + 4 * len(quats)},
                  track=_track.name)
     return _record(data_dir, op) if data_dir else op
 
@@ -1003,9 +1182,11 @@ def fix_ground(
     name = f"agent_ground_{start}_{end}"
     _track, strip = _write_strip(armature, name, start, scalars=scalars,
                                blend=blend, track_name=track_name)
-    op = _new_op("fix_ground",
-                 {"loc_path": loc_path, "floor_z": floor_z, "mode": mode,
-                  "pin_xy": pin_xy},
+    params = {"loc_path": loc_path, "floor_z": floor_z, "mode": mode,
+              "pin_xy": pin_xy}
+    if rest_clearance:                      # 只在用到时记录（旧 op 记录不变）
+        params["rest_clearance"] = float(rest_clearance)
+    op = _new_op("fix_ground", params,
                  (start, end), strip.name, op_mode,
                  {"max_sole_shift": float(np.abs(desired_sole - sole_h).max())},
                  track=_track.name)
@@ -1050,6 +1231,41 @@ def _basis_channel(action: Any, quat_path: str, start: int, end: int):
     if any(p is None for p in parts):
         return None
     return np.stack(parts, axis=1)
+
+
+def _euler_channel(action: Any, bone: str, start: int, end: int):
+    """Sample rotation_euler fcurves → (T,3) radians; None if missing."""
+    path = bone_path(bone, "rotation_euler")
+    parts = [agent_bake.sample_fcurve_values(action, path, i, start, end)
+             for i in range(3)]
+    if any(p is None for p in parts):
+        return None
+    return np.stack(parts, axis=1)
+
+
+def _euler_to_quats(eulers: np.ndarray, order: str) -> np.ndarray:
+    from mathutils import Euler
+    out = np.zeros((len(eulers), 4))
+    for i, e in enumerate(eulers):
+        q = Euler((float(e[0]), float(e[1]), float(e[2])), order).to_quaternion()
+        out[i] = (q.w, q.x, q.y, q.z)
+    for i in range(1, len(out)):
+        if float(np.dot(out[i - 1], out[i])) < 0.0:
+            out[i] = -out[i]
+    return out
+
+
+def _quats_to_euler(quats: np.ndarray, order: str,
+                    compat: np.ndarray) -> np.ndarray:
+    from mathutils import Euler, Quaternion
+    out = np.zeros((len(quats), 3))
+    for i, q in enumerate(quats):
+        ref = Euler((float(compat[i][0]), float(compat[i][1]),
+                     float(compat[i][2])), order)
+        e = Quaternion((float(q[0]), float(q[1]), float(q[2]),
+                        float(q[3]))).to_euler(order, ref)
+        out[i] = (e.x, e.y, e.z)
+    return out
 
 
 def _geo_deg(a: np.ndarray, b: np.ndarray) -> np.ndarray:
@@ -1291,6 +1507,158 @@ def _desired_world_dir(
     return out, mets
 
 
+def _desired_world_dir_multi(
+    scene: Any,
+    armature: Any,
+    bones: Sequence[str],
+    frames: Sequence[int],
+    dir_vec: np.ndarray | None,
+    axis: Any = "Y",
+    secondary_axis: Any = None,
+    dir_object: str | None = None,
+    dir_mode: str = "arrow",
+    flip_guard_deg: float = 150.0,
+) -> dict:
+    """_desired_world_dir for several bones in ONE frame sweep (任务2).
+
+    Every bone's per-frame math is the single-bone body verbatim; the frame is
+    evaluated once and shared, and the probe-axis directions (functions of the
+    evaluated scene only, not of the bone) are computed once per frame.
+    Output is bit-identical to calling _desired_world_dir per bone.
+    Returns {bone: (wxyz (T,4), metrics)}.
+    """
+    from mathutils import Matrix, Vector
+
+    from .animation import preserve_scene_frame, set_scene_frame
+
+    lp_fn = _probe_axis_fn(axis)
+    ls_fn = _probe_axis_fn(secondary_axis)
+    lp_static = None if lp_fn else _axis_vec(axis).normalized()
+    ls_static = None if ls_fn else _axis_vec(secondary_axis)
+    dual = ls_static is not None or ls_fn is not None
+    if dual and lp_static is not None:
+        ls_o = ls_static - lp_static * ls_static.dot(lp_static)
+        if ls_o.length < 1e-4:
+            raise RuntimeError("secondary_axis 与主轴平行，退化成单轴")
+    st = {}
+    for bone in bones:
+        pb = armature.pose.bones[bone]
+        parent = pb.parent
+        st[bone] = {
+            "pb": pb,
+            "target": _target_fn(scene, armature, pb, dir_vec, dir_object,
+                                 dir_mode),
+            "out": np.zeros((len(frames), 4)),
+            "mets": {"align_max_deg": 0.0, "align_mean_deg": 0.0,
+                     "flipped_frames": 0, "skipped_flip_frames": 0,
+                     "secondary_keep_deg": 0.0, "probe_fallback_frames": 0},
+            "angles": [], "lp_prev": None, "ls_prev": None,
+            "parent": parent,
+            "rel_rest": ((parent.bone.matrix_local.inverted()
+                          @ pb.bone.matrix_local) if parent is not None
+                         else pb.bone.matrix_local.copy()),
+        }
+    arm_inv = armature.matrix_world.inverted()
+    with preserve_scene_frame(scene):
+        for i, f in enumerate(frames):
+            set_scene_frame(scene, int(f))
+            w_p = lp_fn(armature, scene) if lp_fn is not None else None
+            w_s = ls_fn(armature, scene) if (dual and ls_fn is not None) \
+                else None
+            for bone in bones:
+                b = st[bone]
+                pb = b["pb"]
+                mets = b["mets"]
+                cur_world = armature.matrix_world @ pb.matrix
+                cur_rot = cur_world.to_quaternion()
+                t = b["target"]().normalized()
+                if lp_fn is not None:
+                    w = w_p
+                    if w is None or w.length < 1e-6:
+                        if b["lp_prev"] is None:
+                            raise RuntimeError(
+                                f"probe 轴 {axis!r} 在第 {f} 帧推不出方向")
+                        lp = b["lp_prev"]
+                        mets["probe_fallback_frames"] += 1
+                    else:
+                        lp = (cur_rot.inverted() @ w).normalized()
+                        b["lp_prev"] = lp
+                else:
+                    lp = lp_static
+                cur_P = cur_rot @ lp
+                dot = max(-1.0, min(1.0, float(cur_P.normalized() @ t)))
+                ang = float(np.degrees(np.arccos(dot)))
+                b["angles"].append(ang)
+                if not dual:
+                    if ang > float(flip_guard_deg):
+                        desired_pose = pb.matrix.copy()
+                        mets["skipped_flip_frames"] += 1
+                    else:
+                        align = cur_P.rotation_difference(t)
+                        desired_world = \
+                            align.to_matrix().to_4x4() @ cur_world
+                        desired_pose = arm_inv @ desired_world
+                else:
+                    if ls_fn is not None:
+                        w2 = w_s
+                        if w2 is None or w2.length < 1e-6:
+                            if b["ls_prev"] is None:
+                                raise RuntimeError(
+                                    f"probe 次轴 {secondary_axis!r} 在第 {f}"
+                                    " 帧推不出方向")
+                            ls = b["ls_prev"]
+                            mets["probe_fallback_frames"] += 1
+                        else:
+                            ls = (cur_rot.inverted() @ w2).normalized()
+                            b["ls_prev"] = ls
+                    else:
+                        ls = ls_static
+                    ls_o = ls - lp * ls.dot(lp)
+                    if ls_o.length < 1e-4:
+                        raise RuntimeError(
+                            f"第 {f} 帧次轴与主轴平行，双轴解算退化")
+                    ls_o.normalize()
+                    cur_S = cur_rot @ ls_o
+                    s_des = cur_S - t * cur_S.dot(t)
+                    if s_des.length < 1e-4:
+                        tmp = t.cross(Vector((0.0, 0.0, 1.0)))
+                        if tmp.length < 1e-3:
+                            tmp = t.cross(Vector((0.0, 1.0, 0.0)))
+                        s_des = tmp
+                    s_des.normalize()
+                    mets["secondary_keep_deg"] = max(
+                        mets["secondary_keep_deg"],
+                        float(np.degrees(np.arccos(max(-1.0, min(
+                            1.0, float(cur_S.normalized() @ s_des)))))))
+                    Lr = Matrix((lp, ls_o, lp.cross(ls_o)))
+                    W = Matrix((t, s_des, t.cross(s_des)))
+                    R = W.transposed() @ Lr
+                    desired_world = R.to_4x4()
+                    desired_world.translation = cur_world.translation
+                    desired_pose = arm_inv @ desired_world
+                if b["parent"] is not None:
+                    basis = (b["rel_rest"].inverted()
+                             @ pb.parent.matrix.inverted() @ desired_pose)
+                else:
+                    basis = pb.bone.matrix_local.inverted() @ desired_pose
+                q = basis.to_quaternion()
+                b["out"][i] = (q.w, q.x, q.y, q.z)
+    res = {}
+    for bone in bones:
+        b = st[bone]
+        out, mets, angles = b["out"], b["mets"], b["angles"]
+        if angles:
+            mets["align_max_deg"] = round(max(angles), 1)
+            mets["align_mean_deg"] = round(float(np.mean(angles)), 1)
+            mets["flipped_frames"] = int(sum(
+                1 for a in angles if a > float(flip_guard_deg)))
+        for i in range(1, len(out)):
+            if float(np.dot(out[i - 1], out[i])) < 0.0:
+                out[i] = -out[i]
+        res[bone] = (out, mets)
+    return res
+
+
 def hold_pose(
     armature: Any,
     base_action: Any,
@@ -1316,6 +1684,7 @@ def hold_pose(
     track_name: str | None = None,
     strip_name: str | None = None,
     record: bool = True,
+    dry_run: bool = False,
 ) -> dict:
     """通用姿态保持：让若干骨骼在帧段内保持某个姿态（delta strip 实现）。
 
@@ -1347,20 +1716,44 @@ def hold_pose(
 
     frames = np.arange(start, end + 1)
     quats: dict[str, np.ndarray] = {}
+    scalars: dict = {}
     metrics = {"bones": {}, "fixed_frames": 0}
     dir_metrics: dict[str, dict] = {}
     values = values or {}
 
     cur_by_bone = {}
+    euler_by_bone = {}       # Euler 骨（手臂）：order + 基底 Euler 曲线
     for bone in bones:
-        path = bone_path(bone, "rotation_quaternion")
-        cur = _basis_channel(base_action, path, start, end)
-        if cur is None:
-            raise RuntimeError(f"{bone} 没有 rotation_quaternion 通道")
+        mode_r = armature.pose.bones[bone].rotation_mode
+        if mode_r == "QUATERNION":
+            path = bone_path(bone, "rotation_quaternion")
+            cur = _basis_channel(base_action, path, start, end)
+            if cur is None:
+                raise RuntimeError(f"{bone} 没有 rotation_quaternion 通道")
+        elif mode_r == "AXIS_ANGLE":
+            raise RuntimeError(f"{bone} 是 AXIS_ANGLE 旋转，hold_pose 不支持")
+        else:
+            ce = _euler_channel(base_action, bone, start, end)
+            if ce is None:
+                raise RuntimeError(f"{bone} 没有 rotation_euler 通道")
+            cur = _euler_to_quats(ce, mode_r)
+            euler_by_bone[bone] = (mode_r, ce)
         cur_by_bone[bone] = cur
 
     if target == "from_frame" and ref_frame in (None, "auto"):
         ref_frame = _best_ref_frame(cur_by_bone, start)
+
+    world_multi = None
+    if target == "world_dir":
+        if scene is None or (world_dir is None and not dir_object):
+            raise RuntimeError("world_dir 需要 scene 与向量或 dir_object")
+        world_multi = _desired_world_dir_multi(
+            scene, armature, list(bones), frames,
+            np.asarray(world_dir, dtype=np.float64)
+            if world_dir is not None else None,
+            axis=world_axis, secondary_axis=secondary_axis,
+            dir_object=dir_object, dir_mode=dir_mode,
+            flip_guard_deg=flip_guard_deg)
 
     for bone in bones:
         cur = cur_by_bone[bone]
@@ -1375,20 +1768,17 @@ def hold_pose(
             desired = np.tile(ref, (n, 1))
         elif target == "from_frame":
             rf = int(ref_frame)
-            ref = _basis_channel(base_action, path, rf, rf)
+            if bone in euler_by_bone:
+                ce_rf = _euler_channel(base_action, bone, rf, rf)
+                ref = (None if ce_rf is None
+                       else _euler_to_quats(ce_rf, euler_by_bone[bone][0]))
+            else:
+                ref = _basis_channel(base_action, path, rf, rf)
             if ref is None:
                 raise RuntimeError(f"{bone} 在 {rf} 帧无数据")
             desired = np.tile(ref[0], (n, 1))
         elif target == "world_dir":
-            if scene is None or (world_dir is None and not dir_object):
-                raise RuntimeError("world_dir 需要 scene 与向量或 dir_object")
-            desired, dmets = _desired_world_dir(
-                scene, armature, bone, frames,
-                np.asarray(world_dir, dtype=np.float64)
-                if world_dir is not None else None,
-                axis=world_axis, secondary_axis=secondary_axis,
-                dir_object=dir_object, dir_mode=dir_mode,
-                flip_guard_deg=flip_guard_deg)
+            desired, dmets = world_multi[bone]
             dir_metrics[bone] = dmets
         else:
             raise RuntimeError(f"未知 target：{target}")
@@ -1441,18 +1831,38 @@ def hold_pose(
         if bone in dir_metrics:
             metrics["bones"][bone].update(dir_metrics[bone])
         metrics["fixed_frames"] += int((err > threshold_deg).sum())
+        if bone in euler_by_bone:
+            # Euler 通道在 Combine 下相加：delta = Euler(final, compat=cur) − cur
+            order, ce = euler_by_bone[bone]
+            fe = _quats_to_euler(final, order, ce)
+            epath = bone_path(bone, "rotation_euler")
+            for c in range(3):
+                scalars[(epath, c)] = (fe[:, c] - ce[:, c]) * float(strength)
+            continue
         quats[path] = agent_fx.delta_quat(final, cur)
-        # scale the correction by strength via angle scaling
-        if float(strength) < 1.0:
+        # strength 只作用一次：缩放 delta 角度（>1 = 超量修正）。旧版 <1 时既
+        # 缩角度又设 strip.influence=strength（Combine 对四元数按 influence 再取
+        # 幂）→ 实际 strength²；>1 时 influence 被钳到 1 → 完全无效。
+        if float(strength) != 1.0:
             from .pkl_hand import aa_to_quat, quat_to_aa
             quats[path] = aa_to_quat(
                 quat_to_aa(quats[path]) * float(strength))
 
+    if dry_run:
+        return {"dry_run": True, "tool": "hold_pose", "frames": [start, end],
+                "params": {"bones": list(bones), "target": target,
+                           "world_dir": list(world_dir) if world_dir is not None else None,
+                           "world_axis": world_axis if isinstance(world_axis, str)
+                           else list(world_axis),
+                           "mode": mode, "threshold_deg": threshold_deg,
+                           "strength": strength, "blend": blend,
+                           "frame_range": [start, end]},
+                "metrics": {**metrics, **_pred_change(scalars, quats)}}
     name = strip_name or f"agent_hold_{start}_{end}"
     _track, strip = _write_strip(
-        armature, name, start, quats=quats, blend=blend,
+        armature, name, start, scalars=scalars, quats=quats, blend=blend,
         track_name=track_name)
-    strip.influence = float(strength)
+    strip.influence = 1.0
     op = _new_op(
         "hold_pose",
         # params 必须覆盖全部求解输入（reapply 靠它重算）
@@ -1642,6 +2052,7 @@ def validate(
     pen_tol: float = 0.005,
     slide_tol: float = 0.02,
     boundary_jump_m: float = 0.05,
+    contact_height: Mapping[str, float] | None = None,
 ) -> dict:
     """Check the plan's violations on the signal store arrays.
 
@@ -1654,11 +2065,14 @@ def validate(
     violations = []
 
     for side in ("L", "R"):
+        # contact_height：这只脚正常着地时脚底点（关节中心）的离地高度（米，
+        # agent_query.contact_heights 标定）。None/缺省 = 0 = 旧行为。
+        ch = float((contact_height or {}).get(side, 0.0))
         pen = signals.get(f"foot.{side}.pen")
         contact = signals.get(f"contact.{side}")
         speed = signals.get(f"foot.{side}.speed_xy")
         if pen is not None and contact is not None:
-            bad = np.where(win & (contact > 0.5) & (pen > pen_tol))[0]
+            bad = np.where(win & (contact > 0.5) & (pen + ch > pen_tol))[0]
             if len(bad):
                 violations.append({"kind": "penetration", "side": side,
                                    "frames": [int(frames[i]) for i in bad]})
@@ -1670,7 +2084,7 @@ def validate(
         sole = signals.get(f"foot.{side}.sole_h")
         if sole is not None and contact is not None:
             bad = np.where(win & (contact > 0.5)
-                           & (sole - floor_z > 0.02))[0]
+                           & (sole - floor_z - ch > 0.02))[0]
             if len(bad):
                 violations.append({"kind": "floating", "side": side,
                                    "frames": [int(frames[i]) for i in bad]})

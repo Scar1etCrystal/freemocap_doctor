@@ -6,6 +6,7 @@ from collections.abc import Sequence
 from typing import Any
 
 from .animation import (
+    _fcurves,
     bone_path,
     cache_fcurve_values,
     clear_object_transform_animation,
@@ -23,6 +24,55 @@ from .animation import (
     set_scene_frame,
     update_action,
 )
+
+
+_OBJECT_TRANSFORM_ROOTS = frozenset((
+    "location", "rotation_euler", "rotation_quaternion", "rotation_axis_angle",
+    "rotation_mode", "scale", "delta_location", "delta_rotation_euler",
+    "delta_rotation_quaternion", "delta_scale", "matrix_world", "matrix_basis",
+    "matrix_local", "matrix_parent_inverse", "parent", "parent_type", "parent_bone",
+))
+
+
+def _matrix_world_is_static(obj: Any) -> bool:
+    """True only when nothing can make ``obj.matrix_world`` differ between frames.
+
+    On ``obj`` and every ancestor: no object-transform F-Curve (active action or
+    any NLA strip), no transform driver, no object constraint, no rigid body,
+    plain OBJECT parenting.  Conservative by design - anything unexpected
+    (meta/transition strips, an action without legacy F-Curves) answers False
+    and the caller keeps its per-frame path.
+    """
+    depth = 0
+    while obj is not None:
+        depth += 1
+        if depth > 64:
+            return False
+        if len(getattr(obj, "constraints", ())) or getattr(obj, "rigid_body", None) is not None:
+            return False
+        if obj.parent is not None and obj.parent_type != "OBJECT":
+            return False
+        anim = getattr(obj, "animation_data", None)
+        if anim is not None:
+            curves = list(anim.drivers)
+            actions = [anim.action]
+            for track in anim.nla_tracks:
+                for strip in track.strips:
+                    if strip.type != "CLIP":
+                        return False
+                    actions.append(strip.action)
+            try:
+                for act in actions:
+                    if act is not None:
+                        curves.extend(_fcurves(act))
+            except RuntimeError:
+                return False
+            for fcurve in curves:
+                root = fcurve.data_path.split(".", 1)[0].split("[", 1)[0]
+                if root in _OBJECT_TRANSFORM_ROOTS:
+                    return False
+        obj = obj.parent
+    return True
 
 
 TETO_LEG_FK_BONES = (
@@ -78,12 +128,19 @@ def bake_global_correction_to_all_parent(
     locations: dict[int, tuple[float, float, float]] = {}
     rotations: dict[int, tuple[float, float, float]] = {}
     compatible_euler = None
+    # 任务2：这一遍逐帧读的只有 armature.matrix_world（和根骨父骨的 pose 矩阵）。
+    # 校正 Empty 的动画刚被清掉；若骨架物体链上再没有任何随帧变化的东西
+    # （变换曲线/驱动/约束/物理/非物体父级）且根骨没有父骨，matrix_world 每帧
+    # 都是同一个值——求值一次即可（原来是 1499 次整场景求值，结果逐位相同）。
+    # 拿不准就走原来的逐帧路径。
+    static_world = pose_bone.parent is None and _matrix_world_is_static(armature)
+    world_inv = None
     with preserve_scene_frame(scene, view_layer):
         for frame in range(start, end + 1):
-            set_scene_frame(scene, frame, view_layer)
-            target_pose_matrix = (
-                armature.matrix_world.inverted_safe() @ root_world_matrices[frame]
-            )
+            if world_inv is None or not static_world:
+                set_scene_frame(scene, frame, view_layer)
+                world_inv = armature.matrix_world.inverted_safe()
+            target_pose_matrix = world_inv @ root_world_matrices[frame]
             conversion = {}
             if pose_bone.parent is not None:
                 conversion["parent_matrix"] = pose_bone.parent.matrix.copy()
