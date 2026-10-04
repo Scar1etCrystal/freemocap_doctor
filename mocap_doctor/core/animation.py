@@ -173,14 +173,70 @@ def ensure_fcurve(
     return _fcurves(action).new(**kwargs)
 
 
-def keyframe_map(fcurve: Any) -> dict[int, Any]:
+class KeyframeMap(dict):
+    """frame -> Keyframe of one F-curve (built by :func:`keyframe_map`).
+
+    The Keyframe objects hold raw pointers into the curve's key array, and
+    ``keyframe_points.insert()`` / ``.add()`` reallocate it - so does
+    ``FCurve.update()`` on Blender 4.5 (measured: a write through a key taken
+    before update() is lost): after any of them every cached object points at
+    freed memory.  ``stale`` marks that:
+    the frame SET stays exact (inserted frames are added), only the pointers
+    are suspect, so a miss is still a miss and a hit re-reads the curve first.
+    """
+
+    stale = False
+
+
+def keyframe_map(fcurve: Any) -> KeyframeMap:
     """Build a dense-key lookup used to avoid quadratic key searches."""
 
-    return {
-        int(round(float(key.co.x))): key
+    return KeyframeMap(
+        (int(round(float(key.co.x))), key)
         for key in fcurve.keyframe_points
         if abs(float(key.co.x) - round(float(key.co.x))) < 0.001
-    }
+    )
+
+
+def _refresh_keyframe_map(fcurve: Any, cache: dict[int, Any]) -> None:
+    cache.clear()
+    cache.update(keyframe_map(fcurve))
+    if isinstance(cache, KeyframeMap):
+        cache.stale = False
+
+
+def add_missing_keys(
+    fcurve: Any,
+    frames: Iterable[int],
+    cache: dict[int, Any],
+    *,
+    value: float = 0.0,
+    interpolation: str = "LINEAR",
+) -> int:
+    """Batch-create keys for ``frames`` missing from ``cache`` (a keyframe_map
+    of ``fcurve``), then rebuild ``cache`` in place.
+
+    ``keyframe_points.add(n)`` appends n keys at the END of the array (before
+    ``update()`` sorts it), so the new keys are the last n entries - not
+    "pointers that were not there before": the add reallocates the whole array,
+    every old key gets a new address, and the old pointer diff picked the
+    curve's FIRST keys and rewrote them to (missing frame, 0).  Returns the
+    number of keys added."""
+
+    missing = sorted({int(f) for f in frames} - {f for f in cache if isinstance(f, int)})
+    if not missing:
+        return 0
+    points = fcurve.keyframe_points
+    first = len(points)
+    points.add(len(missing))
+    for offset, frame in enumerate(missing):
+        key = points[first + offset]
+        key.co.x = float(frame)
+        key.co.y = float(value)
+        key.interpolation = interpolation
+    fcurve.update()
+    _refresh_keyframe_map(fcurve, cache)
+    return len(missing)
 
 
 def get_keyframe(
@@ -191,7 +247,11 @@ def get_keyframe(
 ) -> Any | None:
     frame = int(frame)
     if cache is not None:
-        return cache.get(frame)
+        key = cache.get(frame)
+        if key is not None and getattr(cache, "stale", False):
+            _refresh_keyframe_map(fcurve, cache)      # see KeyframeMap
+            key = cache.get(frame)
+        return key
     for key in fcurve.keyframe_points:
         if abs(float(key.co.x) - frame) < 0.001:
             return key
@@ -215,7 +275,14 @@ def set_fcurve_value(
             options={"FAST"},
         )
         if cache is not None:
-            cache[frame] = key
+            # insert() reallocated the key array: every OTHER cached key is
+            # stale now (writing through one wrote freed memory on sparse
+            # curves).  The fresh key and the frame set stay exact.
+            if isinstance(cache, KeyframeMap):
+                cache[frame] = key
+                cache.stale = True
+            else:
+                _refresh_keyframe_map(fcurve, cache)
     else:
         key.co.y = float(value)
     if interpolation:

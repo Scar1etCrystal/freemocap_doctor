@@ -22,6 +22,7 @@ from .animation import (
     EPSILON,
     _fcurves,
     bone_path,
+    add_missing_keys,
     cache_fcurve_values,
     current_view_layer,
     ensure_action,
@@ -1670,24 +1671,8 @@ def _settle_pelvis_for_reach(
         if abs(corr) > PELVIS_DEADBAND
     }
     for curve, cache in zip(loc_curves, loc_cache):
-        missing_keys = [f for f in needed_frames if f not in cache]
-        if not missing_keys:
-            continue
-        existing = {
-            int(key.as_pointer()) for key in curve.keyframe_points
-        }
-        curve.keyframe_points.add(len(missing_keys))
-        fresh = [
-            key
-            for key in curve.keyframe_points
-            if int(key.as_pointer()) not in existing
-        ]
-        for key, frame in zip(fresh, sorted(missing_keys)):
-            key.co.x = float(frame)
-            key.co.y = 0.0
-            key.interpolation = "LINEAR"
-            cache[frame] = key
-        curve.update()
+        # add() reallocates the key array: new keys = the last n, cache rebuilt
+        add_missing_keys(curve, needed_frames, cache)
 
     written = 0
     for frame, corr in zip(frames, corrected):
@@ -2214,24 +2199,10 @@ def stabilize_planted_feet(
         all_curves = [*setup["loc_curves"], *setup["rot_curves"]]
         all_caches = [*setup["loc_cache"], *setup["rot_cache"]]
         for curve, cache in zip(all_curves, all_caches):
-            missing = [f for f in frames_needed if f not in cache]
-            if not missing:
-                continue
-            existing = {
-                int(key.as_pointer()) for key in curve.keyframe_points
-            }
-            curve.keyframe_points.add(len(missing))
-            fresh = [
-                key
-                for key in curve.keyframe_points
-                if int(key.as_pointer()) not in existing
-            ]
-            for key, frame in zip(fresh, sorted(missing)):
-                key.co.x = float(frame)
-                key.co.y = 0.0
-                key.interpolation = "LINEAR"
-                cache[frame] = key
-            curve.update()
+            # add() reallocates the key array and update() re-sorts it: the
+            # new keys are the last n, and the cache must be rebuilt (the
+            # old as_pointer() diff rewrote the curve's FIRST keys instead)
+            add_missing_keys(curve, frames_needed, cache)
 
     def _write(corrections, measured):
         written = 0
