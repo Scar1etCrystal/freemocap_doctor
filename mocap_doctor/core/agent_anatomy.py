@@ -4,9 +4,10 @@
 轴。以前哪根局部轴对应掌心、符号是正还是负全靠猜，验证又用同一个假设
 自证——两次掌心修复失败都是这个模式。本模块从几何事实推导：
 
-- 掌心：四指指根连线 × 手指指向 定掌平面；手指只能朝掌心侧弯曲，用各指
-  末节弯曲向量定号（左右手不用特判；手指完全伸直时定不了号 → 低置信度，
-  由调用方走"两个候选"或"问用户摆箭头"路径）。
+- 掌心：优先用**目标网格**标定（见 palm_calibration：掌心皮肤相对 hand_fk 刚性，
+  量一次得到固定局部向量，逐帧只需转一下）；没有网格时退回手指几何——四指指根连线
+  × 手指指向 定掌平面，各指末节弯曲向量定号（手指一弯这个平面就跟着转，实测与可见
+  掌心差中位数 45°，所以只是兜底；evidence.palm_source 标明用的是哪种）。
 - 脚底：脚跟/前掌/脚尖三点定平面，小腿在脚背侧定号（空中同样成立）。
 - 膝/肘前：大小两段骨的夹角方向即关节凸出方向。
 - 身体前方：脚尖水平投影为主，肩线×竖直轴、相机方向交叉验证。
@@ -19,6 +20,7 @@
 
 from __future__ import annotations
 
+import contextlib
 from typing import Any, Mapping, Sequence
 
 import bpy
@@ -76,10 +78,264 @@ def _sample_frames(scene: Any, frame_range: Sequence[int] | None,
 
 
 # ---------------------------------------------------------------------------
+# 掌心网格标定：让 agent 读到的"掌心"= 用户在视口里看到的掌心网格
+#
+# 旧法（手指几何）把"手指指向"当掌平面的一条边，手指一弯它就倒向掌心侧，掌平面跟着
+# 转：arue 式重音テト 1499 帧实测，与可见掌心网格法线的夹角中位数 45°、最大 168°，
+# 手指伸直时还会定错号（置信度 ≥0.5 的帧里 13% 符号相反）。而掌心皮肤本身相对
+# hand_fk 是刚性的（权重 94% 在 手首，法线在骨局部坐标里 150 帧散布 ≤1.5°），所以
+# 掌心 = hand_fk 上一个固定局部向量，从目标网格量一次就够：
+#   1) 手骨几何定掌平面：指根连线 × (腕→指根中心)，符号取拇指根所在侧（拇指根在
+#      手掌侧，实测离手中面 12.8 mm；再与手指弯曲定号交叉验证，不一致只做标记）；
+#   2) 在手骨坐标系里框出手掌皮肤：腕→指根 25%–95%、横向 ±0.6 指根跨度、掌侧
+#      0–40 mm（这件衣服的袖口在 60 mm 外；手背皮肤在另一侧），顶点权重须主要落在
+#      本侧 手首/手指/手捩 组（排除贴近的另一只手臂）；
+#   3) 取其中朝掌侧的面，面积加权求法线，反算到 hand_fk 局部并缓存。
+# 没有目标网格 / 不是 MMD 命名（无 手首.L/R 顶点组）→ 退回手指几何，
+# evidence.palm_source = "fingers"（bridge 会给 warning）。
+
+_MESH_HAND_GROUP = "手首.{s}"
+_MESH_FINGER_GROUPS = tuple(f"{a}{b}" for a in ("親指", "人指", "中指", "薬指", "小指")
+                            for b in ("０", "１", "２", "３", "先"))
+_MESH_TWIST_GROUPS = ("手捩", "手捩1", "手捩2", "手捩3")
+_PALM_BOX = {"t_min": 0.25, "t_max": 0.95, "lat": 0.6, "h_max": 0.04}
+_PALM_CAL: dict[tuple, dict | None] = {}
+
+
+def _target_mesh(scene: Any = None) -> Any | None:
+    """向导里设的目标模型网格（settings.target_mesh），不是 MESH 时返回 None。"""
+    scene = scene if scene is not None else getattr(bpy.context, "scene", None)
+    settings = getattr(scene, "mocap_doctor", None)
+    obj = getattr(settings, "target_mesh", None)
+    return obj if obj is not None and getattr(obj, "type", "") == "MESH" else None
+
+
+def reset_palm_calibration() -> None:
+    _PALM_CAL.clear()
+
+
+def _mesh_group_weights(mesh: Any, groups: Mapping[str, Sequence[str]]) -> dict[str, np.ndarray]:
+    """{key: (V,) 顶点在该组名单上的权重之和}，一遍扫完所有顶点（MMD 权重已归一）。"""
+    by_name = {g.name: g.index for g in mesh.vertex_groups}
+    ids = {k: {by_name[n] for n in names if n in by_name} for k, names in groups.items()}
+    n = len(mesh.data.vertices)
+    out = {k: np.zeros(n) for k in groups}
+    lookup = {gi: k for k, s in ids.items() for gi in s}
+    if not lookup:
+        return out
+    for v in mesh.data.vertices:
+        for ge in v.groups:
+            k = lookup.get(ge.group)
+            if k is not None:
+                out[k][v.index] += ge.weight
+    return out
+
+
+def _evaluated_mesh_arrays(mesh: Any):
+    """评估后网格（含骨架变形）的世界空间数组：顶点、面法线、面积、面→顶点索引。"""
+    ev = mesh.evaluated_get(bpy.context.evaluated_depsgraph_get())
+    m = ev.to_mesh()
+    try:
+        nv, nf = len(m.vertices), len(m.polygons)
+        co = np.empty(nv * 3, dtype=np.float32)
+        m.vertices.foreach_get("co", co)
+        pn = np.empty(nf * 3, dtype=np.float32)
+        m.polygons.foreach_get("normal", pn)
+        pa = np.empty(nf, dtype=np.float32)
+        m.polygons.foreach_get("area", pa)
+        ls = np.empty(nf, dtype=np.int64)
+        m.polygons.foreach_get("loop_start", ls)
+        lt = np.empty(nf, dtype=np.int64)
+        m.polygons.foreach_get("loop_total", lt)
+        lv = np.empty(len(m.loops), dtype=np.int64)
+        m.loops.foreach_get("vertex_index", lv)
+    finally:
+        ev.to_mesh_clear()
+    mat = np.asarray(ev.matrix_world, dtype=np.float64)
+    rot = mat[:3, :3]
+    co = co.reshape(nv, 3).astype(np.float64) @ rot.T + mat[:3, 3]
+    pn = pn.reshape(nf, 3).astype(np.float64) @ np.linalg.inv(rot)      # 法线用逆转置
+    pn /= np.linalg.norm(pn, axis=1, keepdims=True) + 1e-12
+    return co, pn, pa.astype(np.float64), ls, lt, lv
+
+
+def _calibrate_palm(armature: Any, side: str, mesh: Any) -> dict | None:
+    """当前帧量一次：掌心皮肤法线在 hand_fk 局部的表达。失败返回 {"reason": ...}。"""
+    pb = armature.pose.bones
+    need = [f"hand_fk.{side}", f"thumb.01.{side}"] + \
+        [f"{_FINGER_STEMS[f]}.01.{side}" for f in _PALM_FINGERS]
+    if any(pb.get(n) is None for n in need):
+        return {"reason": "missing_hand_bones"}
+    mw = armature.matrix_world
+
+    def head(n):
+        return np.asarray(mw @ pb[n].head, dtype=np.float64)
+    wrist = head(f"hand_fk.{side}")
+    roots = [head(f"{_FINGER_STEMS[f]}.01.{side}") for f in _PALM_FINGERS]
+    kc = np.mean(roots, axis=0)
+    axis, lat = kc - wrist, roots[3] - roots[0]
+    hand_len, span = float(np.linalg.norm(axis)), float(np.linalg.norm(lat))
+    if hand_len < 1e-4 or span < 1e-4:
+        return {"reason": "degenerate_hand"}
+    axis, lat = axis / hand_len, lat / span
+    n0 = np.cross(lat, axis)
+    if np.linalg.norm(n0) < _EPS:
+        return {"reason": "degenerate_hand"}
+    n0 /= np.linalg.norm(n0)
+    d_thumb = float((head(f"thumb.01.{side}") - 0.5 * (wrist + kc)) @ n0)
+    if abs(d_thumb) < 0.003:                       # 拇指根几乎在手中面上：定不了号
+        return {"reason": "thumb_on_midplane", "thumb_mm": round(d_thumb * 1000, 1)}
+    n_geo = n0 if d_thumb > 0 else -n0
+
+    co, pn, pa, ls, lt, lv = _evaluated_mesh_arrays(mesh)
+    if len(co) != len(mesh.data.vertices):
+        return {"reason": "mesh_topology_changed"}
+    w = _mesh_group_weights(mesh, {
+        "hand": [_MESH_HAND_GROUP.format(s=side)],
+        "fingers": [f"{g}.{side}" for g in _MESH_FINGER_GROUPS],
+        "twist": [f"{g}.{side}" for g in _MESH_TWIST_GROUPS]})
+    if not w["hand"].any():
+        return {"reason": "no_hand_vertex_group"}
+    rel = co - wrist
+    t, h = rel @ axis, rel @ n_geo
+    l = rel @ lat - float((kc - wrist) @ lat)
+    box = _PALM_BOX
+    verts = ((w["hand"] + w["fingers"] + w["twist"]) > 0.9) & (w["fingers"] < 0.6) \
+        & (t > box["t_min"] * hand_len) & (t < box["t_max"] * hand_len) \
+        & (np.abs(l) < box["lat"] * span) & (h > 0.0) & (h < box["h_max"])
+    if int(verts.sum()) < 6:
+        return {"reason": "too_few_palm_vertices", "n": int(verts.sum())}
+    face_all = np.minimum.reduceat(verts[lv].astype(np.int8), ls) == 1   # 面的顶点全部入选
+    faces = face_all & (pn @ n_geo > 0.5)
+    if int(faces.sum()) < 4:
+        return {"reason": "too_few_palm_faces", "n": int(faces.sum())}
+    n = (pn[faces] * pa[faces, None]).sum(axis=0)
+    if np.linalg.norm(n) < _EPS:
+        return {"reason": "degenerate_palm_patch"}
+    n /= np.linalg.norm(n)
+    fingers = _hand_frame_fingers(armature, side)
+    conflict = bool(fingers and fingers["confidence"] >= 0.5
+                    and float(np.asarray(fingers["palm"]) @ n) < 0)
+    hand_mat = mw @ pb[f"hand_fk.{side}"].matrix
+    rot = hand_mat.to_quaternion()
+    local = (rot.inverted() @ Vector(n.tolist())).normalized()
+    fc = np.add.reduceat(co[lv], ls, axis=0) / lt[:, None]          # 面中心
+    centre = (fc[faces] * pa[faces, None]).sum(axis=0) / pa[faces].sum()
+    centre_local = hand_mat.inverted() @ Vector(centre.tolist())
+    return {"local": local, "centre_local": centre_local,
+            "faces": int(faces.sum()), "verts": int(verts.sum()),
+            "thumb_mm": round(d_thumb * 1000, 1),
+            "geo_vs_mesh_deg": round(_angle_deg(Vector(n_geo.tolist()), Vector(n.tolist())), 1),
+            "frame": int(getattr(bpy.context.scene, "frame_current", 0)),
+            "sign_conflict": conflict, "mesh": mesh.name}
+
+
+def palm_calibration(armature: Any, side: str, scene: Any = None) -> dict | None:
+    """缓存的掌心标定（键：网格名 + 骨架名 + 侧 + 顶点数）；没有目标网格 → None。"""
+    mesh = _target_mesh(scene)
+    if mesh is None:
+        return None
+    key = (mesh.name, armature.name, side, len(mesh.data.vertices))
+    if key not in _PALM_CAL:
+        try:
+            _PALM_CAL[key] = _calibrate_palm(armature, side, mesh)
+        except Exception as exc:  # noqa: BLE001 - 标定只是增强，失败退回手指几何
+            _PALM_CAL[key] = {"reason": f"error: {exc}"}
+    return _PALM_CAL[key]
+
+
+# ---------------------------------------------------------------------------
+# 标记箭头（markers）：用户/工具绑在骨上的 SINGLE_ARROW 空物体 MCD_<part>.<side>，+Z = 方向。
+# 有它就以它为准（palm_source / sole_source = "marker"）——用户看到的、agent 算的是同一支箭头。
+# 只认骨骼父级的（刚性跟随）；没父级的箭头是静止的世界方向，当定义必错，忽略并提醒。
+# 烘焙出来的（mcd_marker="baked"，逐帧 K 帧的显示用箭头）不读回。
+
+MARKER_PREFIX = "MCD_"
+MARKER_PARTS = ("palm", "sole")
+_IGNORE_MARKERS = [False]
+
+
+@contextlib.contextmanager
+def ignore_markers():
+    """临时不读标记（markers 工具重建标记、list 对比几何估计时用）。"""
+    prev = _IGNORE_MARKERS[0]
+    _IGNORE_MARKERS[0] = True
+    try:
+        yield
+    finally:
+        _IGNORE_MARKERS[0] = prev
+
+
+def marker_name(part: str, side: str) -> str:
+    return f"{MARKER_PREFIX}{part}.{side}"
+
+
+def bound_marker(part: str, side: str) -> tuple[Any | None, str | None]:
+    """(合格的标记物体, None) / (None, 原因)；原因 None = 根本没有这支标记。"""
+    if _IGNORE_MARKERS[0]:
+        return None, "ignored"
+    obj = bpy.data.objects.get(marker_name(part, side))
+    if obj is None:
+        return None, None
+    if obj.get("mcd_marker") == "baked":
+        return None, "baked"
+    par = getattr(obj, "parent", None)
+    if (par is None or getattr(par, "type", "") != "ARMATURE"
+            or obj.parent_type != "BONE" or not obj.parent_bone):
+        return None, "unbound"
+    return obj, None
+
+
+def marker_dir(obj: Any) -> Vector:
+    return (obj.matrix_world.to_quaternion() @ Vector((0.0, 0.0, 1.0))).normalized()
+
+
+# ---------------------------------------------------------------------------
 # 逐帧几何推导（每帧一个 dict，聚合在 probe() 里做）
 
 def _hand_frame(armature: Any, side: str) -> dict | None:
-    """掌心/手背/手指方向。手指弯曲向量只能指向掌心侧 → 定号，无需分左右。"""
+    """掌心/手背/手指方向。掌心优先用网格标定（刚性局部向量），否则手指几何。"""
+    d = _hand_frame_fingers(armature, side)
+    if d is None:
+        return None
+    ev = d["evidence"]
+    cal = palm_calibration(armature, side)
+    pb = armature.pose.bones.get(f"hand_fk.{side}")
+    mesh_palm = None
+    if cal and cal.get("local") is not None and pb is not None:
+        rot = (armature.matrix_world @ pb.matrix).to_quaternion()
+        mesh_palm = (rot @ cal["local"]).normalized()
+        ev["finger_palm_vs_mesh_deg"] = round(_angle_deg(d["palm"], mesh_palm), 1)
+    mk, why = bound_marker("palm", side)
+    if mk is not None:
+        palm = marker_dir(mk)
+        ev.update({"palm_source": "marker", "marker": mk.name,
+                   "marker_bone": f"{mk.parent.name}/{mk.parent_bone}",
+                   "sign_ambiguous": False})
+        if mesh_palm is not None:
+            ev["marker_vs_mesh_deg"] = round(_angle_deg(palm, mesh_palm), 1)
+        d["palm"], d["back"] = palm, -palm
+        d["confidence"], d["alternatives"] = 1.0, []
+        return d
+    if why == "unbound":
+        ev["marker_ignored"] = marker_name("palm", side)
+    if mesh_palm is not None:
+        d["palm"], d["back"] = mesh_palm, -mesh_palm
+        d["confidence"] = 0.6 if cal.get("sign_conflict") else 1.0
+        d["alternatives"] = []
+        ev.update({"palm_source": "mesh", "mesh_faces": cal["faces"],
+                   "thumb_side_mm": cal["thumb_mm"], "sign_ambiguous": False})
+        if cal.get("sign_conflict"):
+            ev["sign_conflict"] = True
+        return d
+    ev["palm_source"] = "fingers"
+    if cal and cal.get("reason"):
+        ev["mesh_calibration"] = cal["reason"]
+    return d
+
+
+def _hand_frame_fingers(armature: Any, side: str) -> dict | None:
+    """手指几何版：手指弯曲向量只能指向掌心侧 → 定号，无需分左右（网格标定的兜底）。"""
     seg = {}   # finger -> (root, j1, j2, tip) 世界点
     for finger, stem in _FINGER_STEMS.items():
         b1 = armature.pose.bones.get(f"{stem}.01.{side}")
@@ -105,6 +361,13 @@ def _hand_frame(armature: Any, side: str) -> dict | None:
     knuckle = _norm(seg["pinky"][0] - seg["index"][0])
     if finger_dir is None or knuckle is None:
         return None
+    # 腕→指根中心：相对 hand_fk 刚性，与掌心法线近乎垂直（实测 7°）。掌心修复的次轴用它：
+    # finger_dir 在手攥紧时会倒向掌心法线（拳头上只差 24°），双轴解算的滚转就没了依据。
+    wrist = _pw(armature, f"hand_fk.{side}", "head")
+    roots_c = sum((seg[f][0] for f in avail), Vector((0.0, 0.0, 0.0))) / len(avail)
+    hand_axis = _norm(roots_c - wrist) if wrist is not None else None
+    if hand_axis is None:
+        hand_axis = finger_dir
     n0 = knuckle.cross(finger_dir)
     if n0.length < _EPS:
         return None                        # 指根连线 ∥ 手指方向，病态
@@ -141,7 +404,7 @@ def _hand_frame(armature: Any, side: str) -> dict | None:
         confidence = min(confidence, 0.3)
     return {
         "palm": palm, "back": -palm, "finger_dir": finger_dir,
-        "knuckle": knuckle,
+        "knuckle": knuckle, "hand_axis": hand_axis,
         "evidence": {
             "curl_mag": round(float(curl_mag), 3),
             "fingers_used": len(avail),
@@ -178,13 +441,25 @@ def _foot_frame(armature: Any, side: str) -> dict | None:
     if toe_dir is None:
         return None
     confidence = 0.9 if sign_evidence else 0.4
-    return {
+    out = {
         "sole": sole, "instep": -sole, "toe": toe_dir,
         "evidence": {"leg_sign": (round(sign_evidence, 3)
-                                 if sign_evidence else None)},
+                                 if sign_evidence else None),
+                     "sole_source": "bones"},
         "confidence": confidence,
         "alternatives": [] if sign_evidence else [[*(-n0)], [*n0]],
     }
+    mk, why = bound_marker("sole", side)
+    if mk is not None:
+        msole = marker_dir(mk)
+        out["evidence"].update({"sole_source": "marker", "marker": mk.name,
+                                "marker_bone": f"{mk.parent.name}/{mk.parent_bone}",
+                                "marker_vs_bones_deg": round(_angle_deg(msole, sole), 1)})
+        out["sole"], out["instep"] = msole, -msole
+        out["confidence"], out["alternatives"] = 1.0, []
+    elif why == "unbound":
+        out["evidence"]["marker_ignored"] = marker_name("sole", side)
+    return out
 
 
 def _finger_frame(armature: Any, side: str, finger: str) -> dict | None:
@@ -347,7 +622,7 @@ def _resolve_toward(scene: Any, armature: Any, toward: Any,
         return None, f"无法解析方向 {toward!r}"
 
 
-_PARTS = ("palm", "back_of_hand", "finger_dir", "knuckle",
+_PARTS = ("palm", "back_of_hand", "finger_dir", "knuckle", "hand_axis",
           "sole", "instep", "toe",
           "knee_front", "elbow_front", "body_forward", "bone_axis")
 
@@ -359,7 +634,7 @@ def probe(scene: Any, armature: Any, *, part: str, side: str | None = None,
     """解剖探头入口。返回世界方向、owner 骨局部向量、置信度、证据。
 
     part:
-      palm / back_of_hand / finger_dir / knuckle   —— 需 side
+      palm / back_of_hand / finger_dir / knuckle / hand_axis   —— 需 side（hand_axis = 腕→指根，刚性）
       sole / instep / toe                          —— 需 side
       knee_front / elbow_front                     —— 需 side
       body_forward                                 —— 全身
@@ -381,12 +656,12 @@ def probe(scene: Any, armature: Any, *, part: str, side: str | None = None,
     side_n = (side or "").upper() or None
     frames = _sample_frames(scene, frame_range, max_frames)
     key_map = {"palm": "palm", "back_of_hand": "back",
-               "finger_dir": "finger_dir", "knuckle": "knuckle",
+               "finger_dir": "finger_dir", "knuckle": "knuckle", "hand_axis": "hand_axis",
                "sole": "sole", "instep": "instep", "toe": "toe",
                "knee_front": "front", "elbow_front": "front",
                "body_forward": "forward"}
     key = None if part == "bone_axis" else key_map[part]
-    sec_key = {"palm": "finger_dir", "back_of_hand": "finger_dir",
+    sec_key = {"palm": "hand_axis", "back_of_hand": "hand_axis", "hand_axis": "palm",
                "sole": "toe", "instep": "toe",
                "knee_front": "s1", "elbow_front": "s1"}.get(part)
 
@@ -396,7 +671,7 @@ def probe(scene: Any, armature: Any, *, part: str, side: str | None = None,
     with preserve_scene_frame(scene):
         for f in frames:
             set_scene_frame(scene, f)
-            if part in ("palm", "back_of_hand", "finger_dir", "knuckle"):
+            if part in ("palm", "back_of_hand", "finger_dir", "knuckle", "hand_axis"):
                 if side_n not in ("L", "R"):
                     raise RuntimeError(f"{part} 需要 side='L'/'R'")
                 if part == "finger_dir" and finger:
@@ -538,7 +813,7 @@ def _probe_slow(scene: Any, armature: Any, *, part: str, side: str | None = None
     解剖探头入口。返回世界方向、owner 骨局部向量、置信度、证据。
 
     part:
-      palm / back_of_hand / finger_dir / knuckle   —— 需 side
+      palm / back_of_hand / finger_dir / knuckle / hand_axis   —— 需 side（hand_axis = 腕→指根，刚性）
       sole / instep / toe                          —— 需 side
       knee_front / elbow_front                     —— 需 side
       body_forward                                 —— 全身
@@ -559,7 +834,7 @@ def _probe_slow(scene: Any, armature: Any, *, part: str, side: str | None = None
     with preserve_scene_frame(scene):
         for f in frames:
             set_scene_frame(scene, f)
-            if part in ("palm", "back_of_hand", "finger_dir", "knuckle"):
+            if part in ("palm", "back_of_hand", "finger_dir", "knuckle", "hand_axis"):
                 if side not in ("L", "R"):
                     raise RuntimeError(f"{part} 需要 side='L'/'R'")
                 if part == "finger_dir" and finger:
@@ -612,7 +887,7 @@ def _probe_slow(scene: Any, armature: Any, *, part: str, side: str | None = None
         key = None
     else:
         key_map = {"palm": "palm", "back_of_hand": "back",
-                   "finger_dir": "finger_dir", "knuckle": "knuckle",
+                   "finger_dir": "finger_dir", "knuckle": "knuckle", "hand_axis": "hand_axis",
                    "sole": "sole", "instep": "instep", "toe": "toe",
                    "knee_front": "front", "elbow_front": "front",
                    "body_forward": "forward"}
@@ -650,7 +925,7 @@ def _probe_slow(scene: Any, armature: Any, *, part: str, side: str | None = None
             out["local_spread_deg"] = round(
                 max(_angle_deg(lm, v) for v in locals_), 1)
             # 次轴：手的 sec=手指方向；脚 sec=脚尖；膝肘 sec=上段骨方向
-            sec_key = {"palm": "finger_dir", "back_of_hand": "finger_dir",
+            sec_key = {"palm": "hand_axis", "back_of_hand": "hand_axis", "hand_axis": "palm",
                        "sole": "toe", "instep": "toe",
                        "knee_front": "s1", "elbow_front": "s1"}.get(part)
             if sec_key:
@@ -712,15 +987,18 @@ _AXIS_SET = {"+X": (1, 0, 0), "-X": (-1, 0, 0),
              "+Z": (0, 0, 1), "-Z": (0, 0, -1)}
 
 _FRAME_KEYS = {"palm": "palm", "back_of_hand": "back",
-               "finger_dir": "finger_dir", "knuckle": "knuckle",
+               "finger_dir": "finger_dir", "knuckle": "knuckle", "hand_axis": "hand_axis",
                "sole": "sole", "instep": "instep", "toe": "toe",
                "knee_front": "front", "elbow_front": "front",
                "body_forward": "forward"}
 
 
 # probe 返回的 hold_pose_args = 推荐写法（与剧本 30 的表一致）：逐帧 probe 主轴 + 次轴
-_HOLD_AXES = {"palm": ("palm", "finger_dir"), "back_of_hand": ("back_of_hand", "finger_dir"),
+# 掌心/手背的次轴是 hand_axis（腕→指根，刚性、⊥掌心）而不是 finger_dir：手攥紧时 finger_dir
+# 倒向掌心法线，双轴解算的滚转失去依据（2026-10-04 掌心网格标定后发现）。
+_HOLD_AXES = {"palm": ("palm", "hand_axis"), "back_of_hand": ("back_of_hand", "hand_axis"),
               "finger_dir": ("finger_dir", "palm"), "knuckle": ("knuckle", "palm"),
+              "hand_axis": ("hand_axis", "palm"),
               "sole": ("sole", "toe"), "instep": ("instep", "toe"), "toe": ("toe", "sole"),
               "knee_front": ("knee_front", None), "elbow_front": ("elbow_front", None)}
 
@@ -760,7 +1038,7 @@ def frame_probe_fn(part: str, side: str | None = None):
     side = (side or "").upper() or None
 
     def fn(armature: Any, scene: Any) -> Vector | None:
-        if part in ("palm", "back_of_hand", "finger_dir", "knuckle"):
+        if part in ("palm", "back_of_hand", "finger_dir", "knuckle", "hand_axis"):
             d = _hand_frame(armature, side)
         elif part in ("sole", "instep", "toe"):
             d = _foot_frame(armature, side)

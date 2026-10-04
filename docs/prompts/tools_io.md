@@ -105,7 +105,7 @@ ping → 读/探查（确定 scope 和修前基线）→ claim → 写（带 exp
 ### 读（实时类）
 | 工具 | 关键参数 | 看什么 |
 |---|---|---|
-| `probe_anatomy` | `part`：palm 掌心 / back_of_hand 手背 / finger_dir 指尖方向 / knuckle 指关节 / sole 脚底 / instep 脚背 / toe 脚尖 / knee_front 膝盖（髌骨）朝向 / **elbow_front 肘尖（鹰嘴）朝向——不是肘窝，肘窝 = 它的反方向** / body_forward / bone_axis；`side` `frame_range` `toward` (`bone`/`finger`) `max_frames`(默认 9) | `err_inner_deg` `owner_bone` `confidence` `secondary_axis` `hold_pose_args`（可直接展开）；均匀采样 max_frames 帧，inner **只去掉首尾各一个采样点、不认识 blend**——所以修前修后都在**用户帧段**（有效区）上量，别用外扩后的写入窗；长段/快动作把 max_frames 调到 31 |
+| `probe_anatomy` | `part`：palm 掌心 / back_of_hand 手背 / finger_dir 指尖方向 / knuckle 指关节 / hand_axis 腕→指根（刚性，掌心修复的次轴） / sole 脚底 / instep 脚背 / toe 脚尖 / knee_front 膝盖（髌骨）朝向 / **elbow_front 肘尖（鹰嘴）朝向——不是肘窝，肘窝 = 它的反方向** / body_forward / bone_axis；`side` `frame_range` `toward`（三元组，或**箭头空物体名**：取它的 +Z） (`bone`/`finger`) `max_frames`(默认 9) | `err_inner_deg` `owner_bone` `confidence` `secondary_axis` `hold_pose_args`（可直接展开）；掌心/脚底看 `evidence.palm_source` / `sole_source`：`marker`（用户绑的箭头 MCD_palm.L 等，以它为准）或 `mesh`（目标网格标定）= 可信，`fingers` = 没标定成、按手指几何猜的（弯指时与可见掌心差几十度，**别修，报告**）；均匀采样 max_frames 帧，inner **只去掉首尾各一个采样点、不认识 blend**——所以修前修后都在**用户帧段**（有效区）上量，别用外扩后的写入窗；长段/快动作把 max_frames 调到 31 |
 | `analyze_motion` | `bones`/`chain` `frame_range` `main_bone` (`onset_frame` `stop_frame` `baseline_op`=你的某个 op_id，结果多一节 `vs_baseline`=修后−该 op 之前) | `data.main`: onset/peak/stop 帧、`peak_speed`(°/帧)、`amplitude_deg`、`counter_move_deg`；每骨 `jitter_deg`；`data.suggest.<工具>.args` 可直接用（帧段若超出你的 scope 见 §4 第 10 条）。`truncated:true` 只表示速度序列按 max_points 抽样，数字不受影响；只要数字时加 `"brief":true`（去掉速度序列，省约 6 KB） |
 | `compare_motion` | `op_id`（验收某个 motion_copy，最省事）或 `a:{bones/chain, frame_range}` `b:{…}` `mirror` `bone_map` `space` `trim` | `err_inner_deg`（复制/镜像是否到位） |
 | `chain_lag` | `bones`/`chain` `frame_range` | 每骨相对链内父骨的滞后帧数 |
@@ -140,6 +140,7 @@ ping → 读/探查（确定 scope 和修前基线）→ claim → 写（带 exp
 | `set_influence {op_id, value}` | 力度（0.5 = 一半，1.5 = 超量） |
 | `claim` / `release` / `list_claims` | 并发租约 |
 | `plan_scopes` | 协调者派单前用（工人不用）；任务可带 `reads`（复制的源窗），写-读重叠报 `kind:"read"`、写者先做 |
+| `markers` | 标记箭头（用户与 agent 共用的"方向定义"）：`action:"create"`（默认；掌心/脚底左右各一支 SINGLE_ARROW 空物体 `MCD_palm.L` …，**骨骼父级**绑在 手首/足首 上，初值 = 网格标定/骨几何；用户在视口里过一眼，不对就直接转它，一帧对准全程有效）/ `"bake"`（`part` `side` `frame_range`：膝/肘/手指等**逐帧 K 帧**的显示箭头，只用来看，修复后要重 bake）/ `"list"`（带 `frame_range` 时报每支与几何估计的最大夹角）/ `"remove"`（`all:true`）。不碰 RIG、不需要 claim。工人任务里一般不用——协调者/用户开工前建好；之后 probe 的 `palm_source:"marker"` 就是以用户的箭头为准 |
 | `eval_bpy` / `set_preview` / `ab_toggle` | 调试/GUI 用，工人任务里**不要用**（ab_toggle 见 §4 第 7 条） |
 | `save` | 落盘（段落完成必调） |
 | `commit` | **禁用** |

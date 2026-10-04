@@ -43,7 +43,7 @@ list_ops       确认新 op 在册
   - `"probe:<part>.<side>"`（**首选**）：求解器逐帧从几何现推局部轴——
     解剖朝向相对控制骨会随帧变（手指有自己的动画，实测散布 71°），
     均值轴会留几十度残差。例：`world_axis="probe:palm.L"`、
-    `secondary_axis="probe:finger_dir.L"`。
+    `secondary_axis="probe:hand_axis.L"`（掌心的次轴用刚性的 腕→指根 轴；finger_dir 在攥拳时倒向掌心法线）。
   - `probe_anatomy` 返回的 `local_axis`/`secondary_axis` 静态向量：
     只在 `local_spread_deg` 小（<15°）时可用。
 - **secondary_axis 一定要传**：双轴解算把扭转钉住，掌心 180° 翻转是绕
@@ -76,11 +76,12 @@ list_ops       确认新 op 在册
 
 | part | 推导 | owner 骨 |
 |---|---|---|
-| `palm` | 掌心朝向（指根连线×手指向定平面，指弯曲向定号） | hand_fk.{s} |
+| `palm` | 掌心朝向。来源优先级：标记箭头 `MCD_palm.{s}`（用户绑在 手首 上的）> 目标网格标定（掌心皮肤法线，相对手骨刚性，散布 <1.5°）> 手指几何（兜底：指根连线×手指向，弯指时与可见掌心差中位数 45°）。`evidence.palm_source` = marker / mesh / fingers | hand_fk.{s} |
 | `back_of_hand` | 手背 | hand_fk.{s} |
 | `finger_dir` | 手指指向 | hand_fk.{s} |
 | `knuckle` | 指根连线方向 | hand_fk.{s} |
-| `sole` | 脚底法线（三点定面，小腿在脚背侧定号） | foot_ik.{s} |
+| `hand_axis` | 腕→指根中心（刚性、⊥掌心约 84°）；掌心/手背修复的**次轴** | hand_fk.{s} |
+| `sole` | 脚底法线（标记箭头 `MCD_sole.{s}` 优先；否则三点定面，小腿在脚背侧定号；`evidence.sole_source`） | foot_ik.{s} |
 | `instep` / `toe` | 脚背 / 脚尖 | foot_ik.{s} |
 | `knee_front` | 膝前（大小腿夹角凸出向） | thigh_fk.{s} |
 | `elbow_front` | **肘尖（鹰嘴）**朝向 = 两段骨夹角的凸出侧（不是肘窝；肘窝 = 反方向） | upper_arm_fk.{s} |
@@ -148,9 +149,30 @@ list_ops       确认新 op 在册
 | `foot_lock` | 写 | `interval`("contact.R:7") 或 `side`+`frame_range`, `lock`(xy/xy+rot/pos/pos+rot) `ref` | foot_ik 在接触段钉在参考帧世界位置（xy 默认保留高度） |
 | `claim` / `release` / `list_claims` | 管理 | `bones`/`chain` `frames` `ttl_s` `strict` `check_only` | 并发租约（见下） |
 | `plan_scopes` | 读 | `tasks:[{name, bones/chain, frames}]` | 派单前体检：两两冲突 + 建议并行批次 |
+| `markers` | 管理 | `action`(create/bake/list/remove) `parts` `sides` `part` `side` `frame_range` `length` `overwrite` `all` | 标记箭头：create = 掌心/脚底的骨骼父级箭头（初值网格标定）；bake = 膝/肘等逐帧 K 帧显示箭头；见下节 |
 
 所有新写工具：只写 `frame_range`（motion_copy 是目标窗）以内；支持 `dry_run:true`；参数全录可
 `reapply`；四元数骨与 Euler 骨都支持。
+
+### 标记箭头 markers（2026-10-04）——用户与 agent 共用的"方向定义"
+
+用户的流程：拿到模型先给掌心、脚底、膝、肘绑好空物体箭头，之后下指令、看结果都以箭头为准。
+
+- **为什么骨骼父级就够**：掌心皮肤（权重 94% 在 手首）的法线在 hand_fk 局部坐标里 150 帧散布 ≤1.5°——
+  掌心网格相对手骨是刚性的，脚底同理。所以"跟着网格的箭头" = "跟着骨的箭头"：Ctrl+P → 骨骼（手首/足首），
+  在任意一帧对准即可。顶点三角形父级也行（三点都要是该骨权重 1.0 的，先绑再对准）；
+  **Child Of + 顶点组不行**（只跟平均顶点法线，绕法线的滚转不受控，实测漂 8–35°）。
+- `markers create`：替用户做上面这步。`MCD_palm.L/R`、`MCD_sole.L/R`，SINGLE_ARROW，+Z = 方向，
+  父级 = MMD 骨架的 手首/足首（没有则 RIG 的 DEF-hand/DEF-foot），初值 = 网格标定 / 三点脚底法线，
+  自定义属性 `mcd_marker="bound"`。已存在的不动（`overwrite:true` 才重建）。
+- **读回规则**：probe / hold_pose 的 `probe:palm.L` 看到合格的 `MCD_palm.L`（有骨骼父级、不是 baked）就以它为准，
+  `evidence.palm_source="marker"`、`marker_vs_mesh_deg` = 它与网格标定差多少（用户转过就不是 0）。没父级的箭头
+  是静止的世界方向，当定义必错 → 忽略 + warning（`marker_ignored`）。
+- `markers bake`：膝/肘"朝向"是两段骨夹角的凸出方向，相对任一段都随弯曲角转半角，**不能刚性绑**；
+  bake 把 agent 每帧算出的方向 K 到一支箭头上（`mcd_marker="baked"`）给用户看，probe 不读回；修复后要重 bake。
+- `markers list {frame_range}`：每支标记的种类、父级骨、是否合格、与几何估计的最大夹角。
+- 手摆箭头的精度：同一只手三支"准"的箭头换算到骨局部后互差 16–56°（2026-10-04 实测），所以标记要么由工具
+  初始化再微调，要么在视口里对着网格贴着调，不要凭透视视图目测。
 
 ### 并发协议（任务1，2026-10-03）
 

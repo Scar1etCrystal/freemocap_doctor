@@ -340,8 +340,8 @@ for rr in (r, r2):
 # ---- 13: probe's hold_pose_args is the recommended per-frame probe form ------------------
 pr = call("probe_anatomy", part="palm", side="L", frame_range=[900, 960], toward=[0, -1, 0])
 hp = (pr.get("data") or {}).get("hold_pose_args") or {}
-check("13 probe hold_pose_args = probe:palm.L + probe:finger_dir.L (not a static mean axis)",
-      hp.get("world_axis") == "probe:palm.L" and hp.get("secondary_axis") == "probe:finger_dir.L", hp)
+check("13 probe hold_pose_args = probe:palm.L + probe:hand_axis.L (not a static mean axis)",
+      hp.get("world_axis") == "probe:palm.L" and hp.get("secondary_axis") == "probe:hand_axis.L", hp)
 if hp:
     r = call("hold_pose", frame_range=[900, 960], target="world_dir", world_dir=[0, -1, 0],
              mode="replace", blend=4, **hp)

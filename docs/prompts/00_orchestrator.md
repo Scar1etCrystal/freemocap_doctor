@@ -9,6 +9,9 @@ bash /home/sb/remote_kit_1.7.1/tools/mcd.sh server-start <工作文件.blend>  #
 ```
 - 机器只有 ~8GB：**同时只能有 1 个 Blender**。服务开着时不能跑 e2e（mcd.sh 会排队等）。
 - 先 `list_ops` 看文件里已有的修复（别让 agent 在用户已有修复上乱叠）。
+- 朝向类任务（掌心/脚底）开工前 `markers '{"agent_id":"coord","action":"list","frame_range":[A,B]}'`：有用户绑的
+  `MCD_palm.L` 等就以它为准；没有就 `action:"create"` 建好并告诉用户在视口里过一眼（膝/肘用 `bake` 给用户看）。
+  `valid:false`（没骨骼父级）的标记会被 probe 忽略——让用户重绑或 `overwrite:true` 重建。
 
 ## 1. 拆任务（每条 = 一个剧本 + 一个 scope）
 

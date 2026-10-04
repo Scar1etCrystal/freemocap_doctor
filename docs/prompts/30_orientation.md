@@ -11,6 +11,11 @@
    ```
    记下：`data.err_inner_deg`（修前误差）、`data.owner_bone`、`data.confidence`、
    `data.secondary_axis`。（返回里的 `hold_pose_args` 已经是第 3 步表里的 `probe:` 逐帧轴写法，可以直接展开进 hold_pose。）
+   - 掌心/手背/脚底先看 `data.evidence.palm_source`（脚：`sole_source`）：`marker` = 用户绑在骨上的箭头
+     `MCD_palm.L`（**以它为准**，用户看到的就是它）；`mesh` = 目标网格标定的掌心皮肤法线（可信）；`fingers` = 没标定成，
+     按手指几何猜的——弯指时与视口里的掌心差几十度，**不要修**，把 warnings 原文写进报告。
+   - 任务块给的目标是箭头物体名时：probe 用 `"toward":"<箭头名>"`（取它的 +Z），hold_pose 用
+     `"dir_object":"<箭头名>","dir_mode":"arrow"` 代替 `world_dir`（箭头有动画也跟得上）。
    - `confidence < 0.5` 或返回里有 `alternatives` → **不要修**，在报告里写"低置信度，
      需要用户确认方向"，附两个候选，结束。
    - `err_inner_deg < 5` → 已经对了，报告"无需修复"，结束。
@@ -25,7 +30,7 @@
    ```
    /home/sb/remote_kit_1.7.1/tools/agent hold_pose '{"agent_id":"<ME>","bones":["<owner_bone>"],"frame_range":[A,B],
      "target":"world_dir","world_dir":[0,-1,0],
-     "world_axis":"probe:palm.L","secondary_axis":"probe:finger_dir.L",
+     "world_axis":"probe:palm.L","secondary_axis":"probe:hand_axis.L",
      "mode":"replace","blend":4,"expect_version":<第 1 步 probe 响应的 version（据以算参数的那次读；不是 claim 回的）>}'
    ```
    `frame_range` 写**外扩后的写入窗** `[A−4, B+4]`（blend 4 帧过渡落在用户帧段外面）；claim 也用它。第 1、4 步的
@@ -34,7 +39,7 @@
 
    | part | world_axis | secondary_axis |
    |---|---|---|
-   | palm / back_of_hand | `"probe:palm.L"` / `"probe:back_of_hand.L"` | `"probe:finger_dir.L"` |
+   | palm / back_of_hand | `"probe:palm.L"` / `"probe:back_of_hand.L"` | `"probe:hand_axis.L"`（腕→指根，刚性；别用 finger_dir——手攥紧时它倒向掌心法线，滚转就没了依据） |
    | finger_dir / knuckle | `"probe:finger_dir.L"` / `"probe:knuckle.L"` | `"probe:palm.L"` |
    | sole / instep | `"probe:sole.L"` / `"probe:instep.L"` | `"probe:toe.L"` |
    | toe | `"probe:toe.L"` | `"probe:sole.L"` |

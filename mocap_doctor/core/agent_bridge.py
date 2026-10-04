@@ -807,6 +807,16 @@ def _tool_probe_anatomy(ctx, part, side=None, bone=None, finger=None,
         warnings.append(f"低置信度({conf})：{res.get('evidence')}")
         if res.get("alternatives"):
             warnings.append("符号歧义：alternatives 给出两个候选方向")
+    ev = res.get("evidence") or {}
+    if str(part).lower() in ("palm", "back_of_hand") and ev.get("palm_source") == "fingers":
+        warnings.append("掌心没做网格标定（" + str(ev.get("mesh_calibration", "没有 settings.target_mesh"))
+                        + "）：按手指几何推断，手指弯曲时与视口里看到的掌心可差 45°+（中位数）；"
+                          "拿不准就报告，别修")
+    if ev.get("sign_conflict"):
+        warnings.append("掌心符号：网格标定（拇指所在侧）与手指弯曲方向不一致——让用户在视口确认一帧再修")
+    if ev.get("marker_ignored"):
+        warnings.append(f"标记箭头 {ev['marker_ignored']} 没有骨骼父级（静止的世界方向），已忽略："
+                        "用 markers 工具重建（action=create, overwrite=true），或在 Blender 里 Ctrl+P→骨骼 绑到 手首/足首")
     return {"summary": summary, "data": res, "warnings": warnings,
             "truncated": False, "hint": ""}
 
@@ -1394,7 +1404,7 @@ TOOLS = {
 # A missing module is fine (not shipped yet); a broken one is reported by ping
 # instead of taking every other tool down with it.
 _PLUGIN_MODULES = ("agent_motion", "agent_copy", "agent_principles",
-                   "agent_overlap", "agent_contact")
+                   "agent_overlap", "agent_contact", "agent_markers")
 _PLUGIN_ERRORS: dict = {}
 WRITE_SCOPES: dict = {}
 
