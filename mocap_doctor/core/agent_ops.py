@@ -278,21 +278,40 @@ def _oplog_path(data_dir: str | Path) -> Path:
     return Path(data_dir) / "agent_ops.json"
 
 
+class OpLogCorrupt(RuntimeError):
+    """agent_ops.json exists but does not parse (killed mid-write, disk full).
+
+    It used to read as an empty log and the next write overwrote it: every
+    owner / params / commit state gone, every strip "未登记".  Now the file is
+    moved aside as ``agent_ops.json.corrupt-<time>`` and this is raised, so the
+    damage is visible and the original bytes survive for repair."""
+
+
 def _load_oplog(data_dir: str | Path) -> list:
     path = _oplog_path(data_dir)
     if not path.is_file():
         return []
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
-        return []
+        ops = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(ops, list):
+            raise ValueError(f"顶层不是列表而是 {type(ops).__name__}")
+        return ops
+    except Exception as exc:
+        aside = path.with_name(f"{path.name}.corrupt-{time.strftime('%Y%m%d_%H%M%S')}")
+        try:
+            path.replace(aside)
+        except OSError:
+            aside = path
+        raise OpLogCorrupt(
+            f"op 日志 {path.name} 读不了（{exc}）：原文件已改名为 {aside.name} 保留，"
+            "没有被覆盖。用它修好后改回原名；或删掉它从空日志开始"
+            "（场景里的修复会显示为“未登记”）") from exc
 
 
 def _save_oplog(data_dir: str | Path, ops: Sequence[Mapping[str, Any]]) -> None:
-    path = _oplog_path(data_dir)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(list(ops), ensure_ascii=False, indent=1),
-                    encoding="utf-8")
+    """Atomic (tmp + fsync + os.replace): a kill mid-write leaves the old log."""
+    from .. import project
+    project.atomic_write_json(_oplog_path(data_dir), list(ops), indent=1)
 
 
 # ---- plugin hooks -----------------------------------------------------------

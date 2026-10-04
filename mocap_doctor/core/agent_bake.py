@@ -11,6 +11,8 @@ unit tested without a running Blender.
 
 from __future__ import annotations
 
+import hashlib
+import os
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
@@ -122,7 +124,54 @@ def bake_cache_path(
     )
 
 
-def save_bake(path: str | Path, bake: Mapping[str, Any]) -> Path:
+def _hash_action(h: Any, action: Any) -> None:
+    if action is None:
+        h.update(b"<none>")
+        return
+    curves = list(getattr(action, "fcurves", None) or ())
+    h.update(f"{len(curves)}".encode())
+    for fc in curves:
+        n = len(fc.keyframe_points)
+        co = np.empty(2 * n, dtype=np.float32)
+        fc.keyframe_points.foreach_get("co", co)
+        h.update(f"{fc.data_path}[{fc.array_index}]:{n}".encode())
+        h.update(co.tobytes())
+
+
+def snapshot_fingerprint(armature: Any) -> str:
+    """Content fingerprint of what a snapshot bake depends on - EXCEPT the
+    agent delta strips (writes keep the snapshot by design, see agent_bridge
+    _STORE_EPOCH): the base action's curves (active action or the mcd_base
+    strip's - identical before/after the first write pushes it onto NLA) and
+    the animation / static transform of every parent object (global
+    correction).  Re-running a wizard step or restoring a checkpoint changes
+    it, so describe / validate / get_series / fix_ground stop reading a pose
+    that no longer exists.  ~curves×keys bytes hashed, a few ms."""
+    h = hashlib.sha1()
+    anim = getattr(armature, "animation_data", None)
+    base = getattr(anim, "action", None) if anim is not None else None
+    if base is None and anim is not None:
+        for tr in anim.nla_tracks:
+            if tr.name == "mcd_base" and tr.strips:
+                base = tr.strips[0].action
+                break
+    _hash_action(h, base)
+    parent = getattr(armature, "parent", None)
+    while parent is not None:
+        p_anim = getattr(parent, "animation_data", None)
+        p_act = getattr(p_anim, "action", None) if p_anim is not None else None
+        if p_act is not None:
+            _hash_action(h, p_act)
+        else:
+            h.update(np.asarray(parent.matrix_basis, dtype=np.float32).tobytes())
+        parent = getattr(parent, "parent", None)
+    return h.hexdigest()[:16]
+
+
+def save_bake(path: str | Path, bake: Mapping[str, Any],
+              fingerprint: str | None = None) -> Path:
+    """Atomic: written to a temp file and os.replace'd - a kill mid-write used
+    to leave a truncated npz that broke every read tool until deleted."""
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     flat = {
@@ -130,6 +179,8 @@ def save_bake(path: str | Path, bake: Mapping[str, Any]) -> Path:
         "missing_bones": np.asarray(bake.get("missing_bones", []), dtype="U64"),
         "meta": np.asarray([bake["frame_start"], bake["frame_end"]], dtype=np.int64),
     }
+    if fingerprint:
+        flat["fingerprint"] = np.asarray([str(fingerprint)], dtype="U64")
     for role, arr in bake["quat"].items():
         flat[f"quat::{role}"] = arr
     for role, arr in bake["pos"].items():
@@ -138,19 +189,41 @@ def save_bake(path: str | Path, bake: Mapping[str, Any]) -> Path:
         flat[f"point::{name}"] = arr
     for role, arr in (bake.get("basis") or {}).items():
         flat[f"basis::{role}"] = arr
-    np.savez_compressed(path, **flat)
+    tmp = path.with_name(path.name + ".tmp")
+    with tmp.open("wb") as handle:
+        np.savez_compressed(handle, **flat)
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.replace(tmp, path)
     return path
 
 
-def load_bake(path: str | Path) -> dict[str, Any] | None:
+def load_bake(path: str | Path, fingerprint: str | None = None) -> dict[str, Any] | None:
+    """None = bake again: missing, unreadable (moved aside as ``*.corrupt``),
+    an old schema, or ``fingerprint`` given and not the one it was baked from."""
     path = Path(path)
     if not path.is_file():
         return None
+    try:
+        return _load_bake(path, fingerprint)
+    except Exception:
+        try:
+            path.replace(path.with_name(path.name + ".corrupt"))
+        except OSError:
+            pass
+        return None
+
+
+def _load_bake(path: Path, fingerprint: str | None) -> dict[str, Any] | None:
     with np.load(path, allow_pickle=False) as npz:
         keys = list(npz.files)
         # 老缓存没有 basis:: 键 → 手指聚合信号会静默丢失，宁可重烘
         if not any(k.startswith("basis::") for k in keys):
             return None
+        if fingerprint is not None:
+            stored = str(npz["fingerprint"][0]) if "fingerprint" in keys else ""
+            if stored != str(fingerprint):
+                return None
         bake = {
             "frames": npz["frames"],
             "missing_bones": [str(v) for v in npz["missing_bones"]],

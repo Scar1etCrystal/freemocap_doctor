@@ -242,12 +242,12 @@ def ensure_project_directories(settings):
     return root
 
 
-def atomic_write_json(path, data):
+def atomic_write_json(path, data, *, indent=2):
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     temp = path.with_suffix(path.suffix + ".tmp")
     with temp.open("w", encoding="utf-8") as handle:
-        json.dump(data, handle, ensure_ascii=False, indent=2)
+        json.dump(data, handle, ensure_ascii=False, indent=indent)
         handle.flush()
         os.fsync(handle.fileno())
     os.replace(temp, path)
