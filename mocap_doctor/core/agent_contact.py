@@ -205,10 +205,14 @@ def mesh_sole_heights(scene, mesh_obj, sides, frames):
         sel[s] = np.asarray(idx)
     out = {s: np.zeros(len(frames)) for s in sides}
     from .animation import preserve_scene_frame, set_scene_frame
+    from . import agent_anatomy
     import bpy
-    with preserve_scene_frame(scene):
+    # 网格在视口里被禁用/隐藏时不在依赖图里，evaluated_get 给的是静止网格（审查 M21）：临时打开再量
+    with agent_anatomy.evaluable(mesh_obj), preserve_scene_frame(scene):
         for i, f in enumerate(frames):
             set_scene_frame(scene, f)
+            if agent_anatomy._needs_unhide(mesh_obj):
+                raise RuntimeError(f"目标网格 {mesh_obj.name} 没按当帧姿态求值（集合被排除？），量不到当帧的靴底")
             ev = mesh_obj.evaluated_get(bpy.context.evaluated_depsgraph_get())
             m = ev.to_mesh()
             try:
