@@ -291,12 +291,13 @@ def _load_oplog(data_dir: str | Path) -> list:
     path = _oplog_path(data_dir)
     if not path.is_file():
         return []
+    raw = path.read_bytes()        # an OSError (file locked...) is not corruption
     try:
-        ops = json.loads(path.read_text(encoding="utf-8"))
+        ops = json.loads(raw.decode("utf-8"))
         if not isinstance(ops, list):
             raise ValueError(f"顶层不是列表而是 {type(ops).__name__}")
         return ops
-    except Exception as exc:
+    except ValueError as exc:      # JSONDecodeError / UnicodeDecodeError / not a list
         aside = path.with_name(f"{path.name}.corrupt-{time.strftime('%Y%m%d_%H%M%S')}")
         try:
             path.replace(aside)
@@ -1055,16 +1056,22 @@ def set_strip_exponent(strip: Any, exponent: float) -> dict:
     exponent = float(exponent)
     if exponent < 0.0:
         raise RuntimeError(f"力度不能为负：{exponent}")
+    # unit delta captured BEFORE anything changes (also on the way to 0)
+    curves, sig = _exp_curves(action)
+    units, recoverable = _unit_delta(action, curves, sig)
+    warning = ("这条修复在旧版里被设过力度 0，原 delta 已被抹成恒等，无法恢复："
+               "revert 后重做") if not recoverable else None
     if exponent == 0.0:
         if not strip.mute:
             strip.mute = True
             action[EXP_MUTED_KEY] = True
         action["applied_exp"] = 0.0
         strip.influence = 1.0
-        return {"touched": 0, "scalar_touched": 0, "exponent": 0.0, "muted": True}
+        out = {"touched": 0, "scalar_touched": 0, "exponent": 0.0, "muted": True}
+        if warning:
+            out["warning"] = warning
+        return out
 
-    curves, sig = _exp_curves(action)
-    units, recoverable = _unit_delta(action, curves, sig)
     by_path: dict = {}
     for i, fc in enumerate(curves):
         if str(fc.data_path).endswith(".rotation_quaternion"):
@@ -1102,9 +1109,8 @@ def set_strip_exponent(strip: Any, exponent: float) -> dict:
     strip.influence = 1.0    # 力度烘进曲线，influence 不再当旋钮
     out = {"touched": touched, "scalar_touched": scalar_touched,
            "exponent": exponent}
-    if not recoverable:
-        out["warning"] = ("这条修复在旧版里被设过力度 0，原 delta 已被抹成恒等，"
-                          "无法恢复：revert 后重做")
+    if warning:
+        out["warning"] = warning
     return out
 
 
