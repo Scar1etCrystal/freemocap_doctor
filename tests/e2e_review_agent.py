@@ -509,6 +509,14 @@ check("R12b the next write starts a fresh log; the damaged bytes survive; no tem
       and not glob.glob(os.path.join(data_dir, "*.tmp")),
       f"ops={len(ops)} tmp={glob.glob(os.path.join(data_dir, '*.tmp'))}")
 
+n_tracks = len(rig.animation_data.nla_tracks)
+with open(log, "w", encoding="utf-8") as handle:
+    handle.write("{garbage")
+rx = call("hold_pose", bones=["right_hand"], frame_range=[1300, 1330], target="values")
+check("R12c a write with a corrupt log fails before writing a strip (no orphan)",
+      not rx["ok"] and len(rig.animation_data.nla_tracks) == n_tracks,
+      f"ok={rx['ok']} tracks {n_tracks}->{len(rig.animation_data.nla_tracks)}")
+
 fails = [r for r in RESULTS if not r[1]]
 print(f"\n==== {len(RESULTS) - len(fails)}/{len(RESULTS)} PASS ====")
 for name, _ok, detail in fails:

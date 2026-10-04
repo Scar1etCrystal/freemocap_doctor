@@ -639,6 +639,13 @@ def _action_rotation_sampler(rig: Any, bone_names: Sequence[str]) -> Any:
         not track.mute and len(track.strips) > 0 for track in anim.nla_tracks
     ):
         return None
+    slots = getattr(action, "slots", None)
+    if slots is not None and (
+        len(slots) != 1 or getattr(anim, "action_slot", None) is None
+    ):
+        # legacy action.fcurves is the first slot's channelbag: with several
+        # slots (or none bound) it may not be what animates this rig
+        return None
     channels: dict[str, tuple[str, list]] = {}
     for name in bone_names:
         pose_bone = rig.pose.bones[name]

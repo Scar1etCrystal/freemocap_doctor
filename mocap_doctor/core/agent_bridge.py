@@ -1501,6 +1501,9 @@ def _dispatch(request: Mapping[str, Any]) -> dict:
         _check_version(args, scope, agent_id, ctx, notes)
         if scope is not None:
             if not dry:
+                # 坏掉的 op 日志在写 strip 之前就报出来（M16）：否则 strip 写上了、
+                # 记账失败，留下一条"未登记"的孤儿
+                agent_ops._load_oplog(ctx["data_dir"])
                 _enforce_claims(name, ctx, scope, agent_id, force, notes)
             if name not in _OP_TOOLS and name != "ab_toggle":
                 notes.extend(_stack_warnings(name, ctx, scope, agent_id))
@@ -1993,6 +1996,8 @@ def _fixlist_tick():
                  or (len(settings.agent_fixes) == 0 and rig is not None
                      and key != _FIXLIST_SYNCED))
         if stale:
+            # 先把还没求值的改动（用户刚做的编辑）在标志外求值掉，照常记版本
+            bpy.context.view_layer.update()
             # 镜像场景状态不是编辑：期间（含把这些写入求值掉的 update）不记版本
             _IN_SYNC = True
             try:
