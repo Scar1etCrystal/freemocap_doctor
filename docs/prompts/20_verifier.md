@@ -21,23 +21,24 @@ diff -rq /home/sb/freemocap_doctor/mocap_doctor /home/sb/remote_kit_1.7.1/sandbo
 - `status --short` 有 `mocap_doctor/` 下的改动、或没出现 `SYNC_OK` → 现场没冻结/没部署：停下报告，不要自己 deploy。
 - 记下 HEAD 的 commit 号（报告里写"验收对象"）。
 
-## 2. e2e（14 套：12 套用默认 fixture，e2e_root_pivot / e2e_upper_body 用它们自己的 fixture）
+## 2. e2e（16 套：14 套用默认 fixture，e2e_root_pivot / e2e_upper_body 用它们自己的 fixture）
 
 ```bash
-for t in e2e_anatomy e2e_perfix e2e_accent e2e_fixlist_timer e2e_concurrency e2e_bugfixes e2e_motion_copy e2e_principles e2e_overlap e2e_foot_lock e2e_ground e2e_markers; do echo "## $t"; bash /home/sb/remote_kit_1.7.1/tools/mcd.sh e2e /home/sb/remote_kit_1.7.1/tests/$t.py | grep -E "^====? |^=== [0-9]|^\[FAIL\]|rc=|falling back"; done
+for t in e2e_anatomy e2e_perfix e2e_accent e2e_fixlist_timer e2e_concurrency e2e_bugfixes e2e_motion_copy e2e_principles e2e_overlap e2e_foot_lock e2e_ground e2e_markers e2e_review_agent e2e_review_wizard; do echo "## $t"; bash /home/sb/remote_kit_1.7.1/tools/mcd.sh e2e /home/sb/remote_kit_1.7.1/tests/$t.py | grep -E "^====? |^=== [0-9]|^\[FAIL\]|rc=|falling back"; done
 echo "## e2e_root_pivot"; bash /home/sb/remote_kit_1.7.1/tools/mcd.sh e2e /home/sb/remote_kit_1.7.1/tests/e2e_root_pivot.py /home/sb/remote_kit_1.7.1/sandbox/work/fixture_root_pivot.blend | grep -E "^====? |^\[FAIL\]|rc=|falling back"
 echo "## e2e_upper_body"; bash /home/sb/remote_kit_1.7.1/tools/mcd.sh e2e /home/sb/remote_kit_1.7.1/tests/e2e_upper_body.py /home/sb/remote_kit_1.7.1/sandbox/work/fixture_root_pivot.blend | grep -E "^====? |^\[FAIL\]|rc=|falling back"
 ```
-14 套合计约 100 秒（单套 2–16 s）：**前台一条 Bash 跑完**即可（timeout 给 400000 毫秒），不用后台/轮询。套件的结论行有两种写法
+16 套合计约 120 秒（单套 2–19 s）：**前台一条 Bash 跑完**即可（timeout 给 400000 毫秒），不用后台/轮询。套件的结论行有两种写法
 （`==== N/N PASS ====` 和 `=== N/N passed ===`），都算。
 
-## 3. 纯 Python 单测（14 个文件，不需要 Blender）
+## 3. 纯 Python 单测（16 个文件，不需要 Blender）
 
 ```bash
 for f in /home/sb/freemocap_doctor/tests/test_*.py; do o=/home/sb/remote_kit_1.7.1/logs/ut_$(basename $f).out; printf '%s: ' "$(basename $f)"; PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=/home/sb/freemocap_doctor python3 "$f" > $o 2>&1; echo "rc=$? $(tail -1 $o) fails=$(grep -c -E 'FAIL|Traceback|Error' $o)"; done
 ```
-每行应是 `rc=0`、`fails=0`。末行是 `==== 0 FAIL ====` 的文件（test_agent_claims、test_agent_pose_math）fails=1 也对——
-那一行本身含 FAIL。
+每行应是 `rc=0`、`fails=0`。末行是 `==== 0 FAIL ====` 的文件（test_agent_claims、test_agent_pose_math、
+test_agent_mcp、test_project_paths）fails=1 也对——那一行本身含 FAIL。test_pkl_hand 有一条会调用本机 Blender 自带的
+`python3.11`（只是解释器，numpy 1.26，不是 Blender，不占 Blender 锁）读一个 numpy 2 写的 pkl；找不到该解释器时打印 SKIP 并算通过。
 
 ## 4. 基准：结果必须与原版逐位一致（速度只是附带）
 
@@ -48,20 +49,22 @@ timeout 给 600000 毫秒）。bench_wizard 的控制台只打出 source_check/s
 bash /home/sb/remote_kit_1.7.1/tools/mcd.sh run /home/sb/remote_kit_1.7.1/tests/bench_baseline.py -- --label verify
 python3 /home/sb/remote_kit_1.7.1/tests/bench_compare.py /home/sb/remote_kit_1.7.1/logs/bench_orig1.json /home/sb/remote_kit_1.7.1/logs/bench_verify.json | grep -E "^INFO|^GOLDEN|socket|probe|world_dir"
 bash /home/sb/remote_kit_1.7.1/tools/mcd.sh run /home/sb/remote_kit_1.7.1/tests/bench_wizard.py -- --label verify --reps 2
-python3 /home/sb/remote_kit_1.7.1/tests/bench_steps_compare.py /home/sb/remote_kit_1.7.1/logs/wizbench_all_orig.json /home/sb/remote_kit_1.7.1/logs/wizbench_verify.json
+python3 /home/sb/remote_kit_1.7.1/tests/bench_steps_compare.py /home/sb/remote_kit_1.7.1/logs/wizbench_all_bugfix_ref.json /home/sb/remote_kit_1.7.1/logs/wizbench_verify.json
 bash /home/sb/remote_kit_1.7.1/tools/mcd.sh run /home/sb/remote_kit_1.7.1/tests/bench_export.py -- --label verify --reps 2
 python3 /home/sb/remote_kit_1.7.1/tests/bench_steps_compare.py /home/sb/remote_kit_1.7.1/logs/expbench_orig.json /home/sb/remote_kit_1.7.1/logs/expbench_verify.json
 ```
-（`*_orig*.json` 是用原始 1.7.1 代码跑出的基线，已在 `logs/` 里。）
+（`*_orig*.json` 是用原始 1.7.1 代码跑出的基线，已在 `logs/` 里。向导步骤从 2026-10-04 起对
+`wizbench_all_bugfix_ref.json` 对账：它就是 `wizbench_all_orig.json`（耗时也是原版的，便于看提速），只有 foot_lock 一步换成了
+dev/bugfix M1（鞋底向量按骨架空间判左右）之后的摘要 `289377ce7d2ad031`——对原版文件比会报 foot_lock DIFF，这是有意的。）
 
 ## 基线（2026-10-03 终版）
 
 | 项 | 应得 |
 |---|---|
-| e2e | anatomy 21/21 · perfix 17/17 · accent 8/8 · fixlist_timer 7/7 · concurrency 45/45 · bugfixes 38/38 · motion_copy 42/42 · principles 38/38 · overlap 42/42 · foot_lock 15/15 · ground 25/25 · markers 21/21 · root_pivot 9/9 · upper_body 12/12（共 340；2026-10-04 起：之前 13 套 328 / 12 套 319 / 11 套 294），每套 rc=0，没有 `falling back`。root_pivot 与 upper_body 的 fixture `sandbox/work/fixture_root_pivot.blend` = 用户 0999_fsb_showretargetproblem.blend 的副本 |
-| 单测 | 14 个文件全过（2026-10-04 新增 test_upper_body_swing.py） |
-| agent 层 golden | `GOLDEN DIFF: 1577 differences (numeric 1548, max |Δ|=1.078e+02)` 且 `GOLDEN DIFF SECTIONS: ['clean_jitter', 'describe', 'effect_check', 'hold_pose', 'list_ops', 'probe_palm', 'probe_palm_75', 'probe_sole', 'reapply', 'set_influence', 'validate']`——只允许这些节、这个数。五个有意修复：去抖四元数、effect_check 取样、厚底靴的假"悬空"、probe 的 hold_pose_args 改成逐帧 probe 轴写法，以及 2026-10-04 掌心改为网格标定 + 次轴 hand_axis（基准里的 hold_pose 掌心修复及其 reapply / set_influence / list_ops 行随之变）；`INFO tools added=[…17 个…] removed=[]` 正常（2026-10-03 终版是 414 处 / 7 节 / 16 个工具） |
-| 向导 | `STEPS ALL SAME`（8 步关键帧 + 物体摘要与原版相同；source_check/source_floor 两版都报"源骨架没有活动 Action"，正常） |
+| e2e | anatomy 21/21 · perfix 17/17 · accent 8/8 · fixlist_timer 7/7 · concurrency 45/45 · bugfixes 38/38 · motion_copy 42/42 · principles 38/38 · overlap 42/42 · foot_lock 15/15 · ground 25/25 · markers 21/21 · review_agent 33/33 · review_wizard 11/11 · root_pivot 9/9 · upper_body 12/12（共 384；2026-10-04 dev/bugfix 加了 review_agent / review_wizard 两套；之前 14 套 340 / 13 套 328 / 12 套 319 / 11 套 294），每套 rc=0，没有 `falling back`。root_pivot 与 upper_body 的 fixture `sandbox/work/fixture_root_pivot.blend` = 用户 0999_fsb_showretargetproblem.blend 的副本 |
+| 单测 | 16 个文件全过（2026-10-04 新增 test_upper_body_swing.py；dev/bugfix 新增 test_agent_mcp.py、test_project_paths.py） |
+| agent 层 golden | `GOLDEN DIFF: 1577 differences (numeric 1548, max |Δ|=1.078e+02)` 且 `GOLDEN DIFF SECTIONS: ['clean_jitter', 'describe', 'effect_check', 'hold_pose', 'list_ops', 'probe_palm', 'probe_palm_75', 'probe_sole', 'reapply', 'set_influence', 'validate']`——只允许这些节、这个数。五个有意修复：去抖四元数、effect_check 取样、厚底靴的假"悬空"、probe 的 hold_pose_args 改成逐帧 probe 轴写法，以及 2026-10-04 掌心改为网格标定 + 次轴 hand_axis（基准里的 hold_pose 掌心修复及其 reapply / set_influence / list_ops 行随之变）；`INFO tools added=[…17 个…] removed=[]` 正常（2026-10-03 终版是 414 处 / 7 节 / 16 个工具）。2026-10-04 dev/bugfix 的修复对 golden 逐位中性（与修复前 23 节 exact 相等） |
+| 向导 | 对 `wizbench_all_bugfix_ref.json`：`STEPS ALL SAME`（7 步关键帧 + 物体摘要与原版相同，foot_lock 与 M1 之后的参考相同；source_check/source_floor 两版都报"源骨架没有活动 Action"，正常）。速度（2026-10-04 dev/bugfix）：tilt 0.9 s、target_floor 4.7 s、foot_lock 11.3 s |
 | 导出链 | `STEPS ALL SAME`（mmd_bake / export_prep 关键帧摘要 + 导出 .vmd 字节哈希与原版相同） |
 
 速度只在报告里附上（机器负载会让它浮动 ±10%；导出步骤比原版慢约 0.3–0.4 s 是正常的：原版导出完存盘直接报错跳过了，
