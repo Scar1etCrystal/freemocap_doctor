@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import time
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
@@ -427,6 +428,124 @@ def _reapply_kwargs(tool: str, params: Mapping[str, Any],
     raise RuntimeError(f"{tool} 不支持参数重写")
 
 
+# ---- newer fixes stacked on the same bones ------------------------------------
+# A COMBINE delta is solved against the pose UNDER its own track.  Re-solving an
+# older op (reapply / compare_motion(op_id) / analyze_motion baseline_op) samples
+# the visible pose, which also holds every NEWER fix on higher tracks; written
+# back to the old, lower track the solved delta then cancels them: Euler /
+# location deltas add, so the newer fix U was wiped exactly; quaternion bones
+# came out L⊗U⁻¹⊗L⁻¹⊗D⊗U.  Those tracks are muted while sampling.  Only tracks
+# writing the SAME bones inside the op's window: a newer fix on a parent bone or
+# on a copy's source window is meant to be seen (stacking / "源已变" reapply).
+
+def _bones_of_action(action: Any) -> set:
+    out = set()
+    for fc in (getattr(action, "fcurves", None) or ()):
+        dp = str(fc.data_path)
+        if dp.startswith('pose.bones["'):
+            out.add(dp.split('"')[1])
+    return out
+
+
+def _windows_overlap(lo: float, hi: float, windows) -> bool:
+    for w in windows:
+        if w is None:
+            return True
+        if not (hi < float(w[0]) or lo > float(w[1])):
+            return True
+    return False
+
+
+def newer_same_bone_tracks(armature: Any, track_name: str | None, bones,
+                           windows) -> list:
+    """Names of UNMUTED tracks above ``track_name`` whose (unmuted) strips write
+    any of ``bones`` and overlap any window ((a, b) or None = everywhere)."""
+    anim = getattr(armature, "animation_data", None)
+    bones = set(bones or ())
+    if anim is None or not track_name or not bones:
+        return []
+    tracks = list(anim.nla_tracks)
+    idx = next((i for i, t in enumerate(tracks) if t.name == track_name), None)
+    if idx is None:
+        return []
+    out = []
+    for tr in tracks[idx + 1:]:
+        if tr.mute:
+            continue
+        for st in tr.strips:
+            if st.mute or st.action is None:
+                continue
+            if not (_bones_of_action(st.action) & bones):
+                continue
+            everywhere = str(getattr(st, "extrapolation", "NOTHING")) != "NOTHING"
+            if everywhere or _windows_overlap(float(st.frame_start),
+                                              float(st.frame_end), windows):
+                out.append(tr.name)
+                break
+    return out
+
+
+@contextmanager
+def tracks_muted(armature: Any, names):
+    """Mute the named tracks for the duration; restored by NAME afterwards
+    (structural NLA edits inside the block may invalidate track pointers)."""
+    names = list(dict.fromkeys(names or ()))
+    anim = getattr(armature, "animation_data", None)
+    done = []
+    try:
+        for tr in (anim.nla_tracks if (anim is not None and names) else ()):
+            if tr.name in names and not tr.mute:
+                tr.mute = True
+                done.append(tr.name)
+        yield done
+    finally:
+        anim = getattr(armature, "animation_data", None)
+        for tr in (anim.nla_tracks if (anim is not None and done) else ()):
+            if tr.name in done:
+                tr.mute = False
+        if done:                     # current frame re-evaluated with them back on
+            try:
+                bpy.context.view_layer.update()
+            except Exception:
+                pass
+
+
+def op_written_bones(armature: Any, op: Mapping[str, Any]) -> set:
+    """Bones an op writes: its strip's fcurves, else what its params name."""
+    _tr, strip = find_op_strip(armature, op)
+    bones = _bones_of_action(strip.action) if strip is not None else set()
+    params = op.get("params") or {}
+    for b in params.get("bones") or ():
+        if isinstance(b, str) and armature.pose.bones.get(b) is not None:
+            bones.add(b)
+    for key in ("path", "loc_path", "quat_path", "pelvis_path"):
+        p = str(params.get(key) or "")
+        if p.startswith('pose.bones["'):
+            bones.add(p.split('"')[1])
+    return bones
+
+
+def _reapply_windows(op: Mapping[str, Any], params: Mapping[str, Any],
+                     overrides: Mapping[str, Any]) -> list:
+    """Old write window + the new one when the overrides move it."""
+    wins = []
+    if op.get("frames"):
+        wins.append((int(op["frames"][0]), int(op["frames"][1])))
+    fr = params.get("frame_range")
+    if fr:
+        wins.append((int(fr[0]), int(fr[1])))
+    if overrides.get("dst_start") is not None and op.get("frames"):
+        s0 = int(overrides["dst_start"])
+        span = int(op["frames"][1]) - int(op["frames"][0])
+        wins.append((s0, s0 + span))
+    if overrides.get("dst_range"):
+        d = overrides["dst_range"]
+        wins.append((int(d[0]), int(d[1])))
+    if overrides.get("time_scale") is not None or overrides.get("src_range"):
+        wins.append(None)          # window length changes: unknown → everywhere
+    return list(dict.fromkeys(wins)) or [None]
+
+
 def reapply(data_dir: str | Path, armature: Any, op_id: str, *,
             scene: Any | None = None, base_action: Any | None = None,
             **overrides) -> dict:
@@ -467,31 +586,37 @@ def reapply(data_dir: str | Path, armature: Any, op_id: str, *,
                 break
     old_strip = (track.strips.get(old_strip_name)
                  if track is not None and old_strip_name else None)
-    old_exp = 1.0                  # set_influence 的力度：重写后要保留
+    old_exp = 1.0                  # set_influence 的力度：重写后要保留（0 = 静音也保留）
     try:
         if old_strip is not None and old_strip.action is not None:
-            old_exp = float(old_strip.action.get("applied_exp", 1.0) or 1.0)
+            old_exp = float(old_strip.action.get("applied_exp", 1.0))
     except Exception:
         old_exp = 1.0
+    # Newer fixes on the same bones/frames sit on higher tracks: the re-solve
+    # must not see them (the delta goes back UNDER them), see newer_same_bone_tracks.
+    newer = newer_same_bone_tracks(
+        armature, old_track_name, op_written_bones(armature, op),
+        _reapply_windows(op, params, overrides))
     _SHIFT = 100000
     if old_strip is not None:
         old_strip.frame_start += _SHIFT
         old_strip.frame_end += _SHIFT
     res = None
     try:
-        if plugin is not None:
-            res = plugin(armature, base_action, params=params,
-                         frame_range=frame_range, status=op.get("status"),
-                         scene=scene, track_name=old_track_name)
-        elif tool == "hold_pose":
-            res = hold_pose(armature, base_action, scene=scene, data_dir=None,
-                            record=False, track_name=old_track_name, **kwargs)
-        elif tool == "clean_jitter":
-            res = clean_jitter(armature, base_action, data_dir=None,
-                               track_name=old_track_name, **kwargs)
-        elif tool == "restore_accent":
-            res = restore_accent(armature, base_action, data_dir=None,
-                                 track_name=old_track_name, **kwargs)
+        with tracks_muted(armature, newer):
+            if plugin is not None:
+                res = plugin(armature, base_action, params=params,
+                             frame_range=frame_range, status=op.get("status"),
+                             scene=scene, track_name=old_track_name)
+            elif tool == "hold_pose":
+                res = hold_pose(armature, base_action, scene=scene, data_dir=None,
+                                record=False, track_name=old_track_name, **kwargs)
+            elif tool == "clean_jitter":
+                res = clean_jitter(armature, base_action, data_dir=None,
+                                   track_name=old_track_name, **kwargs)
+            elif tool == "restore_accent":
+                res = restore_accent(armature, base_action, data_dir=None,
+                                     track_name=old_track_name, **kwargs)
     except Exception:
         if old_strip is not None:
             old_strip.frame_start -= _SHIFT
@@ -799,11 +924,84 @@ def reconcile(armature: Any, data_dir: str | Path) -> list:
     return rows
 
 
+# 力度旋钮的"单位 delta"（exponent=1 时的曲线值）存在 strip 的 action 上（IDProperty，
+# action 是 ID；NLA strip 不支持自定义属性）。每次调力度都从它推导——不再从"现曲线 ÷
+# 上次指数"反推：后者在指数 0 时永久归零（曲线全变恒等、0 又被 `or 1` 当成 1），
+# 在 |δ|×指数 越过 180° 后再调就反向（quat_to_aa 把角度规范到 ≤180°：140° 的修复
+# 1.5→1.0 实测得 −100°）。
+UNIT_DELTA_KEY = "mcd_unit_delta"
+EXP_MUTED_KEY = "mcd_exp_muted"
+_EXP_SUFFIXES = (".rotation_quaternion", ".rotation_euler", ".location")
+
+
+def _exp_curves(action: Any) -> tuple[list, str]:
+    curves = [fc for fc in action.fcurves if str(fc.data_path).endswith(_EXP_SUFFIXES)]
+    sig = ";".join(f"{fc.data_path}[{fc.array_index}]:{len(fc.keyframe_points)}"
+                   for fc in curves)
+    return curves, sig
+
+
+def _curve_values(fc: Any) -> list:
+    co = [0.0] * (2 * len(fc.keyframe_points))
+    fc.keyframe_points.foreach_get("co", co)
+    return co[1::2]
+
+
+def _unit_delta(action: Any, curves: list, sig: str) -> tuple[list, bool]:
+    """Per-curve unit values (exponent 1).  Captured once from the curves the
+    first time the strength moves (fresh strips sit at exponent 1, so that is
+    exact); legacy strips scaled by the old code are divided back once."""
+    from .pkl_hand import aa_to_quat, quat_to_aa
+
+    store = action.get(UNIT_DELTA_KEY)
+    if store is not None:
+        try:
+            if str(store.get("sig", "")) == sig:
+                vals = [float(v) for v in store.get("vals", ())]
+                out, k = [], 0
+                for fc in curves:
+                    n = len(fc.keyframe_points)
+                    out.append(vals[k:k + n])
+                    k += n
+                if k == len(vals):
+                    return out, True
+        except Exception:
+            pass
+    e_prev = float(action.get("applied_exp", 1.0))
+    current = [_curve_values(fc) for fc in curves]
+    recoverable = True
+    if abs(e_prev - 1.0) > 1e-12:
+        if abs(e_prev) < 1e-12:
+            # 旧版把力度 0 烘成了恒等曲线：原 delta 已经丢了，只能从 0 起步
+            recoverable = False
+        else:
+            by_path: dict = {}
+            for i, fc in enumerate(curves):
+                if str(fc.data_path).endswith(".rotation_quaternion"):
+                    by_path.setdefault(fc.data_path, {})[fc.array_index] = i
+                else:
+                    current[i] = [v / e_prev for v in current[i]]
+            for comp in by_path.values():
+                if len(comp) != 4:
+                    continue
+                cols = [comp[c] for c in range(4)]
+                q = np.array([current[i] for i in cols], dtype=np.float64).T
+                u = aa_to_quat(quat_to_aa(q) / e_prev)
+                for c, i in enumerate(cols):
+                    current[i] = [float(v) for v in u[:, c]]
+    if recoverable:
+        action[UNIT_DELTA_KEY] = {"sig": sig,
+                                  "vals": [v for vals in current for v in vals]}
+    return current, recoverable
+
+
 def set_strip_exponent(strip: Any, exponent: float) -> dict:
-    """力度旋钮：把 strip delta 写成 delta^exponent（>1 = 超量修正）。
+    """力度旋钮：把 strip delta 写成 delta^exponent（>1 = 超量修正，0 = 静音）。
 
     NLA strip.influence 硬上限是 1.0，拖过 1 没用；真正的"力度"是把 delta
-    曲线的旋转角本身放大。轴角缩放保持方向、只加倍数。
+    曲线的旋转角本身放大。轴角缩放保持方向、只加倍数；Euler / location delta 在
+    Combine 下相加 → 线性缩放。每次都从单位 delta（见 _unit_delta）推导，任意
+    次调整、任意顺序都可逆；0 用 strip.mute 实现（曲线不动，力度回调即恢复）。
 
     注意：applied_exp 记在 **action** 上——NLA strip 不支持自定义属性
     （连 .get() 都抛 TypeError），action 是 ID 没有这个限制。
@@ -813,47 +1011,60 @@ def set_strip_exponent(strip: Any, exponent: float) -> dict:
     action = strip.action
     if action is None:
         return {"touched": 0}
+    exponent = float(exponent)
+    if exponent < 0.0:
+        raise RuntimeError(f"力度不能为负：{exponent}")
+    if exponent == 0.0:
+        if not strip.mute:
+            strip.mute = True
+            action[EXP_MUTED_KEY] = True
+        action["applied_exp"] = 0.0
+        strip.influence = 1.0
+        return {"touched": 0, "scalar_touched": 0, "exponent": 0.0, "muted": True}
 
-    # 收集每骨的 4 条四元数曲线
-    by_bone: dict[str, dict[int, Any]] = {}
-    for fc in action.fcurves:
-        if fc.data_path.endswith(".rotation_quaternion"):
-            by_bone.setdefault(fc.data_path, {})[fc.array_index] = fc
-
+    curves, sig = _exp_curves(action)
+    units, recoverable = _unit_delta(action, curves, sig)
+    by_path: dict = {}
+    for i, fc in enumerate(curves):
+        if str(fc.data_path).endswith(".rotation_quaternion"):
+            by_path.setdefault(fc.data_path, {})[fc.array_index] = i
     touched = 0
-    e_prev = float(action.get("applied_exp", 1.0)) or 1.0
-    for path, curves in by_bone.items():
-        if len(curves) != 4:
-            continue
-        n = len(curves[0].keyframe_points)
-        for i in range(n):
-            frame = curves[0].keyframe_points[i].co[0]
-            q = np.array([curves[c].keyframe_points[i].co[1] for c in range(4)])
-            unit_aa = quat_to_aa(q.reshape(1, 4))[0] / e_prev
-            new_q = aa_to_quat((unit_aa * exponent).reshape(1, 3))[0]
-            for c in range(4):
-                kp = curves[c].keyframe_points[i]
-                kp.co = (frame, float(new_q[c]))
-        for fc in curves.values():
-            fc.update()      # 重算贝塞尔手柄，保持原插值类型
-        touched += 1
-
-    # Euler / location delta 在 Combine 下相加 → 线性缩放即"力度"。
-    # （旧版只缩四元数通道：手臂 Euler 修复、位置修复拖力度毫无反应）
     scalar_touched = 0
-    for fc in action.fcurves:
-        dp = fc.data_path
-        if not (dp.endswith(".rotation_euler") or dp.endswith(".location")):
+    for comp in by_path.values():
+        if len(comp) != 4:
             continue
-        for kp in fc.keyframe_points:
-            kp.co = (kp.co[0], kp.co[1] / e_prev * float(exponent))
+        cols = [comp[c] for c in range(4)]
+        unit = np.array([units[i] for i in cols], dtype=np.float64).T   # (n,4)
+        if exponent == 1.0:
+            new = unit
+        else:
+            new = aa_to_quat(quat_to_aa(unit) * exponent)
+        for c, i in enumerate(cols):
+            fc = curves[i]
+            for k, kp in enumerate(fc.keyframe_points):
+                kp.co = (kp.co[0], float(new[k, c]))
+        for i in cols:
+            curves[i].update()      # 重算贝塞尔手柄，保持原插值类型
+        touched += 1
+    for i, fc in enumerate(curves):
+        if str(fc.data_path).endswith(".rotation_quaternion"):
+            continue
+        for k, kp in enumerate(fc.keyframe_points):
+            kp.co = (kp.co[0], units[i][k] * exponent)
         fc.update()
         scalar_touched += 1
 
-    action["applied_exp"] = float(exponent)
+    action["applied_exp"] = exponent
+    if action.get(EXP_MUTED_KEY):          # 只解开力度 0 自己静音的 strip
+        strip.mute = False
+        del action[EXP_MUTED_KEY]
     strip.influence = 1.0    # 力度烘进曲线，influence 不再当旋钮
-    return {"touched": touched, "scalar_touched": scalar_touched,
-            "exponent": float(exponent)}
+    out = {"touched": touched, "scalar_touched": scalar_touched,
+           "exponent": exponent}
+    if not recoverable:
+        out["warning"] = ("这条修复在旧版里被设过力度 0，原 delta 已被抹成恒等，"
+                          "无法恢复：revert 后重做")
+    return out
 
 
 def locked_exclusions(data_dir: str | Path) -> list:
