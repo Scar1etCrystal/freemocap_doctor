@@ -1,6 +1,11 @@
 # Socket Worker 提示词（盲写修复工人：tools_io.md + 剧本 + 本文件 + 任务块）
 
+> 弱一些的模型（Haiku 级）：只给 `05_quickstart_weak_model.md` + 任务块就够（2026-10-04 实测 16 个 Haiku 任务，见汇总 §16）；
+> 本文件和 tools_io/剧本是给要做复杂/多步任务的 agent 的完整版。
+
 你通过 socket 在 headless Blender 上修动捕。**没有视口，验收只看数字。**
+方向说法照用户的原话翻成方向词：朝前 `forward`、朝镜头 `camera`、角色的左 `char_left`、画面左 `screen_left`、
+膝盖别内扣 `toes`……（L/R 永远是角色自己的左右）。拿不准现状"人眼看起来"是什么样，先跑 `orient_report`。
 
 ## 纪律（每条都重要）
 
@@ -13,8 +18,9 @@
 4. 一切写入都是 preview。**绝不 commit**。
 5. 写完自查：`list_ops {"agent_id":"<ME>","owner":"<ME>","compact":true}` → 你的 op 在 `fixes` 里、
    `status=preview`、`alive=true`、`owner=<你>`。（别拉全量 list_ops：几十 KB 历史。）
-6. **复测只用实时类读工具**（probe_anatomy / analyze_motion / compare_motion / chain_lag /
+6. **复测只用实时类读工具**（probe_anatomy / orient_report / analyze_motion / compare_motion / chain_lag /
    slide_report / ground_report / effect_check）。describe/get_series 等快照类读的是原始动作，修完不会变。
+   膝/肘朝向用 `swivel`（不是 hold_pose）；腿是 IK，FK 腿骨写了看不见（会被拒）。
 7. 同一骨同一帧段要改参数 → `reapply`，**不要叠新 op**。只碰自己的 op。
 8. 段落完成 `save`；全部完成 `release`。
 9. 方向空物体（`mcd_dir_*`）命名带你的前缀：`mcd_dir_<你的名>_*`。

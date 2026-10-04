@@ -18,10 +18,14 @@
 
 ## 步骤
 
+**先外扩**：用户说"源 A–B → 目标 C–D"，写进工具的是 `src_range:[A−4, B+4]`、`dst_start:C−4`（`dst_range:[C−4, D+4]`）。
+目标窗两端各 4 帧是渐入渐出（blend），不外扩的话用户帧段的头尾 4 帧没复制到位（2026-10-04 Haiku 实测：照没外扩的例子写，
+900–903 / 947–950 帧差 55°）。compare_motion `{op_id}` 量的正好是目标窗去掉两端 blend = 用户帧段。
+
 1. **dry_run 预演**（不写任何东西）：
    ```
-   /home/sb/remote_kit_1.7.1/tools/agent motion_copy '{"agent_id":"<ME>","chain":"arm.L","src_range":[405,450],
-     "dst_start":405,"mirror":true,"dry_run":true}'
+   /home/sb/remote_kit_1.7.1/tools/agent motion_copy '{"agent_id":"<ME>","chain":"arm.L","src_range":[401,454],
+     "dst_start":401,"mirror":true,"dry_run":true}'
    ```
    看 `data.metrics.mirror_map`（实际 源→目标 映射）、`time_scale`、`notes`（警告，比如 IK 腿）。
    映射不对就改 `bone_map`，别硬写。
@@ -34,12 +38,12 @@
    源只读，不用认领。
 3. **写入**（去掉 dry_run，加 expect_version）。常用三种：
    ```
-   # 时间平移：左臂 405–450 搬到 700 开始
-   {"bones":["left_upper_arm","left_forearm","left_hand"],"src_range":[405,450],"dst_start":700}
+   # 时间平移：左臂 405–450 搬到 700 开始（都外扩 4 帧）
+   {"bones":["left_upper_arm","left_forearm","left_hand"],"src_range":[401,454],"dst_start":696}
    # 镜像到另一侧（同一时间段）
-   {"chain":"arm.L","src_range":[405,450],"dst_start":405,"mirror":true}
-   # 时间缩放进指定窗口（慢放/快放）
-   {"bones":["left_hand"],"src_range":[405,450],"dst_range":[1000,1068]}
+   {"chain":"arm.L","src_range":[401,454],"dst_start":401,"mirror":true}
+   # 时间缩放进指定窗口（慢放/快放）：用户要 1004–1064 → 写 [1000,1068]
+   {"bones":["left_hand"],"src_range":[401,454],"dst_range":[1000,1068]}
    ```
    跨部位：`"bone_map":{"spine_fk":"neck"}`（复制的是相同的关节局部旋转值）。
 4. **验收**：按 op 验收（最省事，等价于把写入返回的 `metrics.verify.args` 原样传，不用抄骨名列表）：

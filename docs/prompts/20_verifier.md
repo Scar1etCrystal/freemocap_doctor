@@ -21,13 +21,13 @@ diff -rq /home/sb/freemocap_doctor/mocap_doctor /home/sb/remote_kit_1.7.1/sandbo
 - `status --short` 有 `mocap_doctor/` 下的改动、或没出现 `SYNC_OK` → 现场没冻结/没部署：停下报告，不要自己 deploy。
 - 记下 HEAD 的 commit 号（报告里写"验收对象"）。
 
-## 2. e2e（13 套：12 套用默认 fixture，e2e_root_pivot 用它自己的 fixture）
+## 2. e2e（15 套：14 套用默认 fixture，e2e_root_pivot 用它自己的 fixture）
 
 ```bash
-for t in e2e_anatomy e2e_perfix e2e_accent e2e_fixlist_timer e2e_concurrency e2e_bugfixes e2e_motion_copy e2e_principles e2e_overlap e2e_foot_lock e2e_ground e2e_markers; do echo "## $t"; bash /home/sb/remote_kit_1.7.1/tools/mcd.sh e2e /home/sb/remote_kit_1.7.1/tests/$t.py | grep -E "^====? |^=== [0-9]|^\[FAIL\]|rc=|falling back"; done
+for t in e2e_anatomy e2e_perfix e2e_accent e2e_fixlist_timer e2e_concurrency e2e_bugfixes e2e_motion_copy e2e_principles e2e_overlap e2e_foot_lock e2e_ground e2e_markers e2e_align e2e_quickstart; do echo "## $t"; bash /home/sb/remote_kit_1.7.1/tools/mcd.sh e2e /home/sb/remote_kit_1.7.1/tests/$t.py | grep -E "^====? |^=== [0-9]|^\[FAIL\]|rc=|falling back"; done
 echo "## e2e_root_pivot"; bash /home/sb/remote_kit_1.7.1/tools/mcd.sh e2e /home/sb/remote_kit_1.7.1/tests/e2e_root_pivot.py /home/sb/remote_kit_1.7.1/sandbox/work/fixture_root_pivot.blend | grep -E "^====? |^\[FAIL\]|rc=|falling back"
 ```
-13 套合计约 85 秒（单套 2–16 s）：**前台一条 Bash 跑完**即可（timeout 给 400000 毫秒），不用后台/轮询。套件的结论行有两种写法
+15 套合计约 115 秒（单套 2–19 s）：**前台一条 Bash 跑完**即可（timeout 给 400000 毫秒），不用后台/轮询。套件的结论行有两种写法
 （`==== N/N PASS ====` 和 `=== N/N passed ===`），都算。
 
 ## 3. 纯 Python 单测（13 个文件，不需要 Blender）
@@ -57,9 +57,9 @@ python3 /home/sb/remote_kit_1.7.1/tests/bench_steps_compare.py /home/sb/remote_k
 
 | 项 | 应得 |
 |---|---|
-| e2e | anatomy 21/21 · perfix 17/17 · accent 8/8 · fixlist_timer 7/7 · concurrency 45/45 · bugfixes 38/38 · motion_copy 42/42 · principles 38/38 · overlap 42/42 · foot_lock 15/15 · ground 25/25 · markers 21/21 · root_pivot 9/9（共 328；2026-10-04 起：之前 12 套 319 / 11 套 294），每套 rc=0，没有 `falling back`。root_pivot 的 fixture `sandbox/work/fixture_root_pivot.blend` = 用户 0999_fsb_showretargetproblem.blend 的副本 |
+| e2e | anatomy 21/21 · perfix 17/17 · accent 8/8 · fixlist_timer 7/7 · concurrency 45/45 · bugfixes 38/38 · motion_copy 42/42 · principles 38/38 · overlap 42/42 · foot_lock 15/15 · ground 25/25 · markers 25/25 · root_pivot 9/9 · align 38/38 · quickstart 5/5（共 375；§16 起：markers +4（审查 M20）、新增 align / quickstart。之前 13 套 328 / 12 套 319 / 11 套 294；与 upper-body 分支合并后按两边相加），每套 rc=0，没有 `falling back`。root_pivot 的 fixture `sandbox/work/fixture_root_pivot.blend` = 用户 0999_fsb_showretargetproblem.blend 的副本 |
 | 单测 | 13 个文件全过 |
-| agent 层 golden | `GOLDEN DIFF: 1577 differences (numeric 1548, max |Δ|=1.078e+02)` 且 `GOLDEN DIFF SECTIONS: ['clean_jitter', 'describe', 'effect_check', 'hold_pose', 'list_ops', 'probe_palm', 'probe_palm_75', 'probe_sole', 'reapply', 'set_influence', 'validate']`——只允许这些节、这个数。五个有意修复：去抖四元数、effect_check 取样、厚底靴的假"悬空"、probe 的 hold_pose_args 改成逐帧 probe 轴写法，以及 2026-10-04 掌心改为网格标定 + 次轴 hand_axis（基准里的 hold_pose 掌心修复及其 reapply / set_influence / list_ops 行随之变）；`INFO tools added=[…17 个…] removed=[]` 正常（2026-10-03 终版是 414 处 / 7 节 / 16 个工具） |
+| agent 层 golden | `GOLDEN DIFF: 1593 differences (numeric 1551, max |Δ|=1.078e+02)` 且 `GOLDEN DIFF SECTIONS: ['clean_jitter', 'describe', 'effect_check', 'hold_pose', 'list_ops', 'probe_body', 'probe_palm', 'probe_palm_75', 'probe_sole', 'reapply', 'set_influence', 'validate']`——只允许这些节、这个数。§16 相对 1577/11 节多出的 16 处：`probe_body`（身体前方改为躯干朝向，13 处）+ `hold_pose.world_dir`/`world_dir2` 的 envelope 各多 1 条"你给的是世界向量…用 forward"提醒（基准在 150–224 帧写 [0,-1,0]，这段角色躯干偏 −X 41°）。五个有意修复：去抖四元数、effect_check 取样、厚底靴的假"悬空"、probe 的 hold_pose_args 改成逐帧 probe 轴写法，以及 2026-10-04 掌心改为网格标定 + 次轴 hand_axis（基准里的 hold_pose 掌心修复及其 reapply / set_influence / list_ops 行随之变）；`INFO tools added=[…21 个…] removed=[]` 正常（§16 新增 swivel / orient_report / conventions / render_view；2026-10-03 终版是 414 处 / 7 节 / 16 个工具） |
 | 向导 | `STEPS ALL SAME`（8 步关键帧 + 物体摘要与原版相同；source_check/source_floor 两版都报"源骨架没有活动 Action"，正常） |
 | 导出链 | `STEPS ALL SAME`（mmd_bake / export_prep 关键帧摘要 + 导出 .vmd 字节哈希与原版相同） |
 

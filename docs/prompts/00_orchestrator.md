@@ -9,9 +9,14 @@ bash /home/sb/remote_kit_1.7.1/tools/mcd.sh server-start <工作文件.blend>  #
 ```
 - 机器只有 ~8GB：**同时只能有 1 个 Blender**。服务开着时不能跑 e2e（mcd.sh 会排队等）。
 - 先 `list_ops` 看文件里已有的修复（别让 agent 在用户已有修复上乱叠）。
-- 朝向类任务（掌心/脚底）开工前 `markers '{"agent_id":"coord","action":"list","frame_range":[A,B]}'`：有用户绑的
-  `MCD_palm.L` 等就以它为准；没有就 `action:"create"` 建好并告诉用户在视口里过一眼（膝/肘用 `bake` 给用户看）。
-  `valid:false`（没骨骼父级）的标记会被 probe 忽略——让用户重绑或 `overwrite:true` 重建。
+- `conventions '{"agent_id":"coord","frame":<用户提到的帧>}'`：角色这一帧面朝哪、镜头/视口在角色哪一侧（画面左右是否镜像）、
+  哪条腿/胳膊是 IK、帧号怎么对应视频。把用户的"朝前/左/朝镜头"翻成方向词（`forward` `char_left` `camera` …）再写进任务块。
+- 朝向类任务（掌心/脚底/膝/肘/脸/胸/骨盆）开工前 `markers '{"agent_id":"coord","action":"check"}'`：有用户绑的箭头就以它为准
+  （check 会把场景里用户自己的 SINGLE_ARROW 也体检一遍：绑错侧、顶点父级在另一只手、没父级、带关键帧都报 error + fix；
+  status=ok 的用户箭头 `action:"adopt"` 收编）；没有就 `action:"create"`（默认 palm/sole/knee/elbow）建好，告诉用户在视口里
+  过一眼。膝/肘的标记是刚性的（绑小腿/前臂，直腿也有定义）；想看当帧凸出角平分线才用 `bake`（`MCD_bake_*`）。
+- 用户只给了模糊说法（"左手那一下"、"膝盖别内扣"）：`orient_report` 把现状翻成人话、对着用户的话核对一遍再派单；
+  能看图就 `render_view` 渲一张给自己/用户看。
 
 ## 1. 拆任务（每条 = 一个剧本 + 一个 scope）
 
@@ -19,7 +24,7 @@ bash /home/sb/remote_kit_1.7.1/tools/mcd.sh server-start <工作文件.blend>  #
 
 | 问题 | 剧本 | scope 写法 |
 |---|---|---|
-| 朝向 | 30 | `bones:[owner]`（先 probe 拿 owner）× 帧段 |
+| 朝向 | 30 | `bones:[owner]`（先 probe 拿 owner）× 帧段；**膝/肘** = swivel 的控制骨（IK 腿 `thigh_ik.L`，FK 臂 `upper_arm_fk.L`+`hand_fk.L`） |
 | 抖 | 31 | 骨 × 帧段 |
 | 打击感 | 32 | 骨 × 帧段 |
 | 脚滑/穿地 | 33 | `foot_ik.L/R` × 接触段±blend |
@@ -28,7 +33,10 @@ bash /home/sb/remote_kit_1.7.1/tools/mcd.sh server-start <工作文件.blend>  #
 | 重叠/改节奏 | 36 | 链 × 帧段 |
 
 **用户给的帧段 = 要生效的区域**。写入窗 = 两端各外扩 `blend`（默认 4）帧：`[A−4, B+4]`，scope 也写外扩后的窗；
-复测/验收都在用户帧段上量（复制类：源窗和目标窗同样外扩，副本才能整段到位）。
+复测/验收都在用户帧段上量（复制类：源窗和目标窗同样外扩，副本才能整段到位——2026-10-04 Haiku 第一轮照着没外扩的例子
+复制，用户帧段两端 4 帧差 55°）。
+**"第 N 帧那一下"类任务**：任务块里写清楚是哪一侧、哪一下（先用 analyze_motion [N−12, N+25] 确认 peak_frame ≈ N，把 onset/stop
+写进任务块）——窗口里有更快的另一下动作时 analyze_motion 会挑那一下（Haiku 第一轮就加到了前一下回收动作上）。
 
 ## 2. 派单前体检（让 agent 天然避开同一段关键帧）
 
@@ -72,6 +80,8 @@ scope：<骨/链> × [A,B]。只许写这里。写之前 claim（读、dry_run �
 - 你自己串行执行任务时也一样：每个任务做完就 save（save 很快），别攒到最后。
 - 每批结束后 `list_ops {"agent_id":"coord","live":true,"compact":true}` 扫一眼：带 `stale` 的复制行 = 源被后来的修复改了，
   让它的 owner（或你自己）`reapply {op_id, overrides:{}}`。
+- 你（coord）`revert`/`reapply` 了别人的 op（`force:true`）之后**立刻 `release`**：对 op 的写操作会按 op 的骨×帧**自动认领**
+  15 分钟，下一个来修这段的 agent 会被你挡住（2026-10-04 第二轮：撤掉一条失败的复制后没 release，重派的 Haiku 正确地停手了）。
 - 最后协调者自己 `save` 一次，`list_ops` 对账：`fixes` 里没有 `lost` / `unregistered`。
 
 ## 5. 收尾
