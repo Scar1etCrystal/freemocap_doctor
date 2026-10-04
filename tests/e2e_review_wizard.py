@@ -15,6 +15,7 @@ Each check reproduces the finding's scenario on the e2e fixture (never saved):
   W5  M19  "载入自动腾空提示" refills a manually cleared air track
   W6  M14  the same reload finds the contacts report through a DEAD absolute
            path (project moved) under <data dir>/reports/
+  W7  P4   planted-indicator refresh with nothing changed tags no object
 
     bash tools/mcd.sh e2e tests/e2e_review_wizard.py
 """
@@ -210,6 +211,41 @@ finally:
     record.artifact_path = artifact_before
     annotation.set_air_ranges(scene, air_before, rebuild=False)
     shutil.rmtree(data_dir, ignore_errors=True)
+
+# ---- W7 / P4 ------------------------------------------------------------------
+# planted indicators: refresh() runs on every frame change AND inside
+# depsgraph_update_post; an unconditional hide_render write re-tagged the objects
+# every time (self-triggered re-evaluation).  Unchanged state = no update.
+from bl_ext.user_default.mocap_doctor import planted_indicators as PI  # noqa: E402
+seen = []
+
+
+def _count(_scene, depsgraph):
+    seen.extend(u.id.name for u in depsgraph.updates
+                if u.id.name.startswith(PI.OBJECT_PREFIX))
+
+
+scene.mcd_annotation_mode = True
+settings.annotation_step_id = "contacts"
+try:
+    PI.activate(scene)
+    bpy.context.view_layer.update()
+    bpy.app.handlers.depsgraph_update_post.append(_count)
+    bpy.context.view_layer.update()
+    seen.clear()
+    for _ in range(3):
+        PI.refresh(scene)
+        bpy.context.view_layer.update()
+    n_idle = len(seen)
+    made = len(PI._owned_objects(scene))
+finally:
+    if _count in bpy.app.handlers.depsgraph_update_post:
+        bpy.app.handlers.depsgraph_update_post.remove(_count)
+    PI.cleanup(scene)
+    scene.mcd_annotation_mode = False
+    settings.annotation_step_id = ""
+check("W7 P4 indicator refresh with nothing changed tags no object",
+      made == 2 and n_idle == 0, f"indicators={made} updates_while_idle={n_idle}")
 
 fails = [r for r in RESULTS if not r[1]]
 print(f"\n==== {len(RESULTS) - len(fails)}/{len(RESULTS)} PASS ====")

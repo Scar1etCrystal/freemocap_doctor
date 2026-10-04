@@ -21,6 +21,7 @@
            optional token
   R12 M16  a corrupt op log is moved aside and reported, never overwritten
   R13 M24  fix_ground on a tilted rig moves the foot straight down in WORLD space
+  R14 P9   batch-written agent keys are identical to the per-key insert path
 
     bash tools/mcd.sh e2e tests/e2e_review_agent.py
 """
@@ -461,6 +462,34 @@ else:
         for fc, m in zip(rot_fcs, saved[2]):
             fc.mute = m
         scene.frame_set(scene.frame_current)
+
+# ---- R14 / P9 --------------------------------------------------------------------
+# agent strips are written into fresh curves in one add(n)+foreach_set; the keys
+# must be what the per-key insert path produced
+from bl_ext.user_default.mocap_doctor.core import animation as ANIM  # noqa: E402
+act = bpy.data.actions.new("e2e_p9_keys")
+try:
+    vals = np.sin(np.arange(40) * 0.3) * 0.1
+    act.fcurves.new("location", index=0)
+    agent_bake.write_fcurve_values(act, "location", 0, 100, vals)        # batch path
+    fa = act.fcurves.find("location", index=0)
+    fb = act.fcurves.new("location", index=1)                          # per-key path
+    cache = ANIM.keyframe_map(fb)
+    for k, v in enumerate(vals):
+        ANIM.set_fcurve_value(fb, 100 + k, float(v), cache=cache)
+    fb.update()
+
+    def _keys(fc):
+        return [(tuple(k.co), k.interpolation, k.handle_left_type, k.handle_right_type,
+                 k.easing, k.type, tuple(k.handle_left), tuple(k.handle_right))
+                for k in fc.keyframe_points]
+
+    ev = max(abs(fa.evaluate(t) - fb.evaluate(t)) for t in np.arange(99.0, 141.0, 0.25))
+    check("R14 P9 batch-written keys = per-key inserted keys (co, interp, handles, eval)",
+          _keys(fa) == _keys(fb) and ev == 0.0,
+          f"n={len(fa.keyframe_points)} eval_diff={ev} first={_keys(fa)[0][:5]} vs {_keys(fb)[0][:5]}")
+finally:
+    bpy.data.actions.remove(act)
 
 # ---- R12 / M16 (last: it resets the op log) -------------------------------------
 log = os.path.join(data_dir, "agent_ops.json")

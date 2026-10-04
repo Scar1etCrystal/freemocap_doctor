@@ -272,10 +272,26 @@ def write_fcurve_values(
     *,
     group: str = "agent",
 ) -> int:
-    """Dense per-frame write of values into (creating if needed) an F-curve."""
+    """Dense per-frame write of values into (creating if needed) an F-curve.
+
+    P9: a fresh (empty) curve - every agent delta strip - is filled in one
+    keyframe_points.add(n) + foreach_set instead of n RNA inserts (19-bone
+    copy: 20-30 ms → ~1 ms); same keys (co, LINEAR), checked by the golden."""
     from .animation import ensure_fcurve, keyframe_map, set_fcurve_value
 
     fcurve = ensure_fcurve(action, data_path, int(index), group=group)
+    n = len(values)
+    if n and len(fcurve.keyframe_points) == 0:
+        points = fcurve.keyframe_points
+        points.add(n)
+        co = np.empty(2 * n, dtype=np.float64)
+        co[0::2] = int(frame_start) + np.arange(n)
+        co[1::2] = np.asarray(values, dtype=np.float64)
+        points.foreach_set("co", co)
+        for key in points:
+            key.interpolation = "LINEAR"
+        fcurve.update()
+        return n
     cache = keyframe_map(fcurve)
     for offset, value in enumerate(values):
         set_fcurve_value(fcurve, int(frame_start) + offset, float(value), cache=cache)

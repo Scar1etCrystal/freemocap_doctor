@@ -379,10 +379,13 @@ def motion_copy(scene: Any, armature: Any, *, bones: Sequence[str] | None = None
             # 同一口径。
             try:
                 va = metrics["verify"]["args"]
+                # P6: the copy already sampled both windows (visible, before any
+                # write) - the same per-bone samples compare_motion would take
                 before = compare_motion(scene, armature,
                                         a_bones=va["a"]["bones"], a_range=va["a"]["frame_range"],
                                         b_bones=va["b"]["bones"], b_range=va["b"]["frame_range"],
-                                        mirror=va["mirror"], space=va["space"], trim=va["trim"])
+                                        mirror=va["mirror"], space=va["space"], trim=va["trim"],
+                                        _samples=(smp_d, smp_s))
                 metrics["verify"]["err_inner_before_deg"] = before["err_inner_deg"]
             except Exception as exc:  # noqa: BLE001 - 只是附带的基线，失败不挡 dry_run
                 metrics["verify"]["err_inner_before_deg"] = None
@@ -407,7 +410,7 @@ def compare_motion(scene: Any, armature: Any, *, a_bones: Sequence[str],
                    mirror: bool = False,
                    bone_map: Mapping[str, str] | None = None,
                    space: str = "local", trim: int = 4,
-                   channels: str = "rot") -> dict:
+                   channels: str = "rot", _samples=None) -> dict:
     """b 段 vs a 段（mirror 时 vs a 的镜像）逐帧旋转误差（度）。
 
     配对：bone_map 优先；否则 b_bones 与 a_bones 等长按顺序配；否则镜像名/同名。
@@ -443,9 +446,14 @@ def compare_motion(scene: Any, armature: Any, *, a_bones: Sequence[str],
     world = space == "world"
     na, nb = a1 - a0 + 1, b1 - b0 + 1
     tb = b0 + np.arange(na, dtype=np.float64) * (nb - 1) / float(na - 1)
-    smp_a = P.sample_visible(scene, armature, A, list(range(a0, a1 + 1)), world=world)
-    smp_b = P.sample_visible(scene, armature, Bset, list(range(b0, b1 + 1)),
-                             world=world)
+    if _samples is not None:
+        # caller's visible samples of the same windows (a superset of the bones
+        # is fine: sample_visible's per-bone values do not depend on the others)
+        smp_a, smp_b = _samples
+    else:
+        smp_a = P.sample_visible(scene, armature, A, list(range(a0, a1 + 1)), world=world)
+        smp_b = P.sample_visible(scene, armature, Bset, list(range(b0, b1 + 1)),
+                                 world=world)
     trim = max(0, int(trim))
     sl = slice(trim, na - trim) if na > 2 * trim else slice(None)
     per_bone = {}
