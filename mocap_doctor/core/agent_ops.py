@@ -1082,26 +1082,36 @@ def effect_check(
     scene: Any,
     armature: Any,
     *,
-    track_name: str,
+    track_name: str | None = None,
     bones: Sequence[str],
     frames: Sequence[int],
+    track_names: Sequence[str] | None = None,
 ) -> dict:
     """A/B 自检：mute→frame_set→读求值姿态，unmute→frame_set→再读。
 
     回答"这次写入真的改了求值结果吗"。对每个采样帧/骨骼给出指尖世界位移
     (mm) 和姿态旋转夹角 (deg)；verdict 是位移>1mm 或转角>0.5° 的帧占比。
+    track_names：几条轨**一起** mute/unmute（全部修复的 A/B）。结束时每条轨恢复
+    原来的静音状态——用户静音（= 拒绝）的修复不会被一次自检悄悄打开（之后 MMD
+    Bake 的 visual keying 会把它烘进 VMD）。
     """
     from .animation import current_view_layer, preserve_scene_frame, \
         set_scene_frame
 
+    names = list(track_names or ([track_name] if track_name else []))
     anim = armature.animation_data
-    track = None
-    for tr in (anim.nla_tracks if anim else ()):
-        if tr.name == track_name:
-            track = tr
-            break
-    if track is None:
-        raise RuntimeError(f"没有 NLA 轨 {track_name}")
+    tracks = []
+    for nm in names:
+        track = None
+        for tr in (anim.nla_tracks if anim else ()):
+            if tr.name == nm:
+                track = tr
+                break
+        if track is None:
+            raise RuntimeError(f"没有 NLA 轨 {nm}")
+        tracks.append(track)
+    if not tracks:
+        raise RuntimeError("effect_check 需要 track_name")
 
     def _sample(frame):
         set_scene_frame(scene, int(frame))
@@ -1116,31 +1126,42 @@ def effect_check(
 
     per_frame = []
     hits = 0
+    was_muted = [bool(t.mute) for t in tracks]
     with preserve_scene_frame(scene):
-        for f in frames:
-            track.mute = True
-            off = _sample(f)
-            track.mute = False
-            on = _sample(f)
-            cells = {}
-            for bone in off:
-                (p0, q0), (p1, q1) = off[bone], on[bone]
-                dist_mm = float((p1 - p0).length * 1000)
-                ang = float(np.degrees(2 * np.arccos(
-                    min(1.0, abs(float(q0.normalized().dot(q1.normalized())))))))
-                cells[bone] = {"pos_mm": round(dist_mm, 1),
-                               "rot_deg": round(ang, 1)}
-            moved = any(c["pos_mm"] > 1.0 or c["rot_deg"] > 0.5
-                        for c in cells.values())
-            hits += int(moved)
-            per_frame.append({"frame": int(f), "moved": moved,
-                              "bones": cells})
-    return {"track": track_name,
-            "verdict": f"{hits}/{len(per_frame)} 帧有变化",
-            "pass": hits == len(per_frame),
-            # 局部修复（重音/跟随/踩实）前后段本来就不动：写上没写上看 moved_any
-            "moved_any": hits > 0,
-            "per_frame": per_frame}
+        try:
+            for f in frames:
+                for t in tracks:
+                    t.mute = True
+                off = _sample(f)
+                for t in tracks:
+                    t.mute = False
+                on = _sample(f)
+                cells = {}
+                for bone in off:
+                    (p0, q0), (p1, q1) = off[bone], on[bone]
+                    dist_mm = float((p1 - p0).length * 1000)
+                    ang = float(np.degrees(2 * np.arccos(
+                        min(1.0, abs(float(q0.normalized().dot(q1.normalized())))))))
+                    cells[bone] = {"pos_mm": round(dist_mm, 1),
+                                   "rot_deg": round(ang, 1)}
+                moved = any(c["pos_mm"] > 1.0 or c["rot_deg"] > 0.5
+                            for c in cells.values())
+                hits += int(moved)
+                per_frame.append({"frame": int(f), "moved": moved,
+                                  "bones": cells})
+        finally:
+            for t, m in zip(tracks, was_muted):
+                if bool(t.mute) != m:
+                    t.mute = m
+    out = {"track": track_name if track_names is None else "all",
+           "verdict": f"{hits}/{len(per_frame)} 帧有变化",
+           "pass": hits == len(per_frame),
+           # 局部修复（重音/跟随/踩实）前后段本来就不动：写上没写上看 moved_any
+           "moved_any": hits > 0,
+           "per_frame": per_frame}
+    if any(was_muted):
+        out["muted_tracks_kept"] = [t.name for t, m in zip(tracks, was_muted) if m]
+    return out
 
 
 def restore_accent(

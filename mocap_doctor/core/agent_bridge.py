@@ -712,42 +712,34 @@ def _tool_effect_check(ctx, track_name=None, op_id=None, bones=None,
         if not frames:
             # 默认采样落在 taper 之外：strip 两端各 blend 帧权重从 0 渐升，
             # 端点权重恰为 0——旧版采 [起, 中, 止] 必然报"1/3 帧有变化"。
+            # 工具自己报了生效段（overlap 的 metrics.inner_frames、motion_copy 的
+            # inner_range）就用它：overlap 的自动 blend 在 params 里记成 None，
+            # 按 0 算会采到 taper 端点。
             fr = op.get("frames")
-            bl = int((op.get("params") or {}).get("blend", 4) or 0)
-            lo, hi = fr[0] + bl, fr[1] - bl
-            if hi < lo:
-                lo, hi = fr[0], fr[1]
+            mets = op.get("metrics") or {}
+            inner = mets.get("inner_frames") or mets.get("inner_range")
+            if inner and int(inner[1]) >= int(inner[0]):
+                lo, hi = int(inner[0]), int(inner[1])
+            else:
+                bl = (op.get("params") or {}).get("blend", 4)
+                if bl is None:
+                    bl = mets.get("blend", 0)
+                bl = int(bl or 0)
+                lo, hi = fr[0] + bl, fr[1] - bl
+                if hi < lo:
+                    lo, hi = fr[0], fr[1]
             frames = sorted({lo, (lo + hi) // 2, hi})
     if track_name is None:
-        # 没指定就查所有 agent 轨（A/B 语义：全部修复一起 mute）
+        # 没指定就查所有 agent 轨（A/B 语义：全部修复一起 mute——一次 A/B，
+        # 不再逐轨测再取最大：既与文档一致，求值次数也从 6×轨数 降到 6）
         armature_anim = getattr(armature, "animation_data", None)
         names = [t.name for t in (armature_anim.nla_tracks if armature_anim else ())
                  if agent_ops.is_agent_track_name(t.name)]
         if not names:
             raise RuntimeError("RIG 上没有 agent 轨")
-        merged = None
-        for nm in names:
-            res = agent_ops.effect_check(ctx["scene"], armature,
-                                         track_name=nm,
-                                         bones=list(bones), frames=list(frames))
-            if merged is None:
-                merged = res
-                merged["tracks"] = [nm]
-            else:
-                merged["tracks"].append(nm)
-                for a, b in zip(merged["per_frame"], res["per_frame"]):
-                    for bone, cell in b["bones"].items():
-                        cur = a["bones"].get(bone)
-                        if cur is None or cell["pos_mm"] > cur["pos_mm"] \
-                                or cell["rot_deg"] > cur["rot_deg"]:
-                            a["bones"][bone] = cell
-                    a["moved"] = a["moved"] or b["moved"]
-        hits = sum(1 for r in merged["per_frame"] if r["moved"])
-        merged["verdict"] = f"{hits}/{len(merged['per_frame'])} 帧有变化"
-        merged["pass"] = hits == len(merged["per_frame"])
-        merged["moved_any"] = hits > 0
-        merged["track"] = "all"
-        res = merged
+        res = agent_ops.effect_check(ctx["scene"], armature, track_names=names,
+                                     bones=list(bones), frames=list(frames))
+        res["tracks"] = names
         label = f"全部 agent 轨({len(names)})"
     else:
         res = agent_ops.effect_check(ctx["scene"], armature,
