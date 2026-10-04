@@ -145,6 +145,18 @@ finally:
     if bpy.data.actions.get("e2e_foreign_strip"):
         bpy.data.actions.remove(bpy.data.actions["e2e_foreign_strip"])
 check("W3a 3 empty NlaTracks no longer block MMD Bake", REACHED in msg_empty, msg_empty[:80])
+# the wizard's "no NLA" guard (ground_feet / export prep) follows the same rule
+tmp_tracks = [anim.nla_tracks.new().name for _ in range(2)]
+try:
+    OPS._require_no_nla(rig, "MMR Rig")
+    empty_ok = True
+except RuntimeError:
+    empty_ok = False
+finally:
+    for tr in list(anim.nla_tracks):
+        if tr.name in tmp_tracks:
+            anim.nla_tracks.remove(tr)
+check("W3c _require_no_nla ignores empty tracks too", empty_ok, f"empty tracks={tmp_tracks}")
 check("W3b a foreign track WITH a strip still blocks", "陌生的 NLA Track" in msg_full
       and blocker in msg_full, msg_full[:80])
 

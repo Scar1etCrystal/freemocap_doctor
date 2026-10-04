@@ -324,8 +324,10 @@ def _require_action(owner, label):
 
 
 def _require_no_nla(owner, label):
+    # Empty tracks animate nothing (the user's RIG carries 103 empty NlaTrack.*,
+    # same as the MMD Bake check below): only tracks with strips can stack.
     animation_data = getattr(owner, "animation_data", None)
-    if animation_data and len(animation_data.nla_tracks) > 0:
+    if animation_data and any(len(track.strips) > 0 for track in animation_data.nla_tracks):
         raise RuntimeError(f"{label} 存在 NLA Track；请先合并或移除，避免与活动 Action 叠加")
 
 
