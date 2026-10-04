@@ -1025,7 +1025,7 @@ def _aggregate(frames_data: list[dict], key: str) -> dict:
 
 
 def _resolve_toward(scene: Any, armature: Any, toward: Any, origin: Vector | None,
-                    view: str = "camera") -> tuple[Vector | None, str]:
+                    view: str = "camera", side: str | None = None) -> tuple[Vector | None, str]:
     """把 toward 解析成世界向量：三元组 / 方向词 / 物体名（agent_view.resolve_direction）。
 
     2026-10-04 改：`"camera"` 以前返回相机的**视线**方向（压平）= 背对镜头，正好反了；现在是从部位
@@ -1036,7 +1036,7 @@ def _resolve_toward(scene: Any, armature: Any, toward: Any, origin: Vector | Non
     from . import agent_view
     mmd = getattr(getattr(scene, "mocap_doctor", None), "mmd_armature", None)
     return agent_view.resolve_direction(toward, scene=scene, armature=armature, origin=origin,
-                                        view=view, mmd=mmd)
+                                        view=view, mmd=mmd, side=side)
 
 
 _HAND_PARTS = ("palm", "back_of_hand", "finger_dir", "knuckle", "hand_axis")
@@ -1298,7 +1298,7 @@ def probe(scene: Any, armature: Any, *, part: str, side: str | None = None,
                     try:
                         origin = (part_anchor(armature, part, side_n) if str_toward
                                   else (_pw(armature, owner, "head") if owner else None))
-                        t2, _ = _resolve_toward(scene, armature, toward, origin, view)
+                        t2, _ = _resolve_toward(scene, armature, toward, origin, view, side_n)
                     except Exception as exc:  # noqa: BLE001 - replayed below
                         t2 = exc
                 extra.append((owner, lk, ls, t2))
@@ -1319,7 +1319,7 @@ def probe(scene: Any, armature: Any, *, part: str, side: str | None = None,
     if toward is not None and key:
         origin = (part_anchor(armature, part, side_n) if str_toward
                   else (_pw(armature, owner, "head") if owner else None))
-        tv, how = _resolve_toward(scene, armature, toward, origin, view)
+        tv, how = _resolve_toward(scene, armature, toward, origin, view, side_n)
         _fill_toward(out, part, frames_data, [e[3] for e in extra], key, tv, how, toward)
     return out
 
@@ -1367,7 +1367,7 @@ def _probe_slow(scene: Any, armature: Any, *, part: str, side: str | None = None
             if toward is not None and key and d.get(key) is not None:
                 origin = (part_anchor(armature, part, side) if str_toward
                           else (_pw(armature, owner, "head") if owner else None))
-                t2, _ = _resolve_toward(scene, armature, toward, origin, view)
+                t2, _ = _resolve_toward(scene, armature, toward, origin, view, side)
             targets.append(t2)
 
     out: dict[str, Any] = {"part": part, "side": side,
@@ -1380,7 +1380,7 @@ def _probe_slow(scene: Any, armature: Any, *, part: str, side: str | None = None
     if toward is not None and key:
         origin = (part_anchor(armature, part, side) if str_toward
                   else (_pw(armature, owner, "head") if owner else None))
-        tv, how = _resolve_toward(scene, armature, toward, origin, view)
+        tv, how = _resolve_toward(scene, armature, toward, origin, view, side)
         _fill_toward(out, part, frames_data, targets, key, tv, how, toward)
     return out
 

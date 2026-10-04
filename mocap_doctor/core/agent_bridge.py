@@ -1068,6 +1068,11 @@ def _tool_apply_exemplar(ctx, frame_range, ex_id, loc_path, quat_path,
                          yaw_scale=1.0, mirror=False, blend=4,
                          op_mode="preview", **_):
     armature = ctx["armature"]
+    folder = agent_ops.exemplar_dir(ctx["data_dir"])
+    if not (folder / f"{ex_id}.npz").is_file():
+        have = sorted(p.stem for p in folder.glob("*.npz")) if folder.is_dir() else []
+        raise RuntimeError(f"模板 {ex_id!r} 不存在；这个文件登记过的模板：{have or '无'}。"
+                           "没有模板就别用 apply_exemplar（报告给协调者）")
     ex = agent_ops.load_exemplar(ctx["data_dir"], ex_id)
     op = agent_ops.apply_exemplar(
         armature, ex, target_pos, target_quat, float(anchor_yaw_deg),

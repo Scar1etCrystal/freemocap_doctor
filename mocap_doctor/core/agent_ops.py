@@ -1376,7 +1376,8 @@ def _probe_axis_fn(axis: Any):
 
 def _target_fn(scene: Any, armature: Any, pb: Any,
                world_dir: Any, dir_object: str | None,
-               dir_mode: str, origin_fn=None, view: str = "camera"):
+               dir_mode: str, origin_fn=None, view: str = "camera",
+               side: str | None = None):
     """返回 callable()->Vector，逐帧求目标方向。
 
     - world_dir 给固定向量：常量目标
@@ -1397,7 +1398,8 @@ def _target_fn(scene: Any, armature: Any, pb: Any,
         def fn():
             org = origin_fn() if origin_fn is not None else (armature.matrix_world @ pb.head)
             return agent_view.resolve_direction(spec, scene=scene, armature=armature,
-                                                origin=org, view=view, mmd=mmd)[0]
+                                                origin=org, view=view, mmd=mmd,
+                                                side=side)[0]
         return fn
     if dir_object:
         obj = bpy.data.objects.get(str(dir_object))
@@ -1420,6 +1422,14 @@ def _target_fn(scene: Any, armature: Any, pb: Any,
     def fn():
         return Vector(const)
     return fn
+
+
+def _side_for(axis: Any) -> str | None:
+    """"probe:<part>.L" → "L"（方向词 toes 要知道是哪一侧）。"""
+    if isinstance(axis, str) and axis.startswith("probe:"):
+        side = axis.rpartition(".")[2].strip().upper()
+        return side if side in ("L", "R") else None
+    return None
 
 
 def _origin_fn_for(armature: Any, pb: Any, axis: Any):
@@ -1471,7 +1481,8 @@ def _desired_world_dir(
 
     pb = armature.pose.bones[bone]
     target = _target_fn(scene, armature, pb, dir_vec, dir_object, dir_mode,
-                        origin_fn=_origin_fn_for(armature, pb, axis), view=view)
+                        origin_fn=_origin_fn_for(armature, pb, axis), view=view,
+                        side=_side_for(axis))
     lp_fn = _probe_axis_fn(axis)
     ls_fn = _probe_axis_fn(secondary_axis)
     lp_static = None if lp_fn else _axis_vec(axis).normalized()
@@ -1636,7 +1647,7 @@ def _desired_world_dir_multi(
             "target": _target_fn(scene, armature, pb, dir_vec, dir_object,
                                  dir_mode,
                                  origin_fn=_origin_fn_for(armature, pb, axis),
-                                 view=view),
+                                 view=view, side=_side_for(axis)),
             "out": np.zeros((len(frames), 4)),
             "mets": {"align_max_deg": 0.0, "align_mean_deg": 0.0,
                      "flipped_frames": 0, "skipped_flip_frames": 0,

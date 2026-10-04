@@ -71,7 +71,7 @@ def _measure_fn(joint, side, toward, view, mmd):
         if d is None or d.get("front") is None:
             return None
         t, how = V.resolve_direction(toward, scene=scene, armature=armature, origin=d["joint"],
-                                     view=view, mmd=mmd)
+                                     view=view, mmd=mmd, side=side)
         phi = A.swivel_error_deg(d["front"], t, d["chord"], pole=d.get("pole"))
         eb = armature.pose.bones.get(end_name)
         endq = (armature.matrix_world @ eb.matrix).to_quaternion() if eb is not None else None

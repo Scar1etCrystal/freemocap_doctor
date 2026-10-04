@@ -130,6 +130,21 @@ for f in (1, 151, 451, 901, 1351):
 check("V4 'forward' = character torso facing per frame (MMD torso truth < 3°), not world −Y",
       max(fw_err) < 3.0 and max(minus_y) > 20.0, f"vs MMD torso {fw_err}° ; vs world −Y {minus_y}°")
 
+# V8：跟着身体走的目标——toes（同侧脚尖，"膝盖对着脚尖"）/ part:<部位>.<侧>
+scene.frame_set(F)
+toeL = A.probe(scene, rig, part="toe", side="L", frame_range=[F, F])["world_dir"]
+t_toes, how_t = V.resolve_direction("toes", scene=scene, armature=rig, side="L")
+t_part, _ = V.resolve_direction("part:toe.R", scene=scene, armature=rig)
+toeR = A.probe(scene, rig, part="toe", side="R", frame_range=[F, F])["world_dir"]
+need_side = False
+try:
+    V.resolve_direction("toes", scene=scene, armature=rig)
+except RuntimeError as exc:
+    need_side = "part:toe" in str(exc)
+check("V8 'toes' = same-side toe direction; 'part:toe.R' works; 'toes' without a side asks for one",
+      ang(t_toes, toeL) < 0.1 and ang(t_part, toeR) < 0.1 and need_side,
+      f"toes.L {ang(t_toes, toeL):.4f}° part:toe.R {ang(t_part, toeR):.4f}° how={how_t} need_side={need_side}")
+
 # ---------------------------------------------------------------- V5–V7: 镜像 / 左右
 scene.frame_set(F)
 bpy.context.view_layer.update()
@@ -380,6 +395,14 @@ check("S2 independent re-test on the MMD (mesh) bones, frames bent > 35°: knee 
       f"MMD swivel err ({len(post)} bent frames) before max {max(pre):.1f}° → after max {max(post):.2f}°; probe "
       f"{(pr.get('data') or {}).get('err_inner_deg')}°; outside moved {moved_out:.4f} mm")
 op_knee = (r.get("data") or {}).get("op_id")
+# "膝盖别内扣" = 膝盖对着脚尖：同一段改朝 toes（reapply 换目标），复测按 toes 量
+r = call("reapply", op_id=op_knee, overrides={"toward": "toes"})
+pt = call("probe_anatomy", part="knee_front", side="L", frame_range=[A_, B_], toward="toes", max_frames=31)
+check("S1b swivel toward 'toes' (knee tracks over the toes): reapply with the new target, probe err_inner < 2°",
+      r["ok"] and (pt.get("data") or {}).get("err_inner_deg", 99) < 2.0
+      and ((r.get("data") or {}).get("metrics") or {}).get("toward_how", "").startswith("toes.L"),
+      f"err_inner={(pt.get('data') or {}).get('err_inner_deg')} how={((r.get('data') or {}).get('metrics') or {}).get('toward_how')}")
+r = call("reapply", op_id=op_knee, overrides={"toward": "forward"})
 # FK 肘：朝角色外侧（右肘 → char_right）
 EA, EB = 600, 650
 pre_e = mmd_swivel_err("R", "elbow", "char_right", list(range(EA + 1, EB)))

@@ -39,6 +39,10 @@ CHAR_WORDS = {
 }
 VIEW_WORDS = ("camera", "to_camera", "toward_camera", "viewer", "to_viewer", "away",
               "away_from_camera", "screen_left", "screen_right", "screen_up", "screen_down")
+# 跟着身体某个部位走的目标：toes = 同侧脚尖方向（"膝盖对着脚尖"——人说"膝盖内扣/别内扣/朝外"多半是这个意思，
+# 2026-10-04 Haiku 实测：把"膝盖有点内扣、朝外"照字面写成 char_right，膝盖被拧到正侧面 90°）
+SIDE_WORDS = ("toes", "over_toes")
+PART_PREFIX = "part:"
 WORLD_WORDS = {"up": (0, 0, 1), "+z": (0, 0, 1), "down": (0, 0, -1), "-z": (0, 0, -1),
                "+x": (1, 0, 0), "-x": (-1, 0, 0), "+y": (0, 1, 0), "-y": (0, -1, 0)}
 AMBIGUOUS = {"left": "左有两种意思：角色自己的左用 \"char_left\"（.L 那一侧），画面左用 \"screen_left\"",
@@ -52,6 +56,8 @@ WORD_TABLE = (
     ("viewer", "朝用户的 3D 视口（GUI 里正在看的那个；headless 时是存盘时的视口）"),
     ("away", "背对镜头（= 镜头的视线方向）"),
     ("screen_left / screen_right / screen_up / screen_down", "画面上的左/右/上/下（镜头坐标轴；view:\"viewer\" 时按视口）"),
+    ("toes", "同侧脚尖的方向（膝盖对着脚尖：'膝盖内扣/别内扣/朝外'用它）；需要知道侧（膝/脚的 side）"),
+    ("part:<部位>.<侧>", "跟着另一个部位的方向走，例 part:toe.L、part:chest"),
     ("[x, y, z]", "世界向量（前方不一定是 −Y：角色会转身，用 forward）"),
     ("<箭头空物体名>", "该箭头的 +Z 方向（逐帧，可 K 帧）"),
 )
@@ -261,11 +267,20 @@ def is_direction_word(spec: Any) -> bool:
     if not isinstance(spec, str):
         return False
     w = spec.strip().lower()
-    return w in CHAR_WORDS or w in VIEW_WORDS or w in WORLD_WORDS or w in AMBIGUOUS
+    return (w in CHAR_WORDS or w in VIEW_WORDS or w in WORLD_WORDS or w in AMBIGUOUS
+            or w in SIDE_WORDS or w.startswith(PART_PREFIX))
+
+
+def _part_direction(armature: Any, scene: Any, part: str, side: str | None) -> Vector:
+    from . import agent_anatomy
+    v = agent_anatomy.frame_probe_fn(part, side)(armature, scene)
+    if v is None or v.length < _EPS:
+        raise RuntimeError(f"这一帧推不出 {part}{'.' + side if side else ''} 的方向")
+    return Vector(v).normalized()
 
 
 def resolve_direction(spec: Any, *, scene: Any, armature: Any, origin: Vector | None = None,
-                      view: str = "camera", mmd: Any = None) -> tuple[Vector, str]:
+                      view: str = "camera", mmd: Any = None, side: str | None = None) -> tuple[Vector, str]:
     """方向说法 → (世界单位向量, 解析说明)。每帧 frame_set 之后调用（角色/相机都可能在动）。
 
     spec：[x,y,z] / 方向词（见 WORD_TABLE）/ 物体名（SINGLE_ARROW 空物体 = +Z；其它物体 = 从 origin 指向它）。
@@ -286,6 +301,18 @@ def resolve_direction(spec: Any, *, scene: Any, armature: Any, origin: Vector | 
         raise RuntimeError(f"方向词 {raw!r} 有歧义：{AMBIGUOUS[w]}")
     if w in WORLD_WORDS:
         return Vector(WORLD_WORDS[w]).normalized(), w
+    if w in SIDE_WORDS:
+        sd = str(side or "").upper()
+        if sd not in ("L", "R"):
+            raise RuntimeError(f"方向词 {raw!r} 要知道是哪一侧（跟着修的膝/脚的 side）；或者写 \"part:toe.L\"")
+        return _part_direction(armature, scene, "toe", sd), f"toes.{sd}"
+    if w.startswith(PART_PREFIX):
+        spec2 = raw[len(PART_PREFIX):].strip()
+        part, _, sd = spec2.rpartition(".")
+        if not part:
+            part, sd = spec2, ""
+        sd = sd.upper() if sd.upper() in ("L", "R") else ""
+        return _part_direction(armature, scene, part.lower(), sd or None), f"part:{part}{'.' + sd if sd else ''}"
     if w in CHAR_WORDS:
         cf = char_frame(armature, mmd=mmd)
         if cf is None:
@@ -594,7 +621,7 @@ def orient_report(scene, armature, *, part, side=None, frame=None, frame_range=N
                 bits.append(desc["character"]["words"])
             if toward is not None:
                 t, how = resolve_direction(toward, scene=scene, armature=armature, origin=origin,
-                                           view=views[0], mmd=mmd)
+                                           view=views[0], mmd=mmd, side=side)
                 if part in ("knee_front", "elbow_front"):
                     e = A.swivel_error_deg(vec, t, d.get("chord"), pole=d.get("pole"))
                     row["err_deg"] = None if e is None else round(abs(e), 1)
