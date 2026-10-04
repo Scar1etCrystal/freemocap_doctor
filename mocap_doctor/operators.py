@@ -2164,6 +2164,36 @@ def _silent_root_pivot_fix(context, settings):
     return f"；已修正骨盆旋转支点（{report['frames']} 帧，最大平移 {report['max_shift_m'] * 100:.1f} cm）"
 
 
+def _silent_upper_body_fix(context, settings):
+    """重定向里程碑时静默把上半身位置对齐源（core_target.fix_upper_body_follow），紧接在骨盆支点修正之后。
+
+    ARP 按世界朝向逐骨映射，但源靠骨盆关节以上 0.23 m 的腰段侧倾来抵消胯摆，Teto 的上半身链从 hips 头才开始、
+    拿的是 Spine2 的朝向，于是胯摆时肩跟着晃（0001-0999 第 151–277 帧：源 0.077 m，Teto 0.149 m）。
+    这里逐帧绕 hips 头转 spine_fk.001：肩中相对髋中的左右偏移照抄源（1:1，与髋、脚一致），前后偏移按躯干长度比缩放；
+    髋、腿、脚和 torso_root 都不动。找不到 Rig/动作/源骨架就跳过，出错也不阻断记录。
+    """
+    try:
+        rig = _require_object(settings, "mmr_rig", "ARMATURE", OBJECT_NAMES["mmr_rig"])
+    except RuntimeError:
+        return "（未找到 MMR Rig，未做上半身对齐）"
+    action = getattr(getattr(rig, "animation_data", None), "action", None)
+    if action is None:
+        return "（MMR Rig 没有活动 Action，未做上半身对齐）"
+    try:
+        report = core_target.fix_upper_body_follow(rig, getattr(settings, "source_armature", None), action)
+    except Exception as exc:  # noqa: BLE001 - a milestone must still be recordable
+        report = {"operation": "fix_upper_body_follow", "skipped": f"error: {exc}"}
+    if settings.initialized:
+        project.write_report(context.scene, "retarget_upper_body", report)
+    if report.get("skipped") == "already applied":
+        return "（上半身已对齐过）"
+    if report.get("skipped"):
+        return f"（未做上半身对齐：{report['skipped']}）"
+    err = report["shoulder_lateral_err_cm"]
+    return (f"；上半身位置已对齐源（{report['frames']} 帧，肩相对源横向偏差 P95 "
+            f"{err['before']['p95']:.1f}→{err['after']['p95']:.1f} cm）")
+
+
 class MD_OT_CreateCheckpoint(Operator):
     bl_idname = "mocap_doctor.create_checkpoint"
     bl_label = "记录当前状态"
@@ -2180,6 +2210,7 @@ class MD_OT_CreateCheckpoint(Operator):
                 _require_restore_before_rerun(context.scene, self.step_id)
                 if self.step_id == "retarget":
                     note = _silent_root_pivot_fix(context, settings)
+                    note += _silent_upper_body_fix(context, settings)
                 settings.current_step = clamp_step(STEP_INDEX.get(self.step_id, settings.current_step) + 1)
                 path = project.create_accepted_checkpoint(
                     context.scene,
