@@ -45,6 +45,32 @@ DETECT_KEEP_PEAK_DEG = 12.0
 
 
 # --------------------------------------------------------------------------
+# pickle I/O
+
+class _NumpyCompatUnpickler(pickle.Unpickler):
+    """Read pkls written by numpy >= 2 under Blender 4.5's numpy 1.26.
+
+    numpy 2 pickles (protocol 5, e.g. the user's merged.pkl) reference
+    ``numpy._core.numeric._frombuffer``; a clean numpy 1.26 only ships a
+    ``numpy._core.multiarray`` stub, so plain ``pickle.load`` failed with
+    "No module named 'numpy._core.numeric'" unless PoseCapture's import-time
+    shim happened to be loaded.  Fall back to ``numpy.core.*`` for those."""
+
+    def find_class(self, module, name):
+        try:
+            return super().find_class(module, name)
+        except (ModuleNotFoundError, AttributeError):
+            if module == "numpy._core" or module.startswith("numpy._core."):
+                return super().find_class("numpy.core" + module[len("numpy._core"):], name)
+            raise
+
+
+def load_pickle(path):
+    with Path(path).open("rb") as handle:
+        return _NumpyCompatUnpickler(handle, encoding="latin1").load()
+
+
+# --------------------------------------------------------------------------
 # rotation helpers (ported from the verified stage2c repair script)
 
 def aa_to_quat(aa):
@@ -145,11 +171,18 @@ def mat_geo_deg(ra, rb):
 
 
 def smooth_aa_path(new_aa, previous_aa):
-    """Keep the axis-angle representation continuous with the frame before."""
+    """Keep the axis-angle representation continuous with the frame before.
+
+    The alternative representation of a rotation θ·u is (θ − 2π)·u - the SAME
+    rotation the long way round.  (−θ·u, used before, is the INVERSE rotation:
+    a repair path crossing 180° came out up to 40° wrong.)"""
     for i in range(len(new_aa)):
         prev = previous_aa if i == 0 else new_aa[i - 1]
         if np.linalg.norm(new_aa[i] - prev) > np.pi:
-            alt = -new_aa[i]
+            theta = float(np.linalg.norm(new_aa[i]))
+            if theta < 1e-9:
+                continue
+            alt = new_aa[i] * (1.0 - 2.0 * np.pi / theta)
             if np.linalg.norm(alt - prev) < np.linalg.norm(new_aa[i] - prev):
                 new_aa[i] = alt
     return new_aa
@@ -158,12 +191,44 @@ def smooth_aa_path(new_aa, previous_aa):
 # --------------------------------------------------------------------------
 # repair
 
-def repair_quats(quats, start, end, strategy, log):
-    """Repair one rotation sequence; returns the new sequence."""
+def _reference_frames(n, start, end, exclude):
+    """The reference frames on each side of [start, end]: up to REF_WINDOW
+    good frames adjacent to the segment, stopping at frames of OTHER marked
+    segments (``exclude``).  Before, two bad segments less than REF_WINDOW
+    frames apart averaged each other's bad poses into their references
+    (measured: 5.6 deg → 44.2 deg error, a 44 deg jump in the gap).  When a
+    side has no good frame next to it (segments touching), the nearest good
+    frames past the other segment are used - the two then bridge as one.
+    With nothing excluded this is exactly the old window."""
+    exclude = exclude or ()
+    if not exclude:
+        return (list(range(max(0, start - REF_WINDOW), start)),
+                list(range(end + 1, min(n, end + 1 + REF_WINDOW))))
+
+    def run(frames):
+        out = []
+        for f in frames:
+            if f in exclude or len(out) >= REF_WINDOW:
+                break
+            out.append(f)
+        if not out:                     # touching segments: skip over them
+            out = [f for f in frames if f not in exclude][:REF_WINDOW]
+        return out
+
+    pre = run(range(start - 1, -1, -1))
+    post = run(range(end + 1, n))
+    return sorted(pre), post
+
+
+def repair_quats(quats, start, end, strategy, log, exclude=None):
+    """Repair one rotation sequence; returns the new sequence.
+
+    ``exclude``: frames of the other marked segments (never references)."""
     out = np.asarray(quats).copy()
     n = len(quats)
-    pre = quats[max(0, start - REF_WINDOW):start]
-    post = quats[end + 1:min(n, end + 1 + REF_WINDOW)]
+    pre_idx, post_idx = _reference_frames(n, start, end, exclude)
+    pre = quats[pre_idx] if pre_idx else quats[0:0]
+    post = quats[post_idx] if post_idx else quats[0:0]
     if len(pre) == 0 or end + 1 >= n:
         log["skipped"] = True
         return out
@@ -204,14 +269,14 @@ def repair_quats(quats, start, end, strategy, log):
     return out
 
 
-def repair_block(block, start, end, strategy, log):
+def repair_block(block, start, end, strategy, log, exclude=None):
     """block: (N, 3*k). Repair each 3-axis rotation independently."""
     n_joints = block.shape[1] // 3
     out = block.copy()
     for j in range(n_joints):
         cols = slice(j * 3, j * 3 + 3)
         quats = aa_to_quat(block[:, cols])
-        repaired = repair_quats(quats, start, end, strategy, log)
+        repaired = repair_quats(quats, start, end, strategy, log, exclude=exclude)
         new_aa = quat_to_aa(repaired)[start:end + 1]
         previous = out[start - 1, cols] if start > 0 else new_aa[0]
         out[start:end + 1, cols] = smooth_aa_path(new_aa, previous)
@@ -248,8 +313,7 @@ def repair_pkl(src_path, dst_path, segments, *, report_path=None):
 
     src_path = Path(src_path)
     dst_path = Path(dst_path)
-    with src_path.open("rb") as handle:
-        data = pickle.load(handle, encoding="latin1")
+    data = load_pickle(src_path)
 
     sections = tuple(key for key in data if str(key).startswith("smpl_params_"))
     if not sections:
@@ -274,6 +338,16 @@ def repair_pkl(src_path, dst_path, segments, *, report_path=None):
     new = {k: {s: np.array(v[s]) for s in sections} for k, v in orig.items()}
     touched = {"body_pose": {}, "hand_pose": {}}
 
+    segments = list(segments)
+    # Frames each (side, channel) has marked bad: a segment's reference window
+    # must not average another nearby segment's bad frames in.
+    marked: dict = {}
+    for segment in segments:
+        side_key = "left" if str(segment["side"]).lower().startswith("l") else "right"
+        for channel in _segment_channels(segment):
+            marked.setdefault((side_key, channel), set()).update(
+                range(int(segment["start"]), int(segment["end"]) + 1))
+
     for segment in segments:
         side = str(segment["side"]).lower()
         side_key = "left" if side.startswith("l") else "right"
@@ -293,7 +367,8 @@ def repair_pkl(src_path, dst_path, segments, *, report_path=None):
                    "pkl_frames": [start, end], "strategy": strategy}
             base = orig[source_key][sections[0]][:, channel_block]
             before = float(_step_scores(base)[start:end + 1].max())
-            repaired = repair_block(base, start, end, strategy, log)
+            others = marked.get((side_key, channel), set()) - set(range(start, end + 1))
+            repaired = repair_block(base, start, end, strategy, log, exclude=others)
             for s in sections:
                 new[source_key][s][start:end + 1, channel_block] = repaired[start:end + 1]
             after = float(_step_scores(
@@ -435,8 +510,7 @@ def detect_candidates(path):
     """
 
     path = Path(path)
-    with path.open("rb") as handle:
-        data = pickle.load(handle, encoding="latin1")
+    data = load_pickle(path)
 
     raw = "global_orient" in data and "hand_pose" in data
     result = {}
