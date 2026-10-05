@@ -2,6 +2,7 @@
 
 > 配合 `tools_io.md`。把一段（通常是手 k 好的）动作搬到：另一个时间段 / 另一侧（镜像）/
 > 另一个部位。任务块会写：源骨或链、源帧段、目标（时间/侧/部位）。
+> 路径占位符 `<套件>` = 套件根目录（任务块给全路径，原样替换）。
 
 ## 先想清楚三件事
 
@@ -24,7 +25,7 @@
 
 1. **dry_run 预演**（不写任何东西）：
    ```
-   /home/sb/remote_kit_1.7.1/tools/agent motion_copy '{"agent_id":"<ME>","chain":"arm.L","src_range":[401,454],
+   <套件>/tools/agent motion_copy '{"agent_id":"<ME>","chain":"arm.L","src_range":[401,454],
      "dst_start":401,"mirror":true,"dry_run":true}'
    ```
    看 `data.metrics.mirror_map`（实际 源→目标 映射）、`time_scale`、`notes`（警告，比如 IK 腿）。
@@ -48,7 +49,7 @@
    跨部位：`"bone_map":{"spine_fk":"neck"}`（复制的是相同的关节局部旋转值）。
 4. **验收**：按 op 验收（最省事，等价于把写入返回的 `metrics.verify.args` 原样传，不用抄骨名列表）：
    ```
-   /home/sb/remote_kit_1.7.1/tools/agent compare_motion '{"agent_id":"<ME>","op_id":"<op_id>"}'
+   <套件>/tools/agent compare_motion '{"agent_id":"<ME>","op_id":"<op_id>"}'
    ```
    （写入**之前**的修前基线用第 1 步 dry_run 的 `err_inner_before_deg`。）
    写入响应 warnings 出现"源窗 … 正被 … 认领" = 别人正在改你的源：在报告"遗留"里写明，请协调者等对方完成后让你
@@ -66,7 +67,7 @@
 ## 改位置/改参数（reapply，op_id 不变）
 
 ```
-/home/sb/remote_kit_1.7.1/tools/agent reapply '{"agent_id":"<ME>","op_id":"<op_id>","overrides":{"dst_start":760}}'
+<套件>/tools/agent reapply '{"agent_id":"<ME>","op_id":"<op_id>","overrides":{"dst_start":760}}'
 ```
 也可以改 `frame_range`（= 目标窗，长度不同就自动时间缩放）、`mode`、`space`、`strength`、`blend`。
 

@@ -1,19 +1,20 @@
 # 剧本 31：去抖（clean_jitter）
 
 > 配合 `tools_io.md` 一起发。任务块会写：部位（角色名/骨名）、帧段 [A,B]。
+> 路径占位符 `<套件>` = 套件根目录（任务块给全路径，原样替换）。
 
 ## 步骤
 
 1. **量修前抖动**（实时工具，读的是当前可见姿态）：
    ```
-   /home/sb/remote_kit_1.7.1/tools/agent analyze_motion '{"agent_id":"<ME>","bones":["left_hand"],"frame_range":[A,B]}'
+   <套件>/tools/agent analyze_motion '{"agent_id":"<ME>","bones":["left_hand"],"frame_range":[A,B]}'
    ```
    记 `data.bones.<骨>.jitter_deg`（每帧偏离前后两帧中点的平均角度，度；匀速转动≈0，越小越稳）和 `version`。
 2. `claim` 该骨 × [A,B]（`granted=false` 就停，报告冲突）。去抖验收**只看** `data.bones.<骨>` 的 `jitter_deg` 和
    `peak_speed`；`data.main`（onset/stop/幅度）和它的 warnings 是动作分析用的，去抖后主事件常会换一笔，别管它。
 3. **写入**：
    ```
-   /home/sb/remote_kit_1.7.1/tools/agent clean_jitter '{"agent_id":"<ME>","frame_range":[A,B],"bone":"left_hand",
+   <套件>/tools/agent clean_jitter '{"agent_id":"<ME>","frame_range":[A,B],"bone":"left_hand",
      "strength":1.0,"width":5,"blend":4,"expect_version":<version>}'
    ```
 4. **复测**：第 1 步原样再调 → `jitter_deg` 应明显下降（通常降到 30–70%）。修前修后都用**有效区**

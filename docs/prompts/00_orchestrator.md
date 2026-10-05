@@ -1,11 +1,14 @@
 # 协调者提示词（主会话：拆任务 → 派 3–5 个 socket agent → 收数字 → 终审）
 
+> 路径占位符：`<套件>` = 套件根目录（含 `tools/`、`sandbox/`、`tests/`、`docs/`）、`<仓库>` = 代码仓库 clone、
+> `<你的worktree>` = 派给 dev worker 的 git worktree。给 agent 的任务块里把全路径写死。
+
 ## 0. 开工前
 
 ```bash
-bash /home/sb/remote_kit_1.7.1/tools/mcd.sh status                     # 内存、Blender 锁
-bash /home/sb/remote_kit_1.7.1/tools/mcd.sh server-start <工作文件.blend>  # 起 headless 服务（占用唯一的 Blender 名额）
-/home/sb/remote_kit_1.7.1/tools/agent ping '{"agent_id":"coord"}'  # 工具表里要有 claim / plan_scopes / 你要用的工具
+bash <套件>/tools/mcd.sh status                     # 内存、Blender 锁
+bash <套件>/tools/mcd.sh server-start <工作文件.blend>  # 起 headless 服务（占用唯一的 Blender 名额）
+<套件>/tools/agent ping '{"agent_id":"coord"}'  # 工具表里要有 claim / plan_scopes / 你要用的工具
 ```
 - 机器只有 ~8GB：**同时只能有 1 个 Blender**。服务开着时不能跑 e2e（mcd.sh 会排队等）。
 - 先 `list_ops` 看文件里已有的修复（别让 agent 在用户已有修复上乱叠）。
@@ -41,7 +44,7 @@ bash /home/sb/remote_kit_1.7.1/tools/mcd.sh server-start <工作文件.blend>  #
 ## 2. 派单前体检（让 agent 天然避开同一段关键帧）
 
 ```bash
-/home/sb/remote_kit_1.7.1/tools/agent plan_scopes '{"agent_id":"coord","tasks":[
+<套件>/tools/agent plan_scopes '{"agent_id":"coord","tasks":[
   {"name":"左臂预备","chain":"arm_nofingers.L","frames":[550,603]},
   {"name":"右脚脚滑","bones":["right_foot"],"frames":[790,853]},
   {"name":"脊柱去抖","chain":"spine_head","frames":[500,620]},
@@ -87,7 +90,7 @@ scope：<骨/链> × [A,B]。只许写这里。写之前 claim（读、dry_run �
 ## 5. 收尾
 
 **等所有 agent 的报告都到了**（不是只看它 release 了——有的 agent release 后还会再复测一次）
-再 `bash /home/sb/remote_kit_1.7.1/tools/mcd.sh server-stop`（之前先 save！）→ 需要回归时跑 `20_verifier.md`。
+再 `bash <套件>/tools/mcd.sh server-stop`（之前先 save！）→ 需要回归时跑 `20_verifier.md`。
 
 派验收者之前：**协调者自己** `mcd.sh deploy`（subagent 跑 deploy 会被自动模式权限当成"生产部署"拦下），
 `git status` 干净或改动已提交；之后**冻结**——验收期间不改 clone、不 deploy、不起服务、不跑别的 Blender，

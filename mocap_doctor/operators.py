@@ -440,7 +440,9 @@ def _validate_mmd_identity(settings):
     marker = getattr(root, "mmd_type", "")
     if marker not in {None, "", "ROOT"}:
         raise RuntimeError("Teto 根对象不是 mmd_tools ROOT")
-    if marker != "ROOT" and not hasattr(root, "mmd_root"):
+    # mmd_root also survives as an ID property in files saved with mmd_tools
+    # when the addon itself is not loaded in this Blender session.
+    if marker != "ROOT" and not (hasattr(root, "mmd_root") or root.get("mmd_root") is not None):
         raise RuntimeError("无法确认 Teto 的 mmd_tools 根结构")
     missing = [
         name

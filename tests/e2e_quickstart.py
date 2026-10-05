@@ -42,7 +42,7 @@ if os.path.exists(oplog):
     os.remove(oplog)
 
 text = open(DOC, encoding="utf-8").read()
-PAT = re.compile(r"^\s*/home/sb/remote_kit_1\.7\.1/tools/agent (\S+) '(.*)'\s*$")
+PAT = re.compile(r"^\s*<套件>/tools/agent (\S+) '(.*)'\s*$")
 cmds, bad_json = [], []
 for ln, line in enumerate(text.splitlines(), 1):
     m = PAT.match(line)

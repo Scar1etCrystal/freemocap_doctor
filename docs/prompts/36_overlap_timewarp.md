@@ -1,6 +1,7 @@
 # 剧本 36：重叠（骨链错时）· 时间重映射（overlap · time_warp · 验收 chain_lag）
 
 > 配合 `tools_io.md`。任务块会写：链、帧段、要"重叠"还是"改节奏"。
+> 路径占位符 `<套件>` = 套件根目录（任务块给全路径，原样替换）。
 
 ## A. overlap（重叠：子骨比父骨晚，越往末端越晚）
 
@@ -11,13 +12,13 @@
 
 1. **dry_run 拿内段**（不写）：
    ```
-   /home/sb/remote_kit_1.7.1/tools/agent overlap '{"agent_id":"<ME>","chain":"arm.R","frame_range":[20,110],"delay":1.0,
+   <套件>/tools/agent overlap '{"agent_id":"<ME>","chain":"arm.R","frame_range":[20,110],"delay":1.0,
      "max_delay":3.0,"blend":4,"dry_run":true}'
    ```
    记 `data.metrics.inner_frames`（= 有效区）、每骨 `lag_frames`、`skipped_bones`、`warnings`。
 2. **修前测滞后**：
    ```
-   /home/sb/remote_kit_1.7.1/tools/agent chain_lag '{"agent_id":"<ME>","chain":"arm.R","frame_range":<inner_frames>}'
+   <套件>/tools/agent chain_lag '{"agent_id":"<ME>","chain":"arm.R","frame_range":<inner_frames>}'
    ```
    记每级 `levels[*].lag_frames` 和 `reliable`。
 3. `claim` 链 × [A,B]，然后去掉 dry_run、加 expect_version 写入。

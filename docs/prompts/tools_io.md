@@ -6,10 +6,11 @@
 
 ## 1. 连接与身份
 
-**每个工具调用都是一条完整的命令**（照抄格式，把 `<ME>` 换成你的 agent_id 字面量）：
+**每个工具调用都是一条完整的命令**（照抄格式：`<套件>` 换成套件根目录、`<ME>` 换成你的 agent_id 字面量
+——都是**原样替换**，任务块会给全路径；这不是 shell 变量）：
 ```
-/home/sb/remote_kit_1.7.1/tools/agent ping '{"agent_id":"<ME>"}'
-/home/sb/remote_kit_1.7.1/tools/agent probe_anatomy '{"agent_id":"<ME>","part":"palm","side":"L","frame_range":[300,360]}'
+<套件>/tools/agent ping '{"agent_id":"<ME>"}'
+<套件>/tools/agent probe_anatomy '{"agent_id":"<ME>","part":"palm","side":"L","frame_range":[300,360]}'
 ```
 - **不要用 shell 变量**（`ME=…`、`C=…`、`$C …`）：每条命令都在新 shell 里跑，变量不保留 →
   agent_id 会变成空字符串（匿名写入、没有 owner）；本机 shell 是 zsh，带空格的 `$C` 还会直接
@@ -133,7 +134,7 @@ ping → 读/探查（确定 scope 和修前基线）→ claim → 写（带 exp
 ### 写（全部 preview delta strip，可 revert；除 fix_ground / solve_pelvis / apply_exemplar 外都支持 `dry_run:true` 先看效果）
 | 工具 | 关键参数 | 剧本 |
 |---|---|---|
-| `hold_pose` | `bones` `frame_range` `target`(values/from_frame/world_dir) `world_dir`（向量或方向词） `world_axis` `secondary_axis` `mode` `strength` `blend` `view` | 30 |
+| `hold_pose` | `bones` `frame_range` `target`(values/from_frame/world_dir) `world_dir`（向量或方向词） **`dir_object`+`dir_mode`**（arrow=空物体 +Z 轴 / aim=指向物体位置；用户摆的箭头空物体代替手填向量，可 k 动画）`world_axis` `secondary_axis` `mode` `strength` `blend` `view` | 30 |
 | `swivel` | `joint`(knee/elbow) `side` `frame_range` `toward` `strength` `blend`：绕 髋→踝/肩→腕 连线转膝/肘，脚/手不动；**膝/肘朝向只用它**（IK 腿的 thigh_fk 写了看不见，hold_pose 会拒） | 30 |
 | `clean_jitter` | `frame_range` `bone` `strength` `width` `blend` | 31 |
 | `restore_accent` | `frame_range` `data_path` (`index`) `method` `strength` `impact_frame` | 32 |

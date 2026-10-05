@@ -1,7 +1,7 @@
 # MoCap Doctor · Agent 工具手册（subagent 提示词用）
 
 socket 服务：`127.0.0.1:6211`，JSON-lines，一问一答。客户端：
-`/home/sb/remote_kit_1.7.1/tools/agent <tool> '<json-args>'`（远程套件，任何 shell/目录可用，
+`<套件>/tools/agent <tool> '<json-args>'`（远程套件，任何 shell/目录可用，
 自带 `--pretty`）或 `python tools/agent_client.py <tool> '<json-args>' --pretty`。
 **先 `ping`**——服务默认不开，没开就让用户去 N 面板 → Agent 协作 → 启动服务
 （远程：`bash tools/mcd.sh server-start <blend>`）。

@@ -3,17 +3,19 @@
 你在给 MoCap Doctor 的 agent 层加一个/几个**写工具 + 配套读工具**。下面是
 所有你需要的事实——**别自己逆向代码找约定**，这里写的都实测过。
 
+> 路径占位符：`<你的worktree>` = 协调者给你的 git worktree；`<套件>` = 套件根目录（含 `tools/`、`sandbox/`、`tests/`）。派单者给全路径。
+
 ## 0. 环境（照抄命令，别发明）
 
 | 东西 | 位置 |
 |---|---|
-| 你的 git worktree（只在这里改代码） | `/home/sb/mcd_wt/<你的名>`（分支 `dev/<你的名>`） |
-| 套件根（kit） | `/home/sb/remote_kit_1.7.1` |
-| 你的私有扩展目录 | `/home/sb/remote_kit_1.7.1/sandbox/ext_<你的名>` |
-| fixture（e2e 用，只读，测试从不存盘） | `/home/sb/remote_kit_1.7.1/sandbox/work/fixture_1499.blend` |
+| 你的 git worktree（只在这里改代码） | `<你的worktree>`（分支 `dev/<你的名>`） |
+| 套件根（kit） | `<套件>` |
+| 你的私有扩展目录 | `<套件>/sandbox/ext_<你的名>` |
+| fixture（e2e 用，只读，测试从不存盘） | `<套件>/sandbox/work/fixture_1499.blend` |
 
 ```bash
-W=/home/sb/mcd_wt/<你的名>; KIT=/home/sb/remote_kit_1.7.1
+W=<你的worktree>; KIT=<套件>
 export MCD_CLONE=$W
 export MCD_EXT_DIR=$KIT/sandbox/ext_<你的名>
 bash $KIT/tools/mcd.sh deploy-private                    # 把 $W/mocap_doctor 同步进私有扩展目录

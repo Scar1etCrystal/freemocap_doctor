@@ -2,6 +2,7 @@
 
 > 给 socket agent 的任务提示词。配合 `tools_io.md`（通用协议 + 单位）一起发。
 > 你的任务块里会写：部位、侧（**角色自己的** L/R）、帧段 [A,B]、目标方向。
+> 路径占位符 `<套件>` = 套件根目录（任务块给全路径，原样替换）。
 
 **目标方向写方向词**（工具每帧现算）：`"forward"`（角色躯干的前，不是世界 −Y——角色会转身）、`"back"`、`"char_left"`/`"char_right"`、
 `"up"`/`"down"`、`"camera"`（从部位指向镜头）、`"away"`、`"screen_left"`…、`"viewer"`（用户的视口）。任务块给的是向量就用向量；
@@ -13,7 +14,7 @@
 
 1. **探查（修前基线）**
    ```
-   /home/sb/remote_kit_1.7.1/tools/agent probe_anatomy '{"agent_id":"<ME>","part":"palm","side":"L","frame_range":[A,B],"toward":"forward"}'
+   <套件>/tools/agent probe_anatomy '{"agent_id":"<ME>","part":"palm","side":"L","frame_range":[A,B],"toward":"forward"}'
    ```
    记下：`data.err_inner_deg`（修前误差）、`data.owner_bone`、`data.confidence`、
    `data.secondary_axis`。（返回里的 `hold_pose_args` 已经是第 3 步表里的 `probe:` 逐帧轴写法，可以直接展开进 hold_pose。）
@@ -28,13 +29,13 @@
 
 2. **认领**
    ```
-   /home/sb/remote_kit_1.7.1/tools/agent claim '{"agent_id":"<ME>","bones":["<owner_bone>"],"frames":[A-4,B+4]}'
+   <套件>/tools/agent claim '{"agent_id":"<ME>","bones":["<owner_bone>"],"frames":[A-4,B+4]}'
    ```
    `data.granted=false` → 有人在改，报告冲突对象（`data.conflicts`），结束。不要 force。
 
 3. **写入**（world_dir + 逐帧 probe 轴 + 双轴）
    ```
-   /home/sb/remote_kit_1.7.1/tools/agent hold_pose '{"agent_id":"<ME>","bones":["<owner_bone>"],"frame_range":[A,B],
+   <套件>/tools/agent hold_pose '{"agent_id":"<ME>","bones":["<owner_bone>"],"frame_range":[A,B],
      "target":"world_dir","world_dir":"forward",
      "world_axis":"probe:palm.L","secondary_axis":"probe:hand_axis.L",
      "mode":"replace","blend":4,"expect_version":<第 1 步 probe 响应的 version（据以算参数的那次读；不是 claim 回的）>}'
@@ -60,20 +61,54 @@
    `secondary_keep_deg`（次轴为对准主轴被带动的最大角，信息项，翻转类修复几十度正常）、
    `probe_fallback_frames`（某帧推不出解剖方向、沿用上一帧；>0 时在报告里提一句）。
 
+   **3b. 方向物体版写入（用户摆了箭头时必须用这个，替代第 3 步的 `world_dir`）**
+
+   用户说"朝 `<某个空物体>` 的箭头方向"时，**不要自己猜那个方向的世界向量**——
+   让工具每帧现读它的朝向。用户绑在骨上的方向标记就是 `MCD_palm.L`/`MCD_sole.L` 这类
+   SINGLE_ARROW（`markers` 建的或收编的；probe 回 `evidence.palm_source:"marker"` 就是以它为准，
+   同一个名字直接进 hold_pose）：
+
+   ```
+   <套件>/tools/agent hold_pose '{"agent_id":"<ME>","bones":["<owner_bone>"],"frame_range":[A-4,B+4],
+     "target":"world_dir",
+     "dir_object":"<空物体名，原样照抄>","dir_mode":"arrow",
+     "world_axis":"probe:palm.L","secondary_axis":"probe:hand_axis.L",
+     "mode":"replace","blend":4,"expect_version":<version>}'
+   ```
+
+   | 参数 | 取值 | 含义 |
+   |---|---|---|
+   | `dir_object` | 场景里的空物体名（`MCD_palm.L`、用户自己绑的 `Empty.001` …） | 目标方向的来源 |
+   | `dir_mode` | `"arrow"`（默认） | 空物体**局部 +Z 轴** = 要对准的方向（SINGLE_ARROW 显示的箭头就是 +Z） |
+   | | `"aim"` | 骨头发射向**该物体的位置**（"指向某点"，不是"平行于箭头"） |
+
+   - 空物体**可以 k 动画**：每帧现取朝向 → 逐帧变化的目标免费支持。
+   - 用户拖动/转动方向物体后**不用重写 op**：桥里的监视器发现矩阵变了会自动 reapply 刷新；
+     也可以手动 `reapply {"op_id":…,"overrides":{"dir_object":"…","dir_mode":"arrow"}}`。
+   - 第 1 步 probe 里 `"toward":"<箭头名>"` 读的是同一个 +Z（方向词/向量/物体名三选一）。
+   - **别人摆的方向物体不要抢**：`MCD_*` 是用户/协调者共用的方向定义，挪它会影响所有引用它的 op；
+     自己建的按 tools_io 命名纪律加前缀。
+   - ⚠ 常见错误：`dir_object` 填了、`world_axis` 却留默认 `"Y"`——那等于把骨的局部 Y 当掌心，
+     方向完全不对。方向物体只管"目标方向"，**主轴/次轴照旧必须用上面表里的 `probe:` 写法**。
+   - ⚠ `dir_object` 只在 `target="world_dir"` 下生效；空物体本身不要动（它是用户的表达方式）。
+
 4. **复测（必须独立）**：把第 1 步原样再调一遍 → `err_inner_deg`（修后）。帧段长（>60 帧）
    或动作快时加 `"max_frames":31` 采密一点（修前修后用同一个值）。
    目标 < 5°。若 5–15°：`reapply` 调参（见下），**不要再叠一个 hold_pose**。
-5. **自查**：`/home/sb/remote_kit_1.7.1/tools/agent list_ops '{"agent_id":"<ME>","owner":"<ME>","compact":true}'` → 你的 op 在 `fixes` 里、`status=preview`、`alive=true`、`owner=<ME>`。
-6. **存盘 + 释放**：`/home/sb/remote_kit_1.7.1/tools/agent save '{"agent_id":"<ME>"}'`，`/home/sb/remote_kit_1.7.1/tools/agent release '{"agent_id":"<ME>"}'`。
+5. **自查**：`<套件>/tools/agent list_ops '{"agent_id":"<ME>","owner":"<ME>","compact":true}'` → 你的 op 在 `fixes` 里、`status=preview`、`alive=true`、`owner=<ME>`。
+6. **存盘 + 释放**：`<套件>/tools/agent save '{"agent_id":"<ME>"}'`，`<套件>/tools/agent release '{"agent_id":"<ME>"}'`。
 
 ## 调参（reapply，op_id 不变）
 
 ```
-/home/sb/remote_kit_1.7.1/tools/agent reapply '{"agent_id":"<ME>","op_id":"<op_id>","overrides":{"blend":8}}'
+<套件>/tools/agent reapply '{"agent_id":"<ME>","op_id":"<op_id>","overrides":{"blend":8}}'
 ```
 - 两端过渡太生硬 → `blend` 加大（4→8）。
 - 只想压住偶发的坏帧、保留原动作 → `{"mode":"clamp","threshold_deg":10}` 或 `{"mode":"outlier","threshold_deg":15}`。
 - 力度 → `{"strength":0.7}`（0–2，1=完全到位；只作用一次，0.5 就是一半）。
+- 用户换了方向物体 / 换成手填向量 → `{"dir_object":"Empty.002","dir_mode":"arrow"}`
+  或 `{"dir_object":null,"world_dir":"forward"}`。
+- `frame_range` 也能改：`{"frame_range":[A,B]}`（用户说"再多修几帧"时用，别叠新 op）。
 
 ## 陷阱（都有人踩过）
 
@@ -96,14 +131,14 @@
 
 1. **修前**（用户帧段）：
    ```
-   /home/sb/remote_kit_1.7.1/tools/agent probe_anatomy '{"agent_id":"<ME>","part":"knee_front","side":"L","frame_range":[A,B],"toward":"forward"}'
+   <套件>/tools/agent probe_anatomy '{"agent_id":"<ME>","part":"knee_front","side":"L","frame_range":[A,B],"toward":"forward"}'
    ```
    `err_metric:"swivel"` = 误差是"绕连线还差多少度"；`swivel_degenerate_frames` = 目标几乎沿着连线、量不了的帧数。
    `evidence.knee_source`：`marker`（用户的 MCD_knee 箭头，以它为准）/ `hinge`（全片标定）/ `bend`（标定失败、直腿帧没定义——报告）。
 2. `claim` 回包里 `swivel_args` 对应的控制骨：IK 腿 `thigh_ik.<侧>`；FK 胳膊 `upper_arm_fk.<侧>` + `hand_fk.<侧>`（× [A−4, B+4]）。
 3. **写**：
    ```
-   /home/sb/remote_kit_1.7.1/tools/agent swivel '{"agent_id":"<ME>","joint":"knee","side":"L","frame_range":[A-4,B+4],"toward":"forward","expect_version":<第 1 步的 version>}'
+   <套件>/tools/agent swivel '{"agent_id":"<ME>","joint":"knee","side":"L","frame_range":[A-4,B+4],"toward":"forward","expect_version":<第 1 步的 version>}'
    ```
    回包 `metrics`：`err_after_inner_deg`（自评）、`end_drift_mm`（脚踝/手腕应 < 0.5）、`end_rot_change_max_deg`（脚/手朝向应 ≈ 0）。
    warnings "要绕连线转 1xx°" = 目标在背面，先核对方向说法；"N 帧目标几乎平行于连线" = 那几帧转不出来（用插值补），写进遗留。

@@ -1,7 +1,7 @@
 """骨盆旋转支点修正（重定向里程碑时静默执行，2026-10-04）。
 
 fixture = 用户的 0999_fsb_showretargetproblem.blend（干净的 ARP 重定向结果，未建项目）的副本：
-    bash tools/mcd.sh e2e tests/e2e_root_pivot.py /home/sb/remote_kit_1.7.1/sandbox/work/fixture_root_pivot.blend
+    bash <套件>/tools/mcd.sh e2e <套件>/tests/e2e_root_pivot.py <套件>/sandbox/work/fixture_root_pivot.blend
   P1  现场：torso_root 带四元数动画、hips 在其下且无动画；修前 151–277 帧胯摆 < 0.10 m
   P2  fix_root_pivot 写了全部帧
   P3  几何：修后 hips 头 = 修前 torso_root 头 + 静止偏移（逐帧，< 0.1 mm）

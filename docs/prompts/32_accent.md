@@ -2,6 +2,7 @@
 
 > 配合 `tools_io.md`。动捕滤波会把出拳、跺脚的"冲击"抹软；这个工具把冲击附近的
 > 速度曲线重塑得更脆。任务块会写：骨、帧段 [A,B]、（可选）冲击帧。
+> 路径占位符 `<套件>` = 套件根目录（任务块给全路径，原样替换）。
 
 ## 步骤
 
@@ -25,14 +26,14 @@
    | 位置（torso_root、foot_ik） | `pose.bones["torso_root"].location` | 不传（三轴整体） |
 
    ```
-   /home/sb/remote_kit_1.7.1/tools/agent restore_accent '{"agent_id":"<ME>","frame_range":[A,B],
+   <套件>/tools/agent restore_accent '{"agent_id":"<ME>","frame_range":[A,B],
      "data_path":"pose.bones[\"hand_fk.R\"].rotation_quaternion",
      "method":"ease_reshape","strength":0.5,"impact_frame":<冲击帧>,"blend":4,
      "expect_version":<version>}'
    ```
    注意 JSON 里骨名的双引号要转义成 `\"`。Euler 骨（前臂）完整示例——index 0/1/2 各调一次，参数相同：
    ```
-   /home/sb/remote_kit_1.7.1/tools/agent restore_accent '{"agent_id":"<ME>","frame_range":[325,373],
+   <套件>/tools/agent restore_accent '{"agent_id":"<ME>","frame_range":[325,373],
      "data_path":"pose.bones[\"forearm_fk.L\"].rotation_euler","index":0,
      "method":"ease_reshape","strength":0.5,"impact_frame":349,"blend":4,"expect_version":<version>}'
    ```

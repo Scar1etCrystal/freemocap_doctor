@@ -2,6 +2,7 @@
 
 > 配合 `tools_io.md`。动画原理三件套，都在一个部位（一组骨）上做。任务块会写：部位（链/骨）、
 > 大概的帧段、要哪一种效果。
+> 路径占位符 `<套件>` = 套件根目录（任务块给全路径，原样替换）。
 
 | 工具 | 效果 | 用户原话 |
 |---|---|---|
@@ -12,7 +13,7 @@
 ## 第 1 步永远是 analyze_motion（输入工具）
 
 ```
-/home/sb/remote_kit_1.7.1/tools/agent analyze_motion '{"agent_id":"<ME>","chain":"arm_nofingers.R","frame_range":[550,603],
+<套件>/tools/agent analyze_motion '{"agent_id":"<ME>","chain":"arm_nofingers.R","frame_range":[550,603],
   "main_bone":"upper_arm_fk.R","brief":true}'
 ```
 - `"brief":true` 去掉逐帧速度序列（约 6 KB）——本剧本只看 `main` / `suggest` / `vs_baseline`，复测也带上它。
@@ -75,7 +76,7 @@ scope 时**：把它缩到 scope 内，`"dry_run":true` 试一次——报错就
 ## 调参
 
 ```
-/home/sb/remote_kit_1.7.1/tools/agent reapply '{"agent_id":"<ME>","op_id":"<id>","overrides":{"amount":0.10}}'
+<套件>/tools/agent reapply '{"agent_id":"<ME>","op_id":"<id>","overrides":{"amount":0.10}}'
 ```
 然后按第 3 步同样复测。太夸张 → amount 降；看不出来 → amount 升（上限 0.5）。
 

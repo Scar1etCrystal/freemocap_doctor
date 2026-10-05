@@ -13,9 +13,9 @@
 ## 1. 命令格式（照抄）
 
 ```
-/home/sb/remote_kit_1.7.1/tools/agent ping '{"agent_id":"<ME>"}'
+<套件>/tools/agent ping '{"agent_id":"<ME>"}'
 ```
-- `<ME>` 换成你的名字（任务块里给），**每条命令都带**。不要用 shell 变量（`ME=…`、`$C`），每条命令都在新 shell 里跑。
+- `<套件>` 换成套件根目录、`<ME>` 换成你的名字（任务块里都给全路径），**每条命令都带**。不要用 shell 变量（`ME=…`、`$C`），每条命令都在新 shell 里跑。
 - JSON 用**单引号**包住；骨名里的双引号写成 `\"`：`"data_path":"pose.bones[\"hand_fk.R\"].rotation_quaternion"`。
 - 回包先看 `ok`，再看 `warnings`，出错读 `error.message` 和 `error.fix`（常带"建议 frame_range=[a,b]"或"拼错的参数名 → 正确名"）。
 - `Connection refused` = 服务停了：别重启、别绕路，把已有数字写进报告结束。
@@ -23,14 +23,14 @@
 ## 2. 开工先跑一次 conventions（这份文件的约定）
 
 ```
-/home/sb/remote_kit_1.7.1/tools/agent conventions '{"agent_id":"<ME>","frame":200}'
+<套件>/tools/agent conventions '{"agent_id":"<ME>","frame":200}'
 ```
 它告诉你：这一帧角色面朝哪（角色会转身，前方不一定是世界 −Y）、镜头和视口在角色哪一侧、
 画面左右和角色左右是不是镜像、哪条腿/胳膊是 IK、帧号怎么对应视频、有哪些标记箭头。
 
 想知道某个部位"人眼看起来"朝哪，用 orient_report（只读，人话）：
 ```
-/home/sb/remote_kit_1.7.1/tools/agent orient_report '{"agent_id":"<ME>","part":"palm","side":"R","frame":135}'
+<套件>/tools/agent orient_report '{"agent_id":"<ME>","part":"palm","side":"R","frame":135}'
 ```
 回包 `summary` 就是一句人话，比如"右掌心 @135：朝镜头，偏画面右 42°…；画面上指向右下（4 点钟）；朝角色前方偏左 59°"。
 
@@ -67,7 +67,7 @@
 1. `ping` → 确认要用的工具在 `data.tools` 里。
 2. **修前量**（表里"验收"那一列的工具，用**用户给的帧段** [A,B]）。记下数字和回包顶层的 `version`。
 3. `claim` 你要写的骨 × 写入窗（`frame_range` 和 `frames` 两种写法都收）：
-   `/home/sb/remote_kit_1.7.1/tools/agent claim '{"agent_id":"<ME>","bones":["hand_fk.R"],"frame_range":[116,154]}'`
+   `<套件>/tools/agent claim '{"agent_id":"<ME>","bones":["hand_fk.R"],"frame_range":[116,154]}'`
    `data.granted=false` → 有人在改，停下报告，**不要 force**。
 4. **写**：写入窗 = 用户帧段两端各外扩 4 帧（`blend` 默认 4，两端是渐入渐出；复制类源窗/目标窗都外扩；overlap 例外，见 §7.14）。
    可以先加 `"dry_run":true` 看一眼（不写）。
@@ -75,9 +75,9 @@
 5. **修后量**：第 2 步原样再调一次（同工具、同参数、用户帧段）。没达标 → `reapply` 改参数（见表），**别叠新 op**；两次还不行 → `revert` 你的 op，报告卡在哪。
 6. 自查 + 收尾：
    ```
-   /home/sb/remote_kit_1.7.1/tools/agent list_ops '{"agent_id":"<ME>","owner":"<ME>","compact":true}'
-   /home/sb/remote_kit_1.7.1/tools/agent save '{"agent_id":"<ME>"}'
-   /home/sb/remote_kit_1.7.1/tools/agent release '{"agent_id":"<ME>"}'
+   <套件>/tools/agent list_ops '{"agent_id":"<ME>","owner":"<ME>","compact":true}'
+   <套件>/tools/agent save '{"agent_id":"<ME>"}'
+   <套件>/tools/agent release '{"agent_id":"<ME>"}'
    ```
    你的 op 要在 `fixes` 里、`status=preview`、`alive=true`。
 
@@ -111,11 +111,11 @@
 ### 7.1 掌心朝向（hold_pose）——例：右手掌心 120–150 帧朝镜头
 修前/修后量（用户帧段）：
 ```
-/home/sb/remote_kit_1.7.1/tools/agent probe_anatomy '{"agent_id":"<ME>","part":"palm","side":"R","frame_range":[120,150],"toward":"camera"}'
+<套件>/tools/agent probe_anatomy '{"agent_id":"<ME>","part":"palm","side":"R","frame_range":[120,150],"toward":"camera"}'
 ```
 写（写入窗 = [120−4, 150+4]）：
 ```
-/home/sb/remote_kit_1.7.1/tools/agent hold_pose '{"agent_id":"<ME>","bones":["hand_fk.R"],"frame_range":[116,154],"target":"world_dir","world_dir":"camera","world_axis":"probe:palm.R","secondary_axis":"probe:hand_axis.R","blend":4}'
+<套件>/tools/agent hold_pose '{"agent_id":"<ME>","bones":["hand_fk.R"],"frame_range":[116,154],"target":"world_dir","world_dir":"camera","world_axis":"probe:palm.R","secondary_axis":"probe:hand_axis.R","blend":4}'
 ```
 - 主轴/次轴照抄：掌心 `probe:palm.<侧>` + `probe:hand_axis.<侧>`；手背 `probe:back_of_hand.<侧>` + `probe:hand_axis.<侧>`；
   脚底 `probe:sole.<侧>` + `probe:toe.<侧>`（骨 `foot_ik.<侧>`）。
@@ -124,8 +124,8 @@
 
 ### 7.2 膝盖/肘尖朝向（swivel）——例：左膝 200–260 帧朝前
 ```
-/home/sb/remote_kit_1.7.1/tools/agent probe_anatomy '{"agent_id":"<ME>","part":"knee_front","side":"L","frame_range":[200,260],"toward":"forward"}'
-/home/sb/remote_kit_1.7.1/tools/agent swivel '{"agent_id":"<ME>","joint":"knee","side":"L","frame_range":[196,264],"toward":"forward"}'
+<套件>/tools/agent probe_anatomy '{"agent_id":"<ME>","part":"knee_front","side":"L","frame_range":[200,260],"toward":"forward"}'
+<套件>/tools/agent swivel '{"agent_id":"<ME>","joint":"knee","side":"L","frame_range":[196,264],"toward":"forward"}'
 ```
 - swivel 绕"髋→踝 / 肩→腕"连线转整条腿/胳膊：脚、手的位置和朝向不动。腿是 IK 时它改 `thigh_ik`；**不要用 hold_pose 改 thigh_fk**（写了看不见，会被拒）。
 - "膝盖内扣/别内扣/朝外" → `"toward":"toes"`（膝盖对着同侧脚尖），验收 probe 也用 `"toward":"toes"`。只有用户明说"正对前方"才用 `"forward"`。
@@ -135,40 +135,40 @@
 
 ### 7.3 脸/胸/骨盆朝向（hold_pose）——例：150–190 帧脸朝前
 ```
-/home/sb/remote_kit_1.7.1/tools/agent probe_anatomy '{"agent_id":"<ME>","part":"face","frame_range":[150,190],"toward":"forward"}'
+<套件>/tools/agent probe_anatomy '{"agent_id":"<ME>","part":"face","frame_range":[150,190],"toward":"forward"}'
 ```
 把回包里的 `hold_pose_args` 原样展开，再补上 `frame_range`（外扩 4 帧）、`target`、`world_dir`：
 ```
-/home/sb/remote_kit_1.7.1/tools/agent hold_pose '{"agent_id":"<ME>","bones":["head"],"frame_range":[146,194],"target":"world_dir","world_dir":"forward","world_axis":[-0.0,-0.0259,0.9997],"secondary_axis":[-0.0006,0.9997,0.0259],"blend":4}'
+<套件>/tools/agent hold_pose '{"agent_id":"<ME>","bones":["head"],"frame_range":[146,194],"target":"world_dir","world_dir":"forward","world_axis":[-0.0,-0.0259,0.9997],"secondary_axis":[-0.0006,0.9997,0.0259],"blend":4}'
 ```
 （`world_axis`/`secondary_axis` 用**你自己** probe 回的 `hold_pose_args` 里的数，上面是这个文件的。胸 = `part=chest`（骨 spine_fk.003），骨盆 = `part=pelvis`（骨 torso_root）。）
 
 ### 7.4 去抖（clean_jitter）——例：右手 300–340 帧抖
 ```
-/home/sb/remote_kit_1.7.1/tools/agent analyze_motion '{"agent_id":"<ME>","bones":["hand_fk.R"],"frame_range":[300,340],"brief":true}'
-/home/sb/remote_kit_1.7.1/tools/agent clean_jitter '{"agent_id":"<ME>","frame_range":[296,344],"bone":"hand_fk.R","strength":1.0,"width":5,"blend":4}'
+<套件>/tools/agent analyze_motion '{"agent_id":"<ME>","bones":["hand_fk.R"],"frame_range":[300,340],"brief":true}'
+<套件>/tools/agent clean_jitter '{"agent_id":"<ME>","frame_range":[296,344],"bone":"hand_fk.R","strength":1.0,"width":5,"blend":4}'
 ```
 - 看 `data.bones.hand_fk.R.jitter_deg`（不是 `data.main`）。降幅不够 → `reapply` `{"width":7}`；动作被抹平（峰速降得比抖动还多）→ `{"width":3,"strength":0.7}`。
 - 腿抖改 `foot_ik.<侧>`；手臂 `upper_arm_fk/forearm_fk` 也能直接用。
 
 ### 7.5 打击感（restore_accent）——例：右手 349 帧那一下
 ```
-/home/sb/remote_kit_1.7.1/tools/agent analyze_motion '{"agent_id":"<ME>","bones":["hand_fk.R"],"frame_range":[325,373],"brief":true}'
-/home/sb/remote_kit_1.7.1/tools/agent restore_accent '{"agent_id":"<ME>","frame_range":[325,373],"data_path":"pose.bones[\"hand_fk.R\"].rotation_quaternion","method":"ease_reshape","strength":0.5,"impact_frame":349,"blend":4}'
+<套件>/tools/agent analyze_motion '{"agent_id":"<ME>","bones":["hand_fk.R"],"frame_range":[325,373],"brief":true}'
+<套件>/tools/agent restore_accent '{"agent_id":"<ME>","frame_range":[325,373],"data_path":"pose.bones[\"hand_fk.R\"].rotation_quaternion","method":"ease_reshape","strength":0.5,"impact_frame":349,"blend":4}'
 ```
 - 冲击帧放在窗口**正中**。Euler 骨（`upper_arm_fk/forearm_fk` = `rotation_euler`）要 `"index":0`、`1`、`2` 各写一次。
 
 ### 7.6 脚滑（foot_lock）——例：左脚 400–450 帧着地别滑
 ```
-/home/sb/remote_kit_1.7.1/tools/agent slide_report '{"agent_id":"<ME>","side":"L","frame_range":[400,450]}'
-/home/sb/remote_kit_1.7.1/tools/agent foot_lock '{"agent_id":"<ME>","interval":"contact.L:13","lock":"xy"}'
+<套件>/tools/agent slide_report '{"agent_id":"<ME>","side":"L","frame_range":[400,450]}'
+<套件>/tools/agent foot_lock '{"agent_id":"<ME>","interval":"contact.L:13","lock":"xy"}'
 ```
 - 只修 `flagged=true` 的行；`interval` 抄那一行的（每段一个 op）。复测：同一条 slide_report，该行 `drift_mm` < 1。
 
 ### 7.7 陷地/悬空（fix_ground）——例：左脚 449–450 帧陷地
 ```
-/home/sb/remote_kit_1.7.1/tools/agent ground_report '{"agent_id":"<ME>","side":"L","frame_range":[440,460]}'
-/home/sb/remote_kit_1.7.1/tools/agent fix_ground '{"agent_id":"<ME>","frame_range":[445,454],"side":"L","loc_path":"pose.bones[\"foot_ik.L\"].location","mode":"pen","rest_clearance":0.077}'
+<套件>/tools/agent ground_report '{"agent_id":"<ME>","side":"L","frame_range":[440,460]}'
+<套件>/tools/agent fix_ground '{"agent_id":"<ME>","frame_range":[445,454],"side":"L","loc_path":"pose.bones[\"foot_ik.L\"].location","mode":"pen","rest_clearance":0.077}'
 ```
 - 参数就是 ground_report 回的 `fix_ground_args` 那一项**去掉 why**（`rest_clearance` 已经是米）。脚底点是关节中心，穿厚底靴踩实时离地 7–8 cm 是正常的。
 - **修后量**：ground_report 的 `frame_range` 用写入窗去掉两端 4 帧（例：写 [445,454] → 量 [449,450]），`pen_max_mm` ≤ 1。两端的过渡帧（脚正在落地/抬起）别算进去。
@@ -176,8 +176,8 @@
 
 ### 7.8 骨盆高度（solve_pelvis）——例：300–309 帧骨盆降 1 cm
 ```
-/home/sb/remote_kit_1.7.1/tools/agent solve_pelvis '{"agent_id":"<ME>","frame_range":[300,309],"pelvis_path":"pose.bones[\"torso_root\"].location","pelvis_dz":[-0.01,-0.01,-0.01,-0.01,-0.01,-0.01,-0.01,-0.01,-0.01,-0.01],"blend":2}'
-/home/sb/remote_kit_1.7.1/tools/agent effect_check '{"agent_id":"<ME>","op_id":"<op_id>"}'
+<套件>/tools/agent solve_pelvis '{"agent_id":"<ME>","frame_range":[300,309],"pelvis_path":"pose.bones[\"torso_root\"].location","pelvis_dz":[-0.01,-0.01,-0.01,-0.01,-0.01,-0.01,-0.01,-0.01,-0.01,-0.01],"blend":2}'
+<套件>/tools/agent effect_check '{"agent_id":"<ME>","op_id":"<op_id>"}'
 ```
 - `pelvis_dz` 是**每帧**一个数（米，正 = 往上），个数 = 你传的 `frame_range`（也就是**外扩后的写入窗**）的帧数，含两端：
   [300,309] 是 10 个；用户说 1250–1270、写入窗 [1246,1274] 就是 29 个。`blend` 小一点（2）。`<op_id>` 换成写入回包的 `data.op_id`。不支持 dry_run，也不支持 reapply。
@@ -185,7 +185,7 @@
 
 ### 7.9 套模板（apply_exemplar）
 ```
-/home/sb/remote_kit_1.7.1/tools/agent apply_exemplar '{"agent_id":"<ME>","frame_range":[790,853],"ex_id":"<模板名>","loc_path":"pose.bones[\"foot_ik.R\"].location","quat_path":"pose.bones[\"foot_ik.R\"].rotation_quaternion","target_pos":[[0,0,0]],"target_quat":[[1,0,0,0]]}'
+<套件>/tools/agent apply_exemplar '{"agent_id":"<ME>","frame_range":[790,853],"ex_id":"<模板名>","loc_path":"pose.bones[\"foot_ik.R\"].location","quat_path":"pose.bones[\"foot_ik.R\"].rotation_quaternion","target_pos":[[0,0,0]],"target_quat":[[1,0,0,0]]}'
 ```
 - 需要先登记过的模板 `ex_id`，这个文件里**没有**，而且 target_pos/target_quat 要逐帧数组。任务没明确给模板就**不要用**，报告。
 
@@ -193,9 +193,9 @@
 **源窗和目标窗都按 §5 外扩 4 帧**：用户说 630–680 → `src_range:[626,684]`、`dst_start:626`（不外扩的话 630–633、677–680
 落在渐入渐出里，没复制到位，实测差 55°）。
 ```
-/home/sb/remote_kit_1.7.1/tools/agent motion_copy '{"agent_id":"<ME>","chain":"arm.L","src_range":[626,684],"dst_start":626,"mirror":true,"dry_run":true}'
-/home/sb/remote_kit_1.7.1/tools/agent motion_copy '{"agent_id":"<ME>","chain":"arm.L","src_range":[626,684],"dst_start":626,"mirror":true}'
-/home/sb/remote_kit_1.7.1/tools/agent compare_motion '{"agent_id":"<ME>","op_id":"<op_id>"}'
+<套件>/tools/agent motion_copy '{"agent_id":"<ME>","chain":"arm.L","src_range":[626,684],"dst_start":626,"mirror":true,"dry_run":true}'
+<套件>/tools/agent motion_copy '{"agent_id":"<ME>","chain":"arm.L","src_range":[626,684],"dst_start":626,"mirror":true}'
+<套件>/tools/agent compare_motion '{"agent_id":"<ME>","op_id":"<op_id>"}'
 ```
 - `chain`/`bones` 写的是**源**；镜像时写入的是另一侧（claim 目标侧：`arm.R` × [626,684]）。修前 = dry_run 回的
   `metrics.verify.err_inner_before_deg`。compare_motion 按 op 量的就是目标窗去掉两端 4 帧 = 用户的 630–680。
@@ -203,8 +203,8 @@
 
 ### 7.11 预备（anticipation）——例：右臂 550–603 那一下挥臂
 ```
-/home/sb/remote_kit_1.7.1/tools/agent analyze_motion '{"agent_id":"<ME>","chain":"arm_nofingers.R","frame_range":[550,603],"main_bone":"upper_arm_fk.R","brief":true}'
-/home/sb/remote_kit_1.7.1/tools/agent anticipation '{"agent_id":"<ME>","chain":"arm_nofingers.R","frame_range":[550,603],"main_bone":"upper_arm_fk.R","amount":0.15,"lead":6,"delay":2,"blend":3}'
+<套件>/tools/agent analyze_motion '{"agent_id":"<ME>","chain":"arm_nofingers.R","frame_range":[550,603],"main_bone":"upper_arm_fk.R","brief":true}'
+<套件>/tools/agent anticipation '{"agent_id":"<ME>","chain":"arm_nofingers.R","frame_range":[550,603],"main_bone":"upper_arm_fk.R","amount":0.15,"lead":6,"delay":2,"blend":3}'
 ```
 - **先找准是哪一下**。用户只说"第 N 帧（左右）出拳/挥手"时：
   1. analyze_motion 的 `frame_range` 取 **[N−12, N+25]**，`chain` = 用户说的那一侧（没说就两侧都跑），`main_bone` = `upper_arm_fk.<侧>`；
@@ -216,22 +216,22 @@
 
 ### 7.12 跟随（follow_through）——例：右前臂 721 帧停下后甩一下
 ```
-/home/sb/remote_kit_1.7.1/tools/agent follow_through '{"agent_id":"<ME>","chain":"arm_nofingers.R","frame_range":[684,742],"main_bone":"forearm_fk.R","onset_frame":689,"stop_frame":721,"amount":0.12,"period":8,"decay":6,"cycles":2,"blend":3}'
-/home/sb/remote_kit_1.7.1/tools/agent analyze_motion '{"agent_id":"<ME>","chain":"arm_nofingers.R","frame_range":[684,742],"main_bone":"forearm_fk.R","onset_frame":689,"stop_frame":721,"baseline_op":"<op_id>","brief":true}'
+<套件>/tools/agent follow_through '{"agent_id":"<ME>","chain":"arm_nofingers.R","frame_range":[684,742],"main_bone":"forearm_fk.R","onset_frame":689,"stop_frame":721,"amount":0.12,"period":8,"decay":6,"cycles":2,"blend":3}'
+<套件>/tools/agent analyze_motion '{"agent_id":"<ME>","chain":"arm_nofingers.R","frame_range":[684,742],"main_bone":"forearm_fk.R","onset_frame":689,"stop_frame":721,"baseline_op":"<op_id>","brief":true}'
 ```
 - 复测要钉住修前的 `onset_frame`/`stop_frame` 并带 `baseline_op`，看 `data.vs_baseline`。修前写"0（未加）"。
 
 ### 7.13 过冲（overshoot）——同一个停止点和跟随二选一
 ```
-/home/sb/remote_kit_1.7.1/tools/agent overshoot '{"agent_id":"<ME>","chain":"arm_nofingers.R","frame_range":[684,745],"main_bone":"forearm_fk.R","stop_frame":721,"amount":0.08,"peak_after":2,"settle":6}'
+<套件>/tools/agent overshoot '{"agent_id":"<ME>","chain":"arm_nofingers.R","frame_range":[684,745],"main_bone":"forearm_fk.R","stop_frame":721,"amount":0.08,"peak_after":2,"settle":6}'
 ```
 
 ### 7.14 骨链错时（overlap）——例：右臂 20–110 帧一节节带过去
 overlap 的 `frame_range` **就写用户帧段、不外扩**（它自己按延迟自动留过渡：链越长过渡越宽）。
 ```
-/home/sb/remote_kit_1.7.1/tools/agent overlap '{"agent_id":"<ME>","chain":"arm.R","frame_range":[20,110],"delay":1.0,"dry_run":true}'
-/home/sb/remote_kit_1.7.1/tools/agent chain_lag '{"agent_id":"<ME>","chain":"arm.R","frame_range":[32,98]}'
-/home/sb/remote_kit_1.7.1/tools/agent overlap '{"agent_id":"<ME>","chain":"arm.R","frame_range":[20,110],"delay":1.0}'
+<套件>/tools/agent overlap '{"agent_id":"<ME>","chain":"arm.R","frame_range":[20,110],"delay":1.0,"dry_run":true}'
+<套件>/tools/agent chain_lag '{"agent_id":"<ME>","chain":"arm.R","frame_range":[32,98]}'
+<套件>/tools/agent overlap '{"agent_id":"<ME>","chain":"arm.R","frame_range":[20,110],"delay":1.0}'
 ```
 - 第二条 chain_lag 的 `frame_range` = 第一条（dry_run）回包里的 `data.metrics.inner_frames`（这个例子是 [32,98]）；**修前、修后都用它**。
   只看 `reliable=true` 的级。
@@ -241,21 +241,21 @@ overlap 的 `frame_range` **就写用户帧段、不外扩**（它自己按延�
 
 ### 7.15 改节奏（time_warp）——例：左臂 440–530 以 1.5 倍速到达 478 帧
 ```
-/home/sb/remote_kit_1.7.1/tools/agent time_warp '{"agent_id":"<ME>","chain":"arm_nofingers.L","frame_range":[440,530],"speed":1.5,"pivot":478}'
+<套件>/tools/agent time_warp '{"agent_id":"<ME>","chain":"arm_nofingers.L","frame_range":[440,530],"speed":1.5,"pivot":478}'
 ```
 - 验收看写入回包 `data.metrics.speed_into_pivot` ≈ 1.5、`pivot_time_old` = 478。
 
 ### 7.16 方向箭头（markers）——给掌心/脚底/膝/肘/脸/胸/骨盆建骨骼父级箭头
 ```
-/home/sb/remote_kit_1.7.1/tools/agent markers '{"agent_id":"<ME>","action":"create","parts":["knee","elbow"]}'
-/home/sb/remote_kit_1.7.1/tools/agent markers '{"agent_id":"<ME>","action":"check"}'
+<套件>/tools/agent markers '{"agent_id":"<ME>","action":"create","parts":["knee","elbow"]}'
+<套件>/tools/agent markers '{"agent_id":"<ME>","action":"check"}'
 ```
 - 有合格的 `MCD_*` 箭头时 probe 以它为准（`evidence.*_source = marker`）。`check` 报 `error` 的箭头（没父级、绑错侧、顶点父级在另一只手、带关键帧）probe 不读，把 `problems` 和 `fix` 原文报告。
 - 工人任务里一般不用（协调者/用户开工前建好）；不碰动画数据，不需要 claim。
 
 ### 7.17 改参数（reapply）——op_id 不变，删旧写新
 ```
-/home/sb/remote_kit_1.7.1/tools/agent reapply '{"agent_id":"<ME>","op_id":"<op_id>","overrides":{"strength":0.5}}'
+<套件>/tools/agent reapply '{"agent_id":"<ME>","op_id":"<op_id>","overrides":{"strength":0.5}}'
 ```
 - `overrides:{}` = 不改参数、按当前现场重算。可改：`strength` `blend` `frame_range` `width` `amount` `delay` `toward`……（就是原工具的参数名）。
 - **支持 reapply 的**：hold_pose、clean_jitter、restore_accent（hf_reinject/refilter 除外）、swivel、motion_copy、anticipation、follow_through、
@@ -263,18 +263,18 @@ overlap 的 `frame_range` **就写用户帧段、不外扩**（它自己按延�
 
 ### 7.18 力度（set_influence）——0.5 = 一半，1.5 = 超量
 ```
-/home/sb/remote_kit_1.7.1/tools/agent set_influence '{"agent_id":"<ME>","op_id":"<op_id>","value":0.5}'
+<套件>/tools/agent set_influence '{"agent_id":"<ME>","op_id":"<op_id>","value":0.5}'
 ```
 
 ### 7.19 撤销（revert）——只能撤自己的
 ```
-/home/sb/remote_kit_1.7.1/tools/agent revert '{"agent_id":"<ME>","op_id":"<op_id>"}'
+<套件>/tools/agent revert '{"agent_id":"<ME>","op_id":"<op_id>"}'
 ```
 
 ### 7.20 A/B 对比（ab_toggle）——只拨你自己的修复；调一次静音、再调一次恢复
 ```
-/home/sb/remote_kit_1.7.1/tools/agent ab_toggle '{"agent_id":"<ME>"}'
-/home/sb/remote_kit_1.7.1/tools/agent ab_toggle '{"agent_id":"<ME>"}'
+<套件>/tools/agent ab_toggle '{"agent_id":"<ME>"}'
+<套件>/tools/agent ab_toggle '{"agent_id":"<ME>"}'
 ```
 - 回包 `data.muted=true` = 现在是原样（A），`false` = 修复生效（B）。**最后一定是 false**。
 

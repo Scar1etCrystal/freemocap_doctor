@@ -2,12 +2,13 @@
 
 > 配合 `tools_io.md`。腿是 **IK 模式**：唯一有效的腿部控制骨是 `foot_ik.L` / `foot_ik.R`。
 > `thigh_fk/shin_fk/foot_fk` 有关键帧但**改了看不见**。
+> 路径占位符 `<套件>` = 套件根目录（任务块给全路径，原样替换）。
 
 ## A. 脚滑（最常见）
 
 1. **体检**：
    ```
-   /home/sb/remote_kit_1.7.1/tools/agent slide_report '{"agent_id":"<ME>","side":"R","threshold_mm":10}'
+   <套件>/tools/agent slide_report '{"agent_id":"<ME>","side":"R","threshold_mm":10}'
    ```
    `data.rows` 按漂移从大到小排；每行有 `interval`（如 `contact.R:17`）、`frames`、
    `drift_mm`（foot_ik 头部的世界水平漂移，**毫米**，相对该段接触里最静止的一帧）、`flagged`、
@@ -19,7 +20,7 @@
    看返回的 `frames`。
 3. **踩实**：
    ```
-   /home/sb/remote_kit_1.7.1/tools/agent foot_lock '{"agent_id":"<ME>","interval":"contact.R:17","lock":"xy","expect_version":<v>}'
+   <套件>/tools/agent foot_lock '{"agent_id":"<ME>","interval":"contact.R:17","lock":"xy","expect_version":<v>}'
    ```
    - `lock="xy"`（默认）：只钉水平位置，**保留高度**——脚跟抬起、脚尖滚动不受影响。首选。
    - `"xy+rot"`：再钉住脚的朝向（脚在地上拧来拧去时用）。
@@ -36,7 +37,7 @@ contact 标注**标定每只脚"正常着地"的高度** `contact_height_mm`，�
 
 1. **体检（实时，修前）**：
    ```
-   /home/sb/remote_kit_1.7.1/tools/agent ground_report '{"agent_id":"<ME>","side":"R","frame_range":[A,B]}'
+   <套件>/tools/agent ground_report '{"agent_id":"<ME>","side":"R","frame_range":[A,B]}'
    ```
    看 `data.sides.R`：`contact_height_mm`、`pen_frames`（rel < −10 mm 的帧段）、`pen_max_mm`、
    `contacts[]`（`floating:true` = 这段接触整段比平时高 > 10 mm）、`fix_ground_args`（现成参数）。
@@ -46,7 +47,7 @@ contact 标注**标定每只脚"正常着地"的高度** `contact_height_mm`，�
 2. `claim bones=["foot_ik.R"] frames=<fix_ground_args 的 frame_range>`。
 3. **写入**：把 `fix_ground_args` 里的一项**去掉 `why`** 原样传（`rest_clearance` 已经是**米**，别换算）：
    ```
-   /home/sb/remote_kit_1.7.1/tools/agent fix_ground '{"agent_id":"<ME>","frame_range":[a,b],"side":"R",
+   <套件>/tools/agent fix_ground '{"agent_id":"<ME>","frame_range":[a,b],"side":"R",
      "loc_path":"pose.bones[\"foot_ik.R\"].location","mode":"pen","rest_clearance":0.0815,"expect_version":<v>}'
    ```
    | mode | 做什么 | 用在 |

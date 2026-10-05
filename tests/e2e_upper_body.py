@@ -1,7 +1,7 @@
 """上半身位置对齐源（重定向里程碑时静默执行，紧接骨盆支点修正之后，2026-10-04）。
 
 fixture = 用户的 0999_fsb_showretargetproblem.blend（干净的 ARP 重定向结果，未建项目）的副本：
-    bash tools/mcd.sh e2e tests/e2e_upper_body.py /home/sb/remote_kit_1.7.1/sandbox/work/fixture_root_pivot.blend
+    bash <套件>/tools/mcd.sh e2e <套件>/tests/e2e_upper_body.py <套件>/sandbox/work/fixture_root_pivot.blend
 先按里程碑的顺序跑 fix_root_pivot，再测 fix_upper_body_follow：
   U1  现场：spine_fk.001 有四元数关键帧、源是 SMPL 骨架；支点修后 151–277 帧肩仍跟着胯晃（肩 > 0.12 m，髋相对肩 < 0.08 m）
   U2  写了全部帧，没有限幅/够不着的帧
