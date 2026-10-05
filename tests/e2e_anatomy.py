@@ -72,6 +72,45 @@ if has_fingers:
     check("A3 palm toward err", p2.get("err_max_deg") is not None,
           f"err={p2.get('err_max_deg')} resolved={p2.get('toward_resolved')}")
 
+    # ---- A7–A9: 掌心 = 目标网格上看得见的掌心（网格标定，相对 hand_fk 刚性）
+    # 手指几何版的 local_spread 在这段上有几十度（手指一弯掌平面就转）；网格版是固定局部向量。
+    pm = agent_anatomy.probe(scene, rig, part="palm", side="L",
+                             frame_range=[1, 1400], max_frames=15)
+    evm = pm.get("evidence", {})
+    check("A7 palm mesh-calibrated + rigid in hand_fk (local spread < 2° over 1–1400)",
+          evm.get("palm_source") == "mesh" and pm.get("local_spread_deg", 99) < 2.0,
+          f"source={evm.get('palm_source')} spread={pm.get('local_spread_deg')} "
+          f"faces={evm.get('mesh_faces')} thumb={evm.get('thumb_side_mm')}mm "
+          f"local={pm.get('local_axis')} cal={evm.get('mesh_calibration')}")
+    pmr = agent_anatomy.probe(scene, rig, part="palm", side="R",
+                              frame_range=[1, 1400], max_frames=15)
+    la, lb = Vector(pm["local_axis"]), Vector(pmr["local_axis"])
+    lb.x = -lb.x
+    mirror_deg = math.degrees(la.angle(lb)) if la.length and lb.length else 99.0
+    check("A8 L/R palm local axes are X-mirrors (< 3°)",
+          pmr.get("evidence", {}).get("palm_source") == "mesh" and mirror_deg < 3.0,
+          f"L={pm['local_axis']} R={pmr['local_axis']} angle={mirror_deg:.2f}°")
+    # 独立交叉验证：手指弯得不多（0.3 < curl < 2，有把握但没攥拳）的帧上，手指几何推的
+    # 掌心必须与网格掌心同一侧。攥拳时指根→指尖倒向掌心法线，手指法本身就不可靠，不计入。
+    mild, bad = [], []
+    for f0 in range(50, 1450, 100):
+        pc = agent_anatomy.probe(scene, rig, part="palm", side="L", frame_range=[f0, f0])
+        evc = pc.get("evidence", {})
+        curl = evc.get("curl_mag", 0.0)
+        if 0.3 < curl < 2.0 and evc.get("finger_palm_vs_mesh_deg") is not None:
+            mild.append((f0, curl, evc["finger_palm_vs_mesh_deg"]))
+            if evc["finger_palm_vs_mesh_deg"] >= 90:
+                bad.append((f0, curl, evc["finger_palm_vs_mesh_deg"]))
+    check("A9 finger-curl palm agrees with the mesh palm on mildly curled frames",
+          bool(mild) and not bad, f"mild={mild} bad={bad}")
+    hx = agent_anatomy.probe(scene, rig, part="hand_axis", side="L",
+                             frame_range=[1, 1400], max_frames=15)
+    check("A10 hand_axis rigid + ⊥ palm (local spread < 2°, angle to palm 80–100°)",
+          hx.get("local_spread_deg", 99) < 2.0
+          and 80 < math.degrees(Vector(hx["local_axis"]).angle(Vector(pm["local_axis"]))) < 100,
+          f"spread={hx.get('local_spread_deg')} angle_to_palm="
+          f"{math.degrees(Vector(hx['local_axis']).angle(Vector(pm['local_axis']))):.1f}°")
+
 ax = agent_anatomy.probe(scene, rig, part="bone_axis", bone="hand_fk.L")
 check("A4 bone_axis", len(ax.get("axes", {})) == 6,
       f"+Y={ax['axes'].get('+Y')}")
@@ -93,15 +132,15 @@ if has_fingers:
     p0 = agent_anatomy.probe(scene, rig, part="palm", side="L",
                              frame_range=FR)
     palm0 = Vector(p0["world_dir"])
-    fing0 = Vector(agent_anatomy.probe(
-        scene, rig, part="finger_dir", side="L",
+    hand0 = Vector(agent_anatomy.probe(
+        scene, rig, part="hand_axis", side="L",
         frame_range=FR)["world_dir"])
     target = (-palm0)                      # 强制 ~180°：掌心翻向反面
     op = agent_ops.hold_pose(
         rig, agent_ops.base_action_of(rig), ["hand_fk.L"], FR,
         target="world_dir", world_dir=list(target),
         world_axis="probe:palm.L",
-        secondary_axis="probe:finger_dir.L",
+        secondary_axis="probe:hand_axis.L",
         scene=scene, mode="replace", blend=2,
         data_dir=data_dir)
     bmet = op["metrics"]["bones"]["hand_fk.L"]
@@ -122,13 +161,17 @@ if has_fingers:
           and p1["err_inner_deg"] < 20,
           f"err_inner={p1.get('err_inner_deg')} "
           f"per_frame={p1.get('err_per_frame')}")
-    fp = agent_anatomy.probe(scene, rig, part="finger_dir", side="L",
-                             frame_range=FR, toward=list(fing0))
-    check("B3 finger direction preserved mid-range",
+    # 掌心 180° 翻转应是绕 腕→指根 轴的干净旋前/旋后：hand_axis 不动。
+    # （150–165 帧手是攥着的，指根→指尖离掌心法线只有 ~24°，"手指方向不变"在几何上做不到）
+    fp = agent_anatomy.probe(scene, rig, part="hand_axis", side="L",
+                             frame_range=FR, toward=list(hand0))
+    # 几何下限：hand_axis 与掌心差 90°−δ（δ≈6°），绕其 ⊥ 分量翻 180° 后自身转 2δ≈13°；
+    # 再加采样点落在 blend 斜坡上的份额。要抓的是"滚转随机"（几十到 180°），30° 足够。
+    check("B3 hand axis (wrist→knuckles) preserved mid-range (< 30°)",
           fp.get("err_inner_deg") is not None
           and fp["err_inner_deg"] < 30,
-          f"finger err_inner={fp.get('err_inner_deg')} "
-          f"(单轴最小旋转翻 180° 时手指会跟着翻过去)")
+          f"hand_axis err_inner={fp.get('err_inner_deg')} "
+          f"(单轴最小旋转翻 180° 时轴向随机，会把手翻进手里)")
     OP_B = op["id"]
 
     # ---------- C: flip guard ---------------------------------------------
@@ -182,7 +225,7 @@ if has_fingers:
         rig, agent_ops.base_action_of(rig), ["hand_fk.R"], FR,
         target="world_dir",
         world_axis="probe:palm.R",
-        secondary_axis="probe:finger_dir.R",
+        secondary_axis="probe:hand_axis.R",
         dir_object=arrow.name, dir_mode="arrow",
         scene=scene, mode="replace", blend=2,
         data_dir=data_dir)

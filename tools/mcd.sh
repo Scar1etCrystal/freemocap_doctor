@@ -176,6 +176,17 @@ case "$cmd" in
   deploy)
     # clone 是唯一真源：代码 / e2e / 工具 / 文档 → kit → 沙盒扩展目录
     [ -d "$CLONE/mocap_doctor" ] || { echo "[mcd] 没有 clone：$CLONE"; exit 1; }
+    # 不在 e2e / bench 跑到一半时换代码（函数里懒 import 的模块会混进新代码，§8 第四轮出过）：先拿 Blender 锁。
+    # 锁若是 headless 服务占着（它整段生命周期持锁）照旧放行，结尾会提示重启服务。
+    exec 9>"$LOCK"
+    if ! flock -n 9; then
+        if pgrep -f -- "$SERVER_PAT" >/dev/null; then
+            echo "[mcd] 锁由 headless 服务持有：照常 deploy"
+        else
+            echo "[mcd] 有 Blender 在跑（$(cat "$LOCK.owner" 2>/dev/null || echo '?')），等它跑完再 deploy（≤${LOCK_WAIT_S}s）..."
+            flock -w "$LOCK_WAIT_S" 9 || { echo "[mcd] 排队超时，没有 deploy"; exit 2; }
+        fi
+    fi
     rsync -a --delete --exclude __pycache__ "$CLONE/mocap_doctor/" "$KIT/mocap_doctor/"
     for f in "$CLONE"/tests/e2e_*.py "$CLONE"/tests/bench_*.py; do
         [ -f "$f" ] && cp "$f" "$KIT/tests/"

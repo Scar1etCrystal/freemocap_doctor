@@ -105,5 +105,50 @@ class ExemplarTests(unittest.TestCase):
                            agent_fx.match_signature(sig, cand_diff))
 
 
+class SlerpBridgeTests(unittest.TestCase):
+    """hold_pose mode=outlier bridges the bad frames BETWEEN two good neighbours
+    (review M5): the neighbours themselves are not part of the bridge."""
+
+    @staticmethod
+    def _q(deg):
+        a = np.radians(deg)
+        return np.array([np.cos(a / 2), 0.0, 0.0, np.sin(a / 2)])
+
+    @staticmethod
+    def _deg(q):
+        return np.degrees(2 * np.arctan2(q[:, 3], q[:, 0]))
+
+    def test_three_bad_frames_of_a_steady_move(self):
+        # 2 deg/frame: good frames at 6 and 14 deg → bad frames are 8/10/12
+        out = agent_fx.slerp_series(self._q(6.0), self._q(14.0), 3)
+        self.assertTrue(np.allclose(self._deg(out), [8.0, 10.0, 12.0], atol=1e-9),
+                        self._deg(out))           # old i/(n-1): [6, 10, 14]
+
+    def test_single_bad_frame_is_the_midpoint(self):
+        out = agent_fx.slerp_series(self._q(8.0), self._q(12.0), 1)
+        self.assertAlmostEqual(float(self._deg(out)[0]), 10.0, places=9)  # old: 8
+
+
+class SwingTwistTests(unittest.TestCase):
+    """swing_twist_deg with w < 0 (review M28): same rotation, same twist."""
+
+    def test_negative_w_gives_the_same_twist(self):
+        a = np.radians(10.0)
+        q = np.array([[np.cos(a / 2), 0.0, np.sin(a / 2), 0.0]])     # 10 deg about Y
+        pos = agent_fx.swing_twist_deg(q)["twist_deg"][0]
+        neg = agent_fx.swing_twist_deg(-q)["twist_deg"][0]           # old: -350
+        self.assertAlmostEqual(float(pos), 10.0, places=9)
+        self.assertAlmostEqual(float(neg), 10.0, places=9)
+
+    def test_twist_stays_continuous_through_180(self):
+        deg = np.arange(170.0, 191.0, 2.0)
+        q = np.stack([np.cos(np.radians(deg) / 2), np.zeros_like(deg),
+                      np.sin(np.radians(deg) / 2), np.zeros_like(deg)], axis=1)
+        tw = agent_fx.swing_twist_deg(q)["twist_deg"]
+        wrapped = (tw - deg + 180.0) % 360.0 - 180.0                 # equal mod 360
+        self.assertTrue(np.allclose(wrapped, 0.0, atol=1e-9), tw)
+        self.assertTrue(np.all(np.abs(tw) <= 180.0 + 1e-9), tw)
+
+
 if __name__ == "__main__":
     unittest.main()

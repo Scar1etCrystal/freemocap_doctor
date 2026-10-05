@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+import json
 import math
 import statistics
 from typing import Any
@@ -19,7 +20,9 @@ except ImportError:  # pragma: no cover - module is executed inside Blender.
 
 from .animation import (
     EPSILON,
+    _fcurves,
     bone_path,
+    add_missing_keys,
     cache_fcurve_values,
     current_view_layer,
     ensure_action,
@@ -42,6 +45,7 @@ from .animation import (
     update_action,
 )
 from .ranges import normalize_ranges
+from ..presets import gvhmr_source_prefix
 
 
 DEFAULT_FOOT_IK = {"L": "foot_ik.L", "R": "foot_ik.R"}
@@ -105,6 +109,445 @@ DEFAULT_EXCLUDED_MESH_KEYWORDS = (
     "Camera",
     "Light",
 )
+
+
+# Root pivot (silently applied when the retarget milestone is recorded).  The
+# ARP bmap maps the source pelvis - location AND rotation - onto torso_root,
+# whose head sits at the MMD センター height: on Teto that is ~0.39 m BELOW the
+# hip joints, while the SMPL-X pelvis joint is ~0.09 m ABOVE them.  The same
+# pelvis tilt about the low pivot swings the hips against their own sway:
+# 0001-0999 frames 151-277 measure 0.19 m of hip sway on the source and 0.07 m
+# (out of phase) on Teto.  The fix keeps every rotation and shifts torso_root so
+# the rotation acts about the hips bone head; child pose = rest + R0 loc +
+# R0 R(q) S d, so loc += d - R(q) S d with d = hips head - torso_root head in
+# torso_root's rest frame.  Foot IK targets are untouched (separate chains).
+ROOT_PIVOT_BONE = "hips"
+ROOT_PIVOT_MARK = "mcd_root_pivot_fix"
+
+
+def fix_root_pivot(
+    armature: Any,
+    action: Any | None = None,
+    *,
+    root_bone: str = DEFAULT_PELVIS_BONE,
+    pivot_bone: str = ROOT_PIVOT_BONE,
+    force: bool = False,
+) -> dict[str, Any]:
+    """Re-pivot the retarget's baked root rotation about ``pivot_bone``'s head.
+
+    Idempotent: the action is marked and a second call is a no-op unless
+    ``force``.  Returns a report; ``skipped`` explains why nothing was written
+    (no root animation, unexpected bone layout, already applied).
+    """
+    action = action if action is not None else get_action(armature, required=False)
+    report: dict[str, Any] = {"operation": "fix_root_pivot", "armature": getattr(armature, "name", ""),
+                              "root_bone": root_bone, "pivot_bone": pivot_bone}
+    if action is None:
+        report["skipped"] = "no action"
+        return report
+    report["action"] = action.name
+    previous = action.get(ROOT_PIVOT_MARK)
+    if previous and not force:
+        report["skipped"] = "already applied"
+        report["previous"] = json.loads(previous) if isinstance(previous, str) else str(previous)
+        return report
+    bones = armature.data.bones
+    if root_bone not in bones or pivot_bone not in bones:
+        report["skipped"] = "bones missing"
+        return report
+    root, pivot = bones[root_bone], bones[pivot_bone]
+    chain, bone = [], pivot.parent
+    while bone is not None and bone.name != root_bone:
+        chain.append(bone.name)
+        bone = bone.parent
+    if bone is None:
+        report["skipped"] = f"{pivot_bone} is not under {root_bone}"
+        return report
+    animated = sorted({name for name in [pivot_bone, *chain]
+                       for fcurve in _fcurves(action) if fcurve.data_path.startswith(bone_path(name) + ".")})
+    if animated:
+        # The fix assumes a rigid offset between the two heads.
+        report["skipped"] = f"bones between root and pivot are animated: {animated}"
+        return report
+    rest = root.matrix_local.to_3x3().normalized()
+    offset = rest.transposed() @ (pivot.head_local - root.head_local)
+    loc = [get_fcurve(action, bone_path(root_bone, "location"), i) for i in range(3)]
+    quat = [get_fcurve(action, bone_path(root_bone, "rotation_quaternion"), i) for i in range(4)]
+    scale = [get_fcurve(action, bone_path(root_bone, "scale"), i) for i in range(3)]
+    if any(fc is None for fc in quat):
+        report["skipped"] = "no quaternion rotation on root"
+        return report
+    frames = sorted({int(round(key.co.x)) for fc in quat + loc if fc is not None for key in fc.keyframe_points})
+    deltas = []
+    for frame in frames:
+        q = Quaternion([fc.evaluate(frame) for fc in quat]).normalized()
+        s = Vector([fc.evaluate(frame) if fc is not None else 1.0 for fc in scale])
+        scaled = Vector((offset.x * s.x, offset.y * s.y, offset.z * s.z))
+        deltas.append(offset - q.to_matrix() @ scaled)
+    pose_root = armature.pose.bones.get(root_bone)
+    for axis in range(3):
+        fcurve = loc[axis]
+        if fcurve is None:
+            fcurve = ensure_fcurve(action, bone_path(root_bone, "location"), axis, group=root_bone)
+            base = float(pose_root.location[axis]) if pose_root is not None else 0.0
+            for frame in frames:
+                fcurve.keyframe_points.insert(frame, base, options={"FAST"})
+            loc[axis] = fcurve
+        before = {frame: float(fcurve.evaluate(frame)) for frame in frames}
+        cache = keyframe_map(fcurve)
+        for frame, delta in zip(frames, deltas):
+            set_fcurve_value(fcurve, frame, before[frame] + float(delta[axis]), cache=cache)
+    update_action(action)
+    magnitude = [delta.length for delta in deltas]
+    report.update({
+        "frames": len(frames),
+        "pivot_offset_m": [round(float(v), 4) for v in (pivot.head_local - root.head_local)],
+        "max_shift_m": round(max(magnitude), 4) if magnitude else 0.0,
+        "mean_shift_m": round(sum(magnitude) / len(magnitude), 4) if magnitude else 0.0,
+    })
+    action[ROOT_PIVOT_MARK] = json.dumps({k: report[k] for k in ("root_bone", "pivot_bone", "frames",
+                                                                  "pivot_offset_m", "max_shift_m")})
+    return report
+
+
+# Upper-body follow (silently applied at the retarget milestone, right after
+# the root pivot fix).  ARP matches every bone's WORLD orientation (measured on
+# 0001-0999: the offset Rs^T Rt drifts 0.00 deg on all spine/neck/arm pairs),
+# but the chains differ in where the rotations act.  The source counter-leans
+# its hip sway with Pelvis+Spine1 (23 deg peak-to-peak) over 0.23 m of lumbar
+# ABOVE its pelvis joint; on Teto, Spine1's orientation lands on spine_fk, which
+# swings the pelvis segment BELOW the hips head, and the upper chain starts AT
+# the hips head with Spine2's orientation (12 deg).  Frames 151-277: source
+# shoulders sway 0.077 m under a 0.191 m hip sway, Teto's 0.149 m.
+# The fix swings spine_fk.001 about its head (= hips head; everything above it
+# rides along, the hips and legs do not) so Teto's shoulder-mid sits where the
+# source puts it relative to the hips-mid: the lateral offset 1:1 - hips and
+# feet are mapped 1:1, so "the shoulders stay put" is absolute - and the
+# forward offset scaled by the torso length ratio, i.e. the source's forward
+# lean angle (absolute would bend Teto's 0.71x torso ~1.4x as far in bows).
+# A lateral target scaled like the forward one measures 0.108 m of shoulder
+# sway instead of 0.087 m: Teto's torso is too short for the angle alone.
+UPPER_BODY_MARK = "mcd_upper_body_follow"
+UPPER_BODY_SWING_BONE = "spine_fk.001"
+UPPER_BODY_RIG_HIPS = ("ORG-thigh.L", "ORG-thigh.R")
+UPPER_BODY_RIG_SHOULDERS = ("ORG-upper_arm.L", "ORG-upper_arm.R")
+# SMPL joint suffixes; the prefix (f_avg / m_avg) comes from the source rig.
+UPPER_BODY_SOURCE_HIPS = ("L_Hip", "R_Hip")
+UPPER_BODY_SOURCE_SHOULDERS = ("L_Shoulder", "R_Shoulder")
+# Gaussian sigma in frames: the 151-277 sway has a ~20-frame period, which a
+# 1.5-frame sigma keeps at ~90%.
+UPPER_BODY_SMOOTH_SIGMA = 1.5
+# A fuse, not a target: 0001-0999 peaks at 14 deg.
+UPPER_BODY_MAX_SWING_DEG = 20.0
+# Source torso lean (hips-mid -> shoulder-mid from vertical) over which the
+# correction fades out: floor work and handstands are not hip isolation.
+UPPER_BODY_UPRIGHT_FADE_DEG = (45.0, 60.0)
+
+
+def _rotate_rows(rotvec: Any, vectors: Any) -> Any:
+    """Rodrigues: rotate each row of ``vectors`` by the matching rotation vector."""
+    import numpy as np
+
+    angle = np.linalg.norm(rotvec, axis=1)
+    axis = rotvec / np.maximum(angle, 1e-12)[:, None]
+    cos, sin = np.cos(angle)[:, None], np.sin(angle)[:, None]
+    along = np.einsum("ij,ij->i", axis, vectors)[:, None]
+    return vectors * cos + np.cross(axis, vectors) * sin + axis * along * (1.0 - cos)
+
+
+def upper_body_swing(
+    pivot: Any,
+    shoulders: Any,
+    hip_l: Any,
+    hip_r: Any,
+    src_shoulders: Any,
+    src_hip_l: Any,
+    src_hip_r: Any,
+    *,
+    torso_ratio: float | None = None,
+    lateral_scale: float = 1.0,
+    smooth_sigma: float = UPPER_BODY_SMOOTH_SIGMA,
+    max_swing_deg: float = UPPER_BODY_MAX_SWING_DEG,
+    upright_fade_deg: Sequence[float] = UPPER_BODY_UPRIGHT_FADE_DEG,
+    up: Sequence[float] = (0.0, 0.0, 1.0),
+) -> dict[str, Any]:
+    """Per-frame world swing about ``pivot`` that puts the shoulders where the source has them.
+
+    Inputs are (F, 3) world positions per frame: Teto's swing-bone head
+    (``pivot``), shoulder-mid and hip joints; the source's shoulder-mid and hip
+    joints.  Each skeleton gets its own horizontal lateral axis (its hip line)
+    and forward axis (up x lateral).  The target offset of the shoulder-mid
+    from the hips-mid is the source's lateral component times
+    ``lateral_scale`` and its forward component times ``torso_ratio``
+    (Teto/source hips-mid -> shoulder-mid length, measured when None); the
+    vertical follows from keeping the shoulder-mid's distance to the pivot.
+    The minimal rotation is smoothed (Gaussian, frames), faded out where the
+    source torso leans past ``upright_fade_deg``, zeroed where a hip line is
+    near vertical, and clamped.  Pure numpy, so it runs without Blender.
+
+    Returns ``rotvec`` ((F, 3) radians, world axes) plus JSON-ready stats.
+    """
+    import numpy as np
+
+    def rows(values: Any) -> Any:
+        return np.asarray(values, dtype=float).reshape(-1, 3)
+
+    def dot(a: Any, b: Any) -> Any:
+        return np.einsum("ij,ij->i", a, b)
+
+    piv, sho, hl, hr = rows(pivot), rows(shoulders), rows(hip_l), rows(hip_r)
+    src_sho, src_hl, src_hr = rows(src_shoulders), rows(src_hip_l), rows(src_hip_r)
+    count = len(piv)
+    up_axis = np.asarray(up, dtype=float)
+    up_axis = up_axis / np.linalg.norm(up_axis)
+
+    def axes(left: Any, right: Any) -> tuple[Any, Any, Any]:
+        line = right - left
+        flat = line - np.outer(line @ up_axis, up_axis)
+        length = np.linalg.norm(flat, axis=1)
+        usable = length > 0.5 * np.maximum(np.linalg.norm(line, axis=1), 1e-9)
+        lateral = flat / np.maximum(length, 1e-9)[:, None]
+        return lateral, np.cross(up_axis, lateral), usable
+
+    lat_t, fwd_t, ok_t = axes(hl, hr)
+    lat_s, fwd_s, ok_s = axes(src_hl, src_hr)
+    hip, src_hip = (hl + hr) / 2.0, (src_hl + src_hr) / 2.0
+    offset, src_offset = sho - hip, src_sho - src_hip
+    if torso_ratio is None:
+        torso_ratio = float(np.linalg.norm(offset, axis=1).mean()
+                            / max(float(np.linalg.norm(src_offset, axis=1).mean()), 1e-9))
+    want_lat = float(lateral_scale) * dot(src_offset, lat_s)
+    want_fwd = float(torso_ratio) * dot(src_offset, fwd_s)
+    arm = sho - piv
+    radius = np.maximum(np.linalg.norm(arm, axis=1), 1e-9)
+    base = piv - hip
+    u_lat = (want_lat - dot(base, lat_t)) / radius
+    u_fwd = (want_fwd - dot(base, fwd_t)) / radius
+    reach = np.hypot(u_lat, u_fwd)
+    unreachable = reach > 0.98
+    shrink = np.where(unreachable, 0.98 / np.maximum(reach, 1e-9), 1.0)
+    u_lat, u_fwd = u_lat * shrink, u_fwd * shrink
+    u_up = np.sqrt(np.clip(1.0 - u_lat ** 2 - u_fwd ** 2, 0.0, 1.0))
+    want = u_lat[:, None] * lat_t + u_fwd[:, None] * fwd_t + u_up[:, None] * up_axis
+    current = arm / radius[:, None]
+    axis = np.cross(current, want)
+    sin = np.linalg.norm(axis, axis=1)
+    angle = np.arctan2(sin, dot(current, want))
+    rotvec = np.where(sin[:, None] > 1e-12, axis / np.maximum(sin, 1e-12)[:, None] * angle[:, None], 0.0)
+
+    lean = np.degrees(np.arccos(np.clip(
+        (src_offset @ up_axis) / np.maximum(np.linalg.norm(src_offset, axis=1), 1e-9), -1.0, 1.0)))
+    low, high = (float(v) for v in upright_fade_deg)
+    weight = np.clip((high - lean) / max(high - low, 1e-9), 0.0, 1.0)
+    weight[~(ok_t & ok_s)] = 0.0
+    rotvec = rotvec * weight[:, None]
+    if smooth_sigma > 0 and count > 1:
+        reach_k = int(math.ceil(3.0 * float(smooth_sigma)))
+        kernel = np.exp(-0.5 * (np.arange(-reach_k, reach_k + 1) / float(smooth_sigma)) ** 2)
+        kernel /= kernel.sum()
+        padded = np.pad(rotvec, ((reach_k, reach_k), (0, 0)), mode="edge")
+        rotvec = np.stack([np.convolve(padded[:, i], kernel, mode="valid") for i in range(3)], axis=1)
+    magnitude = np.linalg.norm(rotvec, axis=1)
+    limit = math.radians(float(max_swing_deg))
+    clamped = magnitude > limit
+    rotvec = rotvec * np.where(clamped, limit / np.maximum(magnitude, 1e-12), 1.0)[:, None]
+
+    new_offset = piv + _rotate_rows(rotvec, arm) - hip
+
+    def spread(values: Any) -> dict[str, float]:
+        values = np.abs(values) * 100.0
+        return {"p50": round(float(np.median(values)), 2), "p95": round(float(np.percentile(values, 95)), 2)}
+
+    degrees = np.degrees(np.linalg.norm(rotvec, axis=1))
+    return {
+        "rotvec": rotvec,
+        "torso_ratio": round(float(torso_ratio), 4),
+        "lateral_scale": round(float(lateral_scale), 4),
+        "swing_deg": {"p50": round(float(np.median(degrees)), 2), "p95": round(float(np.percentile(degrees, 95)), 2),
+                      "max": round(float(degrees.max()), 2)},
+        "clamped_frames": int(clamped.sum()),
+        "unreachable_frames": int(unreachable.sum()),
+        "faded_frames": int((weight < 1.0).sum()),
+        "degenerate_frames": int((~(ok_t & ok_s)).sum()),
+        "shoulder_lateral_err_cm": {"before": spread(dot(offset, lat_t) - want_lat),
+                                    "after": spread(dot(new_offset, lat_t) - want_lat)},
+        "shoulder_forward_err_cm": {"before": spread(dot(offset, fwd_t) - want_fwd),
+                                    "after": spread(dot(new_offset, fwd_t) - want_fwd)},
+    }
+
+
+def _is_animated(obj: Any) -> bool:
+    """An active action or at least one playing NLA strip."""
+    data = getattr(obj, "animation_data", None)
+    if data is None:
+        return False
+    if data.action is not None:
+        return True
+    return any(not track.mute and any(not strip.mute for strip in track.strips) for track in data.nla_tracks)
+
+
+def _upper_body_source(armature: Any, source_armature: Any | None) -> tuple[Any | None, str | None]:
+    """The wizard's source rig, else the one animated SMPL-named armature in the scene."""
+    if source_armature is not None:
+        return source_armature, None
+    scene = getattr(bpy.context, "scene", None)
+    objects = scene.objects if scene is not None else bpy.data.objects
+    candidates = [obj for obj in objects
+                  if obj is not armature and getattr(obj, "type", "") == "ARMATURE"
+                  and gvhmr_source_prefix(obj) and _is_animated(obj)]
+    if len(candidates) == 1:
+        return candidates[0], None
+    if not candidates:
+        return None, "no animated SMPL (f_avg/m_avg) source armature in the scene"
+    return None, f"several SMPL source armatures, set the project's source: {sorted(o.name for o in candidates)}"
+
+
+def fix_upper_body_follow(
+    armature: Any,
+    source_armature: Any | None = None,
+    action: Any | None = None,
+    *,
+    swing_bone: str = UPPER_BODY_SWING_BONE,
+    smooth_sigma: float = UPPER_BODY_SMOOTH_SIGMA,
+    max_swing_deg: float = UPPER_BODY_MAX_SWING_DEG,
+    force: bool = False,
+) -> dict[str, Any]:
+    """Swing the retarget's upper spine so the shoulders follow the source's position.
+
+    Samples every keyed frame of ``swing_bone`` (Teto and source evaluated
+    together), computes ``upper_body_swing`` and writes it into the swing
+    bone's quaternion keys as a world rotation about its head:
+    q' = q (Rw^T Q Rw).  Only those four curves change; the hips, legs, feet
+    and torso_root keys do not.  The sampled pose must be this action's, so
+    the action has to be the armature's active one with no NLA strips playing.
+    Idempotent via an action mark; returns a report whose ``skipped`` explains
+    why nothing was written (missing source/bones, layout, already applied).
+    """
+    action = action if action is not None else get_action(armature, required=False)
+    report: dict[str, Any] = {"operation": "fix_upper_body_follow", "armature": getattr(armature, "name", ""),
+                              "swing_bone": swing_bone}
+    if action is None:
+        report["skipped"] = "no action"
+        return report
+    report["action"] = action.name
+    previous = action.get(UPPER_BODY_MARK)
+    if previous and not force:
+        report["skipped"] = "already applied"
+        report["previous"] = json.loads(previous) if isinstance(previous, str) else str(previous)
+        return report
+    animation_data = getattr(armature, "animation_data", None)
+    if getattr(animation_data, "action", None) is not action:
+        report["skipped"] = "action is not the armature's active action (the fix samples the evaluated pose)"
+        return report
+    playing = [track.name for track in animation_data.nla_tracks
+               if not track.mute and any(not strip.mute for strip in track.strips)]
+    if playing:
+        report["skipped"] = f"NLA tracks play on top of the action: {playing}"
+        return report
+    source, why = _upper_body_source(armature, source_armature)
+    if source is None:
+        report["skipped"] = why
+        return report
+    report["source"] = source.name
+    prefix = gvhmr_source_prefix(source)
+    if not prefix:
+        report["skipped"] = "source is not an SMPL (f_avg/m_avg) skeleton"
+        return report
+    if not _is_animated(source):
+        report["skipped"] = "source armature has no animation (a static source would freeze the upper body)"
+        return report
+    src_hips = tuple(f"{prefix}_{suffix}" for suffix in UPPER_BODY_SOURCE_HIPS)
+    src_shoulders = tuple(f"{prefix}_{suffix}" for suffix in UPPER_BODY_SOURCE_SHOULDERS)
+    missing = [name for name in (*src_hips, *src_shoulders) if name not in source.data.bones]
+    if missing:
+        report["skipped"] = f"source bones missing: {missing}"
+        return report
+    bones = armature.data.bones
+    missing = [name for name in (swing_bone, *UPPER_BODY_RIG_HIPS, *UPPER_BODY_RIG_SHOULDERS) if name not in bones]
+    if missing:
+        report["skipped"] = f"bones missing: {missing}"
+        return report
+
+    def under(name: str) -> bool:
+        bone = bones[name].parent
+        while bone is not None:
+            if bone.name == swing_bone:
+                return True
+            bone = bone.parent
+        return False
+
+    if not all(under(name) for name in UPPER_BODY_RIG_SHOULDERS) or any(under(name) for name in UPPER_BODY_RIG_HIPS):
+        report["skipped"] = f"unexpected layout: shoulders must hang under {swing_bone}, hips must not"
+        return report
+    pose_bone = armature.pose.bones[swing_bone]
+    quat = [get_fcurve(action, bone_path(swing_bone, "rotation_quaternion"), i) for i in range(4)]
+    if pose_bone.rotation_mode != "QUATERNION" or any(fc is None for fc in quat):
+        report["skipped"] = f"no quaternion rotation keys on {swing_bone}"
+        return report
+    frames = sorted({int(round(key.co.x)) for fc in quat for key in fc.keyframe_points})
+    if not frames:
+        report["skipped"] = f"no keys on {swing_bone}"
+        return report
+
+    import numpy as np
+
+    scene = bpy.context.scene
+    view_layer = current_view_layer()
+    (hip_l, hip_r), (sho_l, sho_r) = UPPER_BODY_RIG_HIPS, UPPER_BODY_RIG_SHOULDERS
+    samples: dict[str, list[Any]] = {key: [] for key in ("piv", "hl", "hr", "sho", "s_hl", "s_hr", "s_sho")}
+    world_rot: list[Any] = []
+    with preserve_scene_frame(scene, view_layer):
+        for frame in frames:
+            set_scene_frame(scene, frame, view_layer)
+            depsgraph = bpy.context.evaluated_depsgraph_get()
+            rig_eval = armature.evaluated_get(depsgraph)
+            src_eval = source.evaluated_get(depsgraph)
+            rig_world, src_world = rig_eval.matrix_world, src_eval.matrix_world
+            rig_pose, src_pose = rig_eval.pose.bones, src_eval.pose.bones
+            swing_matrix = rig_world @ rig_pose[swing_bone].matrix
+            world_rot.append(swing_matrix.to_3x3().normalized().to_quaternion())
+            samples["piv"].append(tuple(swing_matrix.translation))
+            samples["hl"].append(tuple(rig_world @ rig_pose[hip_l].head))
+            samples["hr"].append(tuple(rig_world @ rig_pose[hip_r].head))
+            samples["sho"].append(tuple((rig_world @ rig_pose[sho_l].head + rig_world @ rig_pose[sho_r].head) / 2.0))
+            samples["s_hl"].append(tuple(src_world @ src_pose[src_hips[0]].head))
+            samples["s_hr"].append(tuple(src_world @ src_pose[src_hips[1]].head))
+            samples["s_sho"].append(tuple((src_world @ src_pose[src_shoulders[0]].head
+                                           + src_world @ src_pose[src_shoulders[1]].head) / 2.0))
+    arrays = {key: np.array(values, dtype=float) for key, values in samples.items()}
+    swing = upper_body_swing(arrays["piv"], arrays["sho"], arrays["hl"], arrays["hr"],
+                             arrays["s_sho"], arrays["s_hl"], arrays["s_hr"],
+                             smooth_sigma=smooth_sigma, max_swing_deg=max_swing_deg)
+    rotvec = swing.pop("rotvec")
+    # read every frame before writing any: a frame keyed on only some channels
+    # would otherwise interpolate between keys this loop already moved
+    originals = [Quaternion([float(fc.evaluate(frame)) for fc in quat]).normalized() for frame in frames]
+    caches = [keyframe_map(fc) for fc in quat]
+    local_before, local_after = [], []
+    for index, frame in enumerate(frames):
+        old = originals[index]
+        vec = Vector([float(v) for v in rotvec[index]])
+        turn = Quaternion(vec.normalized(), vec.length) if vec.length > 1e-12 else Quaternion()
+        rw = world_rot[index]
+        new = (old @ (rw.conjugated() @ turn @ rw)).normalized()
+        if new.dot(old) < 0.0:
+            new.negate()
+        for axis in range(4):
+            set_fcurve_value(quat[axis], frame, float(new[axis]), cache=caches[axis])
+        local_before.append(min(math.degrees(old.angle), 360.0 - math.degrees(old.angle)))
+        local_after.append(min(math.degrees(new.angle), 360.0 - math.degrees(new.angle)))
+    update_action(action)
+    report.update({
+        "frames": len(frames),
+        "frame_range": [frames[0], frames[-1]],
+        "source_prefix": prefix,
+        **swing,
+        "swing_bone_local_deg_max": {"before": round(max(local_before), 2), "after": round(max(local_after), 2)},
+        "root_pivot_fixed": bool(action.get(ROOT_PIVOT_MARK)),
+    })
+    action[UPPER_BODY_MARK] = json.dumps({key: report[key] for key in (
+        "swing_bone", "source", "frames", "torso_ratio", "swing_deg", "clamped_frames", "shoulder_lateral_err_cm")})
+    return report
 
 
 def ensure_global_correction_empty(
@@ -173,6 +616,77 @@ def _lerp_angle(current: float, target: float, strength: float) -> float:
     return current + difference * strength
 
 
+def _action_rotation_sampler(rig: Any, bone_names: Sequence[str]) -> Any:
+    """frame -> pose rotation read straight off the active Action's F-curves,
+    or None when that would not equal what a frame_set leaves in the pose
+    properties (then the caller keeps its frame sweep).
+
+    Equal when: the Action is evaluated alone at full strength (no tweak mode,
+    influence 1, REPLACE, no unmuted NLA strip underneath that could matter),
+    no driver touches the channel, and an unanimated (or muted) channel keeps
+    its static property value.  Euler and quaternion bones only - the values
+    and the mathutils conversions are exactly get_pose_quaternion's."""
+
+    anim = getattr(rig, "animation_data", None)
+    action = getattr(anim, "action", None) if anim is not None else None
+    if action is None or getattr(anim, "use_tweak_mode", False):
+        return None
+    if float(getattr(anim, "action_influence", 1.0)) != 1.0:
+        return None
+    if str(getattr(anim, "action_blend_type", "REPLACE")) != "REPLACE":
+        return None
+    if getattr(anim, "use_nla", True) and any(
+        not track.mute and len(track.strips) > 0 for track in anim.nla_tracks
+    ):
+        return None
+    slots = getattr(action, "slots", None)
+    if slots is not None and (
+        len(slots) != 1 or getattr(anim, "action_slot", None) is None
+    ):
+        # legacy action.fcurves is the first slot's channelbag: with several
+        # slots (or none bound) it may not be what animates this rig
+        return None
+    channels: dict[str, tuple[str, list]] = {}
+    for name in bone_names:
+        pose_bone = rig.pose.bones[name]
+        mode = str(pose_bone.rotation_mode)
+        if mode == "QUATERNION":
+            prop, count = "rotation_quaternion", 4
+        elif mode == "AXIS_ANGLE":
+            return None
+        else:
+            prop, count = "rotation_euler", 3
+        path = bone_path(name, prop)
+        static = list(getattr(pose_bone, prop))
+        chans = []
+        for index in range(count):
+            if anim.drivers.find(path, index=index) is not None:
+                return None
+            fcurve = get_fcurve(action, path, index)
+            group = getattr(fcurve, "group", None) if fcurve is not None else None
+            if fcurve is not None and (
+                fcurve.mute or not fcurve.is_valid or (group is not None and group.mute)
+            ):
+                fcurve = None
+            chans.append((fcurve, float(static[index])))
+        channels[name] = (mode, chans)
+
+    def sample(name: str, frame: int) -> Any:
+        mode, chans = channels[name]
+        values = [
+            float(fcurve.evaluate(frame)) if fcurve is not None else static
+            for fcurve, static in chans
+        ]
+        if mode == "QUATERNION":
+            quaternion = Quaternion(values)
+        else:
+            quaternion = Euler(values, mode).to_quaternion()
+        quaternion.normalize()
+        return quaternion
+
+    return sample
+
+
 def damp_foot_ik_tilt(
     scene: Any,
     rig: Any,
@@ -210,13 +724,21 @@ def damp_foot_ik_tilt(
         bone: {} for bone in valid
     }
     view_layer = current_view_layer()
+    # P1: the read pass only needs foot_ik's own rotation channels - straight
+    # off the F-curves when that is provably the same value (~1500 whole-scene
+    # frame_sets saved, 4.3 s -> ~1 s); otherwise the original sweep.
+    sampler = _action_rotation_sampler(rig, valid)
     with preserve_scene_frame(scene, view_layer):
         for frame in range(start, end + 1):
-            set_scene_frame(scene, frame, view_layer)
+            if sampler is None:
+                set_scene_frame(scene, frame, view_layer)
             for bone_name in valid:
-                euler = get_pose_quaternion(
-                    rig.pose.bones[bone_name]
-                ).to_euler("XYZ")
+                quaternion = (
+                    get_pose_quaternion(rig.pose.bones[bone_name])
+                    if sampler is None
+                    else sampler(bone_name, frame)
+                )
+                euler = quaternion.to_euler("XYZ")
                 samples[bone_name][frame] = (
                     float(euler.x),
                     float(euler.y),
@@ -371,18 +893,16 @@ def repair_mesh_floor_lift_v3_safe(
 
     # 任务2：原来先单独扫一遍只为读 original_z、删旧 Z 曲线、再扫第二遍量网格
     # （第二遍里又把 Z 显式设回 original_z）。合成一遍：旧曲线还在时 frame_set
-    # 给出的 Z 就是 original_z[frame]，再显式设一次同值 → 求值状态与原来第二遍
-    # 逐位相同；旧曲线在循环后再删。省掉 1499 次整场景求值。
+    # 给出的 Z 就是 original_z[frame]，求值状态与原来第二遍逐位相同；旧曲线在
+    # 循环后再删。省掉 1499 次整场景求值。
+    # P2：之后保留的"把同一个值显式设回去 + view_layer.update()"也去掉——值没变，
+    # 只是逼整棵子树（Teto 网格）每帧再算一遍（bench 摘要逐位相同）。
     minimum_by_frame: dict[int, float | None] = {}
     mesh_by_frame: dict[int, str | None] = {}
     with preserve_scene_frame(scene, view_layer):
         for frame in range(start, end + 1):
             set_scene_frame(scene, frame, view_layer)
             original_z[frame] = float(correction.location.z)
-            # explicitly pin that frame's clean baseline before evaluating the mesh
-            correction.location.z = original_z[frame]
-            if view_layer is not None:
-                view_layer.update()
             minimum: float | None = None
             minimum_mesh: str | None = None
             for mesh in meshes:
@@ -501,55 +1021,71 @@ def analyze_foot_ik_drift(
     results: dict[str, list[dict[str, Any]]] = {"L": [], "R": []}
     missing: list[str] = []
     view_layer = current_view_layer()
-    with preserve_scene_frame(scene, view_layer):
-        for side in ("L", "R"):
-            bone_name = foot_bones[side]
-            if rig.pose.bones.get(bone_name) is None:
-                missing.append(bone_name)
+    # P3: one frame sweep for both feet (the L and R segments overlap: 1711
+    # frame_sets → the 1156 of their union); the per-frame positions and every
+    # number below are the same as sweeping segment by segment.
+    plan: dict[str, list[tuple[int, int, int, int]]] = {"L": [], "R": []}
+    wanted: dict[int, set[str]] = {}
+    for side in ("L", "R"):
+        bone_name = foot_bones[side]
+        if rig.pose.bones.get(bone_name) is None:
+            missing.append(bone_name)
+            continue
+        for raw_start, raw_end in _normalize_side_ranges(
+            planted_ranges, side, start, end
+        ):
+            segment_start = raw_start + int(trim_segment_ends)
+            segment_end = raw_end - int(trim_segment_ends)
+            if segment_end - segment_start + 1 < int(min_segment_len):
                 continue
-            for raw_start, raw_end in _normalize_side_ranges(
-                planted_ranges, side, start, end
-            ):
-                segment_start = raw_start + int(trim_segment_ends)
-                segment_end = raw_end - int(trim_segment_ends)
-                if segment_end - segment_start + 1 < int(min_segment_len):
-                    continue
-                positions: list[tuple[int, Any]] = []
-                for frame in range(segment_start, segment_end + 1):
-                    set_scene_frame(scene, frame, view_layer)
-                    location = pose_bone_world_location(rig, bone_name)
-                    if location is not None:
-                        positions.append((frame, location))
-                if not positions:
-                    continue
-                anchor = positions[0][1]
-                maximum = 0.0
-                total = 0.0
-                previous = anchor
-                for _, location in positions[1:]:
-                    maximum = max(
-                        maximum,
-                        math.hypot(location.x - anchor.x, location.y - anchor.y),
-                    )
-                    total += math.hypot(
-                        location.x - previous.x,
-                        location.y - previous.y,
-                    )
-                    previous = location
-                final = positions[-1][1]
-                results[side].append(
-                    {
-                        "frames": [segment_start, segment_end],
-                        "source_frames": [raw_start, raw_end],
-                        "length": segment_end - segment_start + 1,
-                        "max_drift_xy_m": round(maximum, 5),
-                        "end_drift_xy_m": round(
-                            math.hypot(final.x - anchor.x, final.y - anchor.y),
-                            5,
-                        ),
-                        "total_xy_motion_m": round(total, 5),
-                    }
+            plan[side].append((raw_start, raw_end, segment_start, segment_end))
+            for frame in range(segment_start, segment_end + 1):
+                wanted.setdefault(frame, set()).add(side)
+    located: dict[tuple[str, int], Any] = {}
+    with preserve_scene_frame(scene, view_layer):
+        for frame in sorted(wanted):
+            set_scene_frame(scene, frame, view_layer)
+            for side in sorted(wanted[frame]):
+                location = pose_bone_world_location(rig, foot_bones[side])
+                if location is not None:
+                    located[(side, frame)] = location
+    for side in ("L", "R"):
+        for raw_start, raw_end, segment_start, segment_end in plan[side]:
+            positions: list[tuple[int, Any]] = [
+                (frame, located[(side, frame)])
+                for frame in range(segment_start, segment_end + 1)
+                if (side, frame) in located
+            ]
+            if not positions:
+                continue
+            anchor = positions[0][1]
+            maximum = 0.0
+            total = 0.0
+            previous = anchor
+            for _, location in positions[1:]:
+                maximum = max(
+                    maximum,
+                    math.hypot(location.x - anchor.x, location.y - anchor.y),
                 )
+                total += math.hypot(
+                    location.x - previous.x,
+                    location.y - previous.y,
+                )
+                previous = location
+            final = positions[-1][1]
+            results[side].append(
+                {
+                    "frames": [segment_start, segment_end],
+                    "source_frames": [raw_start, raw_end],
+                    "length": segment_end - segment_start + 1,
+                    "max_drift_xy_m": round(maximum, 5),
+                    "end_drift_xy_m": round(
+                        math.hypot(final.x - anchor.x, final.y - anchor.y),
+                        5,
+                    ),
+                    "total_xy_motion_m": round(total, 5),
+                }
+            )
     for side in ("L", "R"):
         results[side].sort(key=lambda item: item["max_drift_xy_m"], reverse=True)
     return {
@@ -816,6 +1352,14 @@ def sole_contact_offsets(
     a flat foot degenerates to `floor + sole_offset` and a toe-stand
     automatically keeps its higher ankle instead of being flattened.
 
+    "Own half" is decided in ARMATURE space (the sign of the ankle bone's
+    ``head_local.x``), never world X: the model is not centred on world X=0
+    (the fixture and the user's work file sit at X~-2.56), and a world-X
+    split put both ankles on the same side, so both searched the whole body
+    and picked the same left-boot vertex - the right foot's ankle->sole vector
+    came out 15.5 cm sideways and the planted anchor height 8-27 mm wrong at
+    3-10 deg of foot roll.
+
     Returns ``{side: Vector}`` or None when the geometry cannot be measured.
     """
 
@@ -825,6 +1369,7 @@ def sole_contact_offsets(
     if not vertices:
         return None
     mesh_world = mesh_object.matrix_world
+    mesh_to_armature = sample_armature.matrix_world.inverted_safe() @ mesh_world
     step = max(1, len(vertices) // max(1, int(vertex_sample_limit)))
     out: dict[str, Any] = {}
     for side, bone_name in ankle_bones.items():
@@ -832,13 +1377,14 @@ def sole_contact_offsets(
         if bone is None:
             continue
         head_w = sample_armature.matrix_world @ bone.head_local
-        sign = 1.0 if head_w.x >= 0.0 else -1.0
+        sign = 1.0 if bone.head_local.x >= 0.0 else -1.0
         lowest = None
         lowest_z = None
         for index in range(0, len(vertices), step):
-            v = mesh_world @ vertices[index].co
-            if v.x * sign < 0.0:
+            co = vertices[index].co
+            if (mesh_to_armature @ co).x * sign < 0.0:
                 continue
+            v = mesh_world @ co
             if lowest_z is None or v.z < lowest_z:
                 lowest, lowest_z = v, v.z
         if lowest is None:
@@ -1218,24 +1764,8 @@ def _settle_pelvis_for_reach(
         if abs(corr) > PELVIS_DEADBAND
     }
     for curve, cache in zip(loc_curves, loc_cache):
-        missing_keys = [f for f in needed_frames if f not in cache]
-        if not missing_keys:
-            continue
-        existing = {
-            int(key.as_pointer()) for key in curve.keyframe_points
-        }
-        curve.keyframe_points.add(len(missing_keys))
-        fresh = [
-            key
-            for key in curve.keyframe_points
-            if int(key.as_pointer()) not in existing
-        ]
-        for key, frame in zip(fresh, sorted(missing_keys)):
-            key.co.x = float(frame)
-            key.co.y = 0.0
-            key.interpolation = "LINEAR"
-            cache[frame] = key
-        curve.update()
+        # add() reallocates the key array: new keys = the last n, cache rebuilt
+        add_missing_keys(curve, needed_frames, cache)
 
     written = 0
     for frame, corr in zip(frames, corrected):
@@ -1762,24 +2292,10 @@ def stabilize_planted_feet(
         all_curves = [*setup["loc_curves"], *setup["rot_curves"]]
         all_caches = [*setup["loc_cache"], *setup["rot_cache"]]
         for curve, cache in zip(all_curves, all_caches):
-            missing = [f for f in frames_needed if f not in cache]
-            if not missing:
-                continue
-            existing = {
-                int(key.as_pointer()) for key in curve.keyframe_points
-            }
-            curve.keyframe_points.add(len(missing))
-            fresh = [
-                key
-                for key in curve.keyframe_points
-                if int(key.as_pointer()) not in existing
-            ]
-            for key, frame in zip(fresh, sorted(missing)):
-                key.co.x = float(frame)
-                key.co.y = 0.0
-                key.interpolation = "LINEAR"
-                cache[frame] = key
-            curve.update()
+            # add() reallocates the key array and update() re-sorts it: the
+            # new keys are the last n, and the cache must be rebuilt (the
+            # old as_pointer() diff rewrote the curve's FIRST keys instead)
+            add_missing_keys(curve, frames_needed, cache)
 
     def _write(corrections, measured):
         written = 0
@@ -1885,7 +2401,14 @@ def stabilize_planted_feet(
         frames_written = _write(_corrections(measured), measured)
         print(f"[STAB] wrote corrections: {frames_written} frames", flush=True)
 
-        post = _measure(work_frames)
+        # P3: _interior_residuals reads only the weight-1 interiors (anchors sit
+        # inside them) - the blend rings need no second measurement
+        post = _measure(sorted({
+            frame
+            for side in ("L", "R")
+            for segment in segments[side]
+            for frame in range(segment["frames"][0], segment["frames"][1] + 1)
+        }))
         max_pos, max_rot, after_rows = _interior_residuals(post)
         iterations.append(
             {

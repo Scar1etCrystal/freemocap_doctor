@@ -379,10 +379,13 @@ def motion_copy(scene: Any, armature: Any, *, bones: Sequence[str] | None = None
             # 同一口径。
             try:
                 va = metrics["verify"]["args"]
+                # P6: the copy already sampled both windows (visible, before any
+                # write) - the same per-bone samples compare_motion would take
                 before = compare_motion(scene, armature,
                                         a_bones=va["a"]["bones"], a_range=va["a"]["frame_range"],
                                         b_bones=va["b"]["bones"], b_range=va["b"]["frame_range"],
-                                        mirror=va["mirror"], space=va["space"], trim=va["trim"])
+                                        mirror=va["mirror"], space=va["space"], trim=va["trim"],
+                                        _samples=(smp_d, smp_s))
                 metrics["verify"]["err_inner_before_deg"] = before["err_inner_deg"]
             except Exception as exc:  # noqa: BLE001 - 只是附带的基线，失败不挡 dry_run
                 metrics["verify"]["err_inner_before_deg"] = None
@@ -407,7 +410,7 @@ def compare_motion(scene: Any, armature: Any, *, a_bones: Sequence[str],
                    mirror: bool = False,
                    bone_map: Mapping[str, str] | None = None,
                    space: str = "local", trim: int = 4,
-                   channels: str = "rot") -> dict:
+                   channels: str = "rot", _samples=None) -> dict:
     """b 段 vs a 段（mirror 时 vs a 的镜像）逐帧旋转误差（度）。
 
     配对：bone_map 优先；否则 b_bones 与 a_bones 等长按顺序配；否则镜像名/同名。
@@ -443,9 +446,14 @@ def compare_motion(scene: Any, armature: Any, *, a_bones: Sequence[str],
     world = space == "world"
     na, nb = a1 - a0 + 1, b1 - b0 + 1
     tb = b0 + np.arange(na, dtype=np.float64) * (nb - 1) / float(na - 1)
-    smp_a = P.sample_visible(scene, armature, A, list(range(a0, a1 + 1)), world=world)
-    smp_b = P.sample_visible(scene, armature, Bset, list(range(b0, b1 + 1)),
-                             world=world)
+    if _samples is not None:
+        # caller's visible samples of the same windows (a superset of the bones
+        # is fine: sample_visible's per-bone values do not depend on the others)
+        smp_a, smp_b = _samples
+    else:
+        smp_a = P.sample_visible(scene, armature, A, list(range(a0, a1 + 1)), world=world)
+        smp_b = P.sample_visible(scene, armature, Bset, list(range(b0, b1 + 1)),
+                                 world=world)
     trim = max(0, int(trim))
     sl = slice(trim, na - trim) if na > 2 * trim else slice(None)
     per_bone = {}
@@ -600,19 +608,33 @@ def _tool_compare_motion(ctx, a=None, b=None, mirror=False, bone_map=None,
     arm = ctx["armature"]
     if arm is None:
         raise RuntimeError("没有识别到 RIG 骨架")
+    newer = []
     if op_id is not None:
         if a is not None or b is not None:
             raise RuntimeError("op_id 和 a/b 二选一：按 op 验收就只给 op_id")
         va = _verify_args_of_op(ctx, op_id)
         a, b, mirror, space, trim = va["a"], va["b"], va["mirror"], va["space"], va["trim"]
+        # 验收的是这条复制本身：之后叠在同骨同帧上层的修复先静音（否则把别人的修复
+        # 也算成这条复制的误差），读完按名字恢复
+        from . import agent_ops
+        op = agent_ops.get_op(ctx["data_dir"], str(op_id))
+        track, _strip = agent_ops.find_op_strip(arm, op)
+        if track is not None:
+            newer = agent_ops.newer_same_bone_tracks(
+                arm, track.name, agent_ops.op_written_bones(arm, op),
+                [tuple(va["a"]["frame_range"])])
     a_bones, a_fr = _side(ctx, a, "a")
     if not a_bones or not a_fr:
         raise RuntimeError("a 需要 {bones 或 chain, frame_range}")
     b_bones, b_fr = _side(ctx, b, "b")
-    res = compare_motion(ctx["scene"], arm, a_bones=a_bones, a_range=a_fr,
-                         b_bones=b_bones, b_range=b_fr,
-                         mirror=mirror, bone_map=_resolve_map(ctx, bone_map),
-                         space=space, trim=trim, channels=channels)
+    from . import agent_ops as _ops
+    with _ops.tracks_muted(arm, newer):
+        res = compare_motion(ctx["scene"], arm, a_bones=a_bones, a_range=a_fr,
+                             b_bones=b_bones, b_range=b_fr,
+                             mirror=mirror, bone_map=_resolve_map(ctx, bone_map),
+                             space=space, trim=trim, channels=channels)
+    if newer:
+        res["muted_newer_tracks"] = list(newer)
     if not detail:
         # 逐帧数组默认不回（19 骨×46 帧≈10k token，sonnet 实测被它淹没）；
         # 要看就传 detail:true

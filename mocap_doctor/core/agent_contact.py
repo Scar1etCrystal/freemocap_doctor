@@ -154,11 +154,13 @@ def slide_report(scene, armature, *, side=None, frame_range=None,
 _SOLE_POINTS = (("DEF-foot.{s}", "head"), ("DEF-foot.{s}", "tail"), ("DEF-toe.{s}", "tail"))
 
 
-def sole_heights(scene, armature, sides, frames) -> dict:
+def sole_heights(scene, armature, sides, frames, mesh=None) -> dict:
     """{side: (T,3) world Z of heel/ball/toe} for the CURRENT visible pose.
 
     Computed exactly like the snapshot bake (``armature.matrix_world @ head/tail``),
-    so frames nobody has touched read identically to ``foot.<s>.sole_h``."""
+    so frames nobody has touched read identically to ``foot.<s>.sole_h``.
+    ``mesh=(mesh_obj, selection)`` also measures the boot-mesh minimum in the
+    same frame sweep (P5: was a second full sweep) → ``out["mesh"][side]``."""
     names = {s: [(n.format(s=s), w) for n, w in _SOLE_POINTS] for s in sides}
     for s in sides:
         for n, _w in names[s]:
@@ -174,22 +176,26 @@ def sole_heights(scene, armature, sides, frames) -> dict:
                 pb = arm.pose.bones[n]
                 zs.append(float((world @ (pb.head if w == "head" else pb.tail)).z))
             row[s] = zs
+        if mesh is not None:
+            row["mesh"] = _mesh_min_z(mesh[0], mesh[1], sides)
         return row
 
     smp = P.sample_visible(scene, armature, [names[sides[0]][0][0]], frames,
                            extra_fn=extra)
-    return {s: np.asarray([e[s] for e in smp["extra"]], dtype=np.float64)
-            for s in sides}
+    out = {s: np.asarray([e[s] for e in smp["extra"]], dtype=np.float64)
+           for s in sides}
+    if mesh is not None:
+        out["mesh"] = {s: np.asarray([e["mesh"][s] for e in smp["extra"]],
+                                     dtype=np.float64) for s in sides}
+    return out
 
 
 # 目标模型（MMD）靴子的顶点组：足首D = 脚掌/靴身，足先EX = 脚尖。权重 > 0.5 的顶点算鞋。
 _MESH_FOOT_GROUPS = ("足首D.{s}", "足先EX.{s}")
 
 
-def mesh_sole_heights(scene, mesh_obj, sides, frames):
-    """{side: (T,) 靴底网格最低点的世界 Z}——真正的鞋底，不是关节中心。
-
-    逐帧求值目标网格（约 2.7 ms/帧）。找不到顶点组 → 返回 None（模型不是 MMD 命名）。"""
+def _boot_selection(mesh_obj, sides):
+    """{side: vertex indices of the boot (weight > 0.5 in 足首D/足先EX)} or None."""
     if mesh_obj is None or getattr(mesh_obj, "type", "") != "MESH":
         return None
     vg = {g.name: g.index for g in mesh_obj.vertex_groups}
@@ -203,25 +209,45 @@ def mesh_sole_heights(scene, mesh_obj, sides, frames):
         if not idx:
             return None
         sel[s] = np.asarray(idx)
+    return sel
+
+
+def _mesh_min_z(mesh_obj, sel, sides):
+    """Boot-mesh minimum world Z per side at the currently evaluated frame."""
+    import bpy
+    ev = mesh_obj.evaluated_get(bpy.context.evaluated_depsgraph_get())
+    m = ev.to_mesh()
+    try:
+        n = len(m.vertices)
+        co = np.empty(n * 3, dtype=np.float32)
+        m.vertices.foreach_get("co", co)
+        co = co.reshape(n, 3)
+        M = np.asarray(ev.matrix_world, dtype=np.float64)
+        return {s: float((co[sel[s]].astype(np.float64) @ M[2, :3] + M[2, 3]).min())
+                for s in sides}
+    finally:
+        ev.to_mesh_clear()
+
+
+def mesh_sole_heights(scene, mesh_obj, sides, frames):
+    """{side: (T,) 靴底网格最低点的世界 Z}——真正的鞋底，不是关节中心。
+
+    逐帧求值目标网格（约 2.7 ms/帧）。找不到顶点组 → 返回 None（模型不是 MMD 命名）。"""
+    sel = _boot_selection(mesh_obj, sides)
+    if sel is None:
+        return None
     out = {s: np.zeros(len(frames)) for s in sides}
     from .animation import preserve_scene_frame, set_scene_frame
-    import bpy
-    with preserve_scene_frame(scene):
+    from . import agent_anatomy
+    # 网格在视口里被禁用/隐藏时不在依赖图里，evaluated_get 给的是静止网格（审查 M21）：临时打开再量
+    with agent_anatomy.evaluable(mesh_obj), preserve_scene_frame(scene):
+        if agent_anatomy._needs_unhide(mesh_obj):
+            raise RuntimeError(f"目标网格 {mesh_obj.name} 没按当帧姿态求值（集合被排除？），量不到当帧的靴底")
         for i, f in enumerate(frames):
             set_scene_frame(scene, f)
-            ev = mesh_obj.evaluated_get(bpy.context.evaluated_depsgraph_get())
-            m = ev.to_mesh()
-            try:
-                n = len(m.vertices)
-                co = np.empty(n * 3, dtype=np.float32)
-                m.vertices.foreach_get("co", co)
-                co = co.reshape(n, 3)
-                M = np.asarray(ev.matrix_world, dtype=np.float64)
-                for s in sides:
-                    p = co[sel[s]].astype(np.float64)
-                    out[s][i] = float((p @ M[2, :3] + M[2, 3]).min())
-            finally:
-                ev.to_mesh_clear()
+            row = _mesh_min_z(mesh_obj, sel, sides)
+            for s in sides:
+                out[s][i] = row[s]
     return out
 
 
@@ -239,7 +265,15 @@ def ground_report(scene, armature, *, frame_range, floor_z, side=None,
     sides = [_foot(side)] if side else ["L", "R"]
     a, b, frames = P.strip_window(frame_range)
     lo_clip, hi_clip = int(scene.frame_start), int(scene.frame_end)
-    heights = sole_heights(scene, armature, sides, frames)
+    sel = _boot_selection(mesh_obj, sides) if mesh_obj is not None else None
+    # P5 把靴底网格并进同一遍扫描；审查 M21 的"禁用网格临时打开再量"也要套在这一遍外面
+    import contextlib
+    from . import agent_anatomy
+    with (agent_anatomy.evaluable(mesh_obj) if sel is not None else contextlib.nullcontext()):
+        if sel is not None and agent_anatomy._needs_unhide(mesh_obj):
+            raise RuntimeError(f"目标网格 {mesh_obj.name} 没按当帧姿态求值（集合被排除？），量不到当帧的靴底")
+        heights = sole_heights(scene, armature, sides, frames,
+                               mesh=(mesh_obj, sel) if sel is not None else None)
     ivs = agent_io.scene_intervals(scene)
     thr = float(threshold_mm)
     contact_height = contact_height or {}
@@ -305,7 +339,7 @@ def ground_report(scene, armature, *, frame_range, floor_z, side=None,
             res["rel_mm"] = [round(float(v), 1) for v in rel]
         out["sides"][s] = res
     if mesh_obj is not None:
-        mh = mesh_sole_heights(scene, mesh_obj, sides, frames)
+        mh = heights.get("mesh")             # same sweep as the joint points (P5)
         out["mesh"] = None if mh is None else {}
         for s in (sides if mh is not None else ()):
             clr = (mh[s] - float(floor_z)) * 1000.0

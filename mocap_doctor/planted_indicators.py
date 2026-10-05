@@ -470,9 +470,15 @@ def ensure(scene: bpy.types.Scene) -> dict[str, bpy.types.Object]:
             if not _matches(obj, source, side):
                 _configure_object(obj, scene, source, side)
             else:
-                obj.hide_render = False
-                obj.hide_select = True
-                obj.show_in_front = True
+                # P4: only write what differs - every property write tags the
+                # object, and refresh() runs on each frame change and inside
+                # depsgraph_update_post (a self-triggered re-evaluation loop)
+                if obj.hide_render:
+                    obj.hide_render = False
+                if not obj.hide_select:
+                    obj.hide_select = True
+                if not obj.show_in_front:
+                    obj.show_in_front = True
     return by_side
 
 
@@ -529,7 +535,8 @@ def refresh(scene: bpy.types.Scene) -> dict[str, bpy.types.Object]:
             visible = _frame_in_channel(scene, config["channel"])
             if bool(obj.hide_viewport) == visible:
                 obj.hide_viewport = not visible
-            obj.hide_render = False
+            if obj.hide_render:              # P4: unconditional write retagged it every frame
+                obj.hide_render = False
         return by_side
     finally:
         _UPDATING = False

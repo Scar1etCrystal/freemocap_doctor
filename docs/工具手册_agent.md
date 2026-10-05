@@ -6,7 +6,8 @@ socket 服务：`127.0.0.1:6211`，JSON-lines，一问一答。客户端：
 **先 `ping`**——服务默认不开，没开就让用户去 N 面板 → Agent 协作 → 启动服务
 （远程：`bash tools/mcd.sh server-start <blend>`）。
 **每个调用带 `"agent_id":"<你的名字>"`**（多 agent 协作的身份；见"并发协议"）。
-子 agent 的任务提示词在 `docs/prompts/`（`tools_io.md` + 剧本 30–36）。
+子 agent 的任务提示词在 `docs/prompts/`（`tools_io.md` + 剧本 30–36）；**能力较弱的模型先给
+`05_quickstart_weak_model.md`**（一页、每条命令都在 fixture 上跑过：`tests/e2e_quickstart.py`）。
 
 返回包络：`{ok, tool, version, summary, data, warnings, truncated, hint, error:{code,message,fix}}`。
 错误码：`E_STALE`（你读之后别人改了与你范围相交的骨/祖先骨/帧，重读再写）`E_CLAIMED`（该骨×帧被别的
@@ -25,25 +26,45 @@ agent 认领）`E_OWNER`（改别人的 op）`E_SCOPE`（超界）`E_UNKNOWN`（
 5. **一次一帧段一意图**。多件事分多个 op。
 6. 别碰源骨架（`Armature`/f_avg）——它是废案，写了 Teto 上看不见。全部写 RIG。
 
+## 方向怎么说（2026-10-04 §16：人看到的 = agent 算的）
+
+`toward`（probe_anatomy / orient_report / swivel）和 `world_dir`（hold_pose）都收**方向词**，工具每帧现算：
+
+| 词 | 意思 |
+|---|---|
+| `"forward"` / `"back"` | **角色自己的**前/后：躯干（骨盆 + 胸）朝向，水平，逐帧。角色会转身——fixture 第 1 帧躯干与世界 −Y 差 66°，别写 `[0,-1,0]` |
+| `"char_left"` / `"char_right"` | 角色自己的左/右（`.L`/`.R` 那一侧） |
+| `"up"` / `"down"` | 世界 ±Z |
+| `"camera"` | 从部位指向 scene.camera（透视，逐帧）。**旧版是相机视线方向 = 背对镜头，已改** |
+| `"away"` | 背对镜头 |
+| `"screen_left/right/up/down"` | 镜头画面里的方向（`view:"viewer"` 时按用户视口）。正面镜头里画面左 = 角色右 |
+| `"viewer"` | 朝用户的 3D 视口（GUI 里正在看的那个；headless 时是存盘时的布局） |
+| `[x,y,z]` / 箭头空物体名 | 世界向量 / 箭头 +Z |
+| 裸 `"left"`/`"right"` | **报错**：角色左还是画面左？ |
+
+给世界向量时，若与这段帧角色躯干朝向的水平差 > 25°，probe/hold_pose 的 warnings 会提醒"'朝前'用 forward"。
+`orient_report` 把任意部位的朝向翻成人话（相对镜头/视口/角色 + 画面 2D 指向）；`conventions` 一次说清这份文件的帧号、
+单位、左右、镜头方位、IK/FK。
+
 ## 语义修复标准流程（手心朝前类）
 
 ```
-probe_anatomy  part=palm side=L frame_range=[149,223] toward=[0,-1,0]
-   → data.local_axis + data.secondary_axis + data.hold_pose_args
-   → data.err_max_deg = 修前偏差（复测基线）
-hold_pose      bones=["hand_fk.L"] target="world_dir"
-               world_axis=<local_axis>  secondary_axis=<secondary_axis>
-               world_dir=[0,-1,0]  frame_range=[149,223]
+probe_anatomy  part=palm side=L frame_range=[149,223] toward="forward"
+   → data.err_inner_deg = 修前偏差（复测基线）；data.hold_pose_args 可直接展开
+hold_pose      bones=["hand_fk.L"] target="world_dir" world_dir="forward"
+               world_axis="probe:palm.L"  secondary_axis="probe:hand_axis.L"  frame_range=[145,227]
    → metrics.bones.*.align_max_deg / skipped_flip_frames
-probe_anatomy  同上参数再来一遍 → data.err_max_deg = 修后偏差
+probe_anatomy  同上参数再来一遍 → data.err_inner_deg = 修后偏差
 list_ops       确认新 op 在册
 ```
+**膝/肘朝向不用 hold_pose**，用 `swivel`（见下）：hold_pose 会顺带改大腿/上臂指向，而且腿是 IK 时
+`thigh_fk` 写了看不见（现在会被拒）。
 
 - **永远不猜 world_axis**。两种给法：
   - `"probe:<part>.<side>"`（**首选**）：求解器逐帧从几何现推局部轴——
     解剖朝向相对控制骨会随帧变（手指有自己的动画，实测散布 71°），
     均值轴会留几十度残差。例：`world_axis="probe:palm.L"`、
-    `secondary_axis="probe:finger_dir.L"`。
+    `secondary_axis="probe:hand_axis.L"`（掌心的次轴用刚性的 腕→指根 轴；finger_dir 在攥拳时倒向掌心法线）。
   - `probe_anatomy` 返回的 `local_axis`/`secondary_axis` 静态向量：
     只在 `local_spread_deg` 小（<15°）时可用。
 - **secondary_axis 一定要传**：双轴解算把扭转钉住，掌心 180° 翻转是绕
@@ -69,22 +90,27 @@ list_ops       确认新 op 在册
 | `bake_range` | `frame_range` `roles` `point_ids` | 世界位置/四元数原始数组 |
 | `eval_bpy` | `expr` | 现场求值（**只读**，env 有 bpy/scene/armature/pb；无 setattr/`__import__`，要设置用 `obj.__setattr__`） |
 | `validate` | `frame_range` | 穿地/悬空/脚滑校验（快照；穿地/悬空相对每只脚标定的着地高度 `contact_height_mm`，与 ground_report 同一标定） |
+| `conventions` | `frame` | 这份文件的约定：帧号↔视频/pkl、单位、L/R、角色这一帧面朝哪（`forward_words`）、镜头/视口在角色哪一侧与是否镜像（`lr`）、角色在不在画面里、每条肢体 IK/FK 与该写哪根骨、标记箭头清单。**开工先跑一次** |
+| `orient_report` | `part` `side` `frame`\|`frame_range` `view`(camera/viewer/both) `max_frames` `toward` | 实时：部位朝向的人话（"右掌心 @130：朝镜头，偏画面右 42°…；画面上指向右下（4 点钟）；朝角色前方偏左 59°"），每帧给 `camera`/`viewer`/`character` 三套角度、部位在画面哪里、箭头在画面上的 2D 指向、左右是否镜像；带 `toward` 时附 `err_deg`（膝/肘按 swivel 平面） |
+| `render_view` | `frame` `view`(camera/viewer) `part` `side` `toward` `size`[w,h] `distance` `markers` | 无头 Workbench 渲一张 PNG（~0.5 s）：绿 = MCD 标记、红 = 部位当前方向、蓝 = 目标；`part` 给了就沿同一视线拉近特写。场景设置/相机/物体原样还原。给能看图的 agent 核对用，数值验收仍用 probe |
 
 ### `probe_anatomy` —— 语义层入口（**朝向类修复第一步必调**）
 
-参数：`part` `side`(L/R) `bone` `finger` `frame_range` `toward` `max_frames`
+参数：`part` `side`(L/R) `bone` `finger` `frame_range` `toward` `max_frames` `view`(camera/viewer)
 
 | part | 推导 | owner 骨 |
 |---|---|---|
-| `palm` | 掌心朝向（指根连线×手指向定平面，指弯曲向定号） | hand_fk.{s} |
+| `palm` | 掌心朝向。来源优先级：标记箭头 `MCD_palm.{s}`（用户绑在 手首 上的）> 目标网格标定（掌心皮肤法线，相对手骨刚性，散布 <1.5°）> 手指几何（兜底：指根连线×手指向，弯指时与可见掌心差中位数 45°）。`evidence.palm_source` = marker / mesh / fingers | hand_fk.{s} |
 | `back_of_hand` | 手背 | hand_fk.{s} |
 | `finger_dir` | 手指指向 | hand_fk.{s} |
 | `knuckle` | 指根连线方向 | hand_fk.{s} |
-| `sole` | 脚底法线（三点定面，小腿在脚背侧定号） | foot_ik.{s} |
+| `hand_axis` | 腕→指根中心（刚性、⊥掌心约 84°）；掌心/手背修复的**次轴** | hand_fk.{s} |
+| `sole` | 脚底法线（标记箭头 `MCD_sole.{s}` 优先；否则三点定面，小腿在脚背侧定号；`evidence.sole_source`） | foot_ik.{s} |
 | `instep` / `toe` | 脚背 / 脚尖 | foot_ik.{s} |
-| `knee_front` | 膝前（大小腿夹角凸出向） | thigh_fk.{s} |
-| `elbow_front` | **肘尖（鹰嘴）**朝向 = 两段骨夹角的凸出侧（不是肘窝；肘窝 = 反方向） | upper_arm_fk.{s} |
-| `body_forward` | 身体前方（脚尖+肩线+相机交叉） | — |
+| `knee_front`（别名 `knee`） | 膝盖骨朝向：小腿上与铰链轴、小腿都垂直、指向外凸侧的方向（直腿也有定义）。读**形变链** ORG-*（= MMD ひざ = 网格；旧版读 IK 腿上看不见的 thigh_fk/shin_fk，膝位置差中位数 42 mm、方向差 13°）。来源 `evidence.knee_source`：`marker`（MCD_knee.{s}）> `hinge`（全片运动标定，小腿上刚性 p90 7.5°；弯 >15° 起渐变跟当帧弯曲平面）> `bend`（当帧凸出角平分线，直腿无定义）。带 toward 时误差 = **绕 髋→踝 连线还差多少度**（`err_metric:"swivel"`）。修复用 `swivel`（`swivel_args` 可直接用） | thigh_ik.{s}（IK 腿）/ thigh_fk.{s}（FK 腿） |
+| `elbow_front`（别名 `elbow`） | **肘尖（鹰嘴）**朝向：前臂上 ⊥ 前臂、外凸侧（不是肘窝；肘窝 = 反方向）。铰链在**前臂**上刚性（p90 14–20°；上臂上 31–34° 不刚性），来源同上 `elbow_source`；误差按 肩→腕 连线 | upper_arm_fk.{s} |
+| `face` / `chest` / `pelvis`（别名 `head` / `hips`） | 脸 / 胸 / 骨盆前方：静止姿态 −Y 随 ORG-spine.006 / .003 / ORG-spine 转（与两眼骨方向差 1.6°）；标记 `MCD_face` 等优先（`face_source`…）。相对 owner 刚性，`hold_pose_args` 给静态局部轴 | head / spine_fk.003 / torso_root |
+| `body_forward`（别名 `torso`） | 角色躯干朝向（骨盆 + 胸，水平）。2026-10-04 起不再以脚尖为主（脚外八时差中位数 8°、最大 42°）；脚尖方向在 `evidence.feet_vs_torso_deg` | — |
 | `bone_axis` | 任意骨六根主轴世界向（`bone=`） | 该骨 |
 
 返回：`world_dir`（当前朝向，世界系）、`local_axis`（owner 骨局部向量，
@@ -94,14 +120,16 @@ list_ops       确认新 op 在册
 次轴；单根手指 / bone_axis / body_forward 没有 probe 轴，仍给均值局部轴）、
 `toward_resolved`/`err_max_deg`/`err_mean_deg`（带 toward 时）。
 
-`toward` 取值：`[x,y,z]` 向量 / `"up" "down" "forward" "camera"` /
-物体名（SINGLE_ARROW 空物体=箭头 +Z 轴方向；其它物体=骨指向它）。
+`toward` 取值：`[x,y,z]` 向量 / 方向词（见上面"方向怎么说"：`forward back char_left char_right up down camera away
+screen_* viewer`）/ 物体名（SINGLE_ARROW 空物体=箭头 +Z 轴方向；其它物体=从部位指向它）。`camera`/`viewer` 从**部位位置**
+（掌心中心、膝关节…）量。
 
 ### 写入（全走 NLA delta strip，preview）
 
 | 工具 | 关键参数 | 干什么 |
 |---|---|---|
-| `hold_pose` | `bones` `frame_range` `target`+`values`/`ref_frame`/`world_dir` `world_axis` `secondary_axis` `dir_object` `dir_mode`(arrow/aim) `flip_guard_deg` `mode`(replace/clamp/outlier) `threshold_deg` `strength` `blend` `op_mode` `track_name` | 姿态保持/方向对齐（四元数骨与 Euler 手臂骨都支持；strength 只作用一次，0.5=一半，>1 超量） |
+| `hold_pose` | `bones` `frame_range` `target`+`values`/`ref_frame`/`world_dir` `world_axis` `secondary_axis` `dir_object` `dir_mode`(arrow/aim) `flip_guard_deg` `mode`(replace/clamp/outlier) `threshold_deg` `strength` `blend` `op_mode` `track_name` `view` | 姿态保持/方向对齐（四元数骨与 Euler 手臂骨都支持；strength 只作用一次，0.5=一半，>1 超量）。`world_dir` 可以是方向词（逐帧解析；`"camera"` 从 probe 主轴那个部位的位置量）。写**看不见的骨**（腿是 IK 时的 thigh_fk/shin_fk/foot_fk 等）直接报错 |
+| `swivel` | `joint`(knee/elbow) `side` `frame_range` `toward` `view` `strength` `blend` `keep_end` `dry_run` | 膝/肘朝向：绕 髋→踝 / 肩→腕 连线转整条腿/胳膊，脚/手的位置和朝向不动。IK 腿写 `thigh_ik.{s}` 的 Y 旋转（实测转 θ 膝绕连线转 0.85–0.99θ，割线修正一次后误差 0.0°、踝漂 0.07 mm）；FK 臂写 `upper_arm_fk` + `hand_fk` 反转（手腕 0.000 mm、手朝向 0.000°）。转角在旋转空间渐入渐出（Euler 增量 taper 会把手腕甩开）。`metrics`：`err_before/after_inner_deg`、`end_drift_mm`、`end_rot_change_max_deg`、`degenerate_frames`（目标几乎平行于连线的帧，插值补） |
 | `reapply` | `op_id` `overrides`（params 局部覆盖 dict） | 同轨重写该 op：删旧 strip 写新的，op_id 不变 |
 | `clean_jitter` | `frame_range` `bone`\|`paths` `strength` `width` `blend` | 零相位平滑 |
 | `restore_accent` | `frame_range` `data_path` `index` `method`(ease_reshape/retime/hf_reinject/refilter) `strength` `impact_frame` `retime_speed` `retime_split` `raw_action` `blend` | 力量感（quat 四分量整体重塑） |
@@ -118,8 +146,8 @@ list_ops       确认新 op 在册
 | `effect_check` | `track_name`/`op_id` `bones` `frames` | 该 strip 到底动了没有 |
 | `set_influence` | `value` `op_id`\|`track_name` | delta^value 力度（>1 超量） |
 | `set_preview` | `frame_range` | 设预览帧段 |
-| `ab_toggle` | — | 全部 agent 轨静音/放响 |
-| `revert` | `op_id` | 删 strip+action+轨+记录 |
+| `ab_toggle` | — | 全部 agent 轨静音/放响（带 agent_id 只拨自己的）。静音时把基底没 key 的通道（thigh_ik 的 Y 等）恢复默认值——否则它们停在最后一帧的值上，A 看到的不是原样 |
+| `revert` | `op_id` | 删 strip+action+轨+记录；同上，只被这条 strip 动过的通道恢复默认值（2026-10-04 实测：撤掉膝 swivel 后左膝曾残留 3.4°） |
 | `commit` | `op_id` | 标记已提交（**别调，用户的事**） |
 | `save` | – | 把工作文件落盘（headless 服务里没人按 Ctrl+S；每段修复完成后调一次） |
 
@@ -148,9 +176,51 @@ list_ops       确认新 op 在册
 | `foot_lock` | 写 | `interval`("contact.R:7") 或 `side`+`frame_range`, `lock`(xy/xy+rot/pos/pos+rot) `ref` | foot_ik 在接触段钉在参考帧世界位置（xy 默认保留高度） |
 | `claim` / `release` / `list_claims` | 管理 | `bones`/`chain` `frames` `ttl_s` `strict` `check_only` | 并发租约（见下） |
 | `plan_scopes` | 读 | `tasks:[{name, bones/chain, frames}]` | 派单前体检：两两冲突 + 建议并行批次 |
+| `markers` | 管理 | `action`(create/adopt/check/bake/list/remove) `parts` `sides` `part` `side` `name` `frame_range` `length` `overwrite` `all` | 标记箭头：create = 掌心/脚底/膝/肘/脸/胸/骨盆的骨骼父级箭头（初值 = 网格/铰链/静止前方标定）；check = 绑定体检；bake = 逐帧 K 帧显示箭头（`MCD_bake_*`）；见下节 |
 
 所有新写工具：只写 `frame_range`（motion_copy 是目标窗）以内；支持 `dry_run:true`；参数全录可
 `reapply`；四元数骨与 Euler 骨都支持。
+
+### 标记箭头 markers（2026-10-04）——用户与 agent 共用的"方向定义"
+
+用户的流程：拿到模型先给掌心、脚底、膝、肘绑好空物体箭头，之后下指令、看结果都以箭头为准。
+
+- **为什么骨骼父级就够**：掌心皮肤（权重 94% 在 手首）的法线在 hand_fk 局部坐标里 150 帧散布 ≤1.5°——
+  掌心网格相对手骨是刚性的，脚底同理。所以"跟着网格的箭头" = "跟着骨的箭头"：Ctrl+P → 骨骼（手首/足首），
+  在任意一帧对准即可。顶点三角形父级也行（三点都要是该骨权重 1.0 的，先绑再对准）；
+  **Child Of + 顶点组不行**（只跟平均顶点法线，绕法线的滚转不受控，实测漂 8–35°）。
+- `markers create`：替用户做上面这步（默认 palm/sole/knee/elbow，左右各一；`parts` 可加 face/chest/pelvis）：
+
+  | 箭头 | 父级骨（MMD 骨架，= 网格跟的骨；没有就用 RIG 的 DEF 骨） | 指向 | 初值 |
+  |---|---|---|---|
+  | `MCD_palm.L/R` | 手首 | 掌心法线 | 网格标定 |
+  | `MCD_sole.L/R` | 足首 | 脚底法线 | 三点脚底 |
+  | `MCD_knee.L/R` | ひざD（腿网格权重在 D 骨上，与 ひざ 旋转差 ≤1.1°） | 膝盖骨：⊥小腿、外凸侧 | 全片铰链标定 |
+  | `MCD_elbow.L/R` | ひじ（前臂） | 肘尖：⊥前臂、外凸侧 | 全片铰链标定 |
+  | `MCD_face` / `MCD_chest` / `MCD_pelvis` | 頭 / 上半身2 / 下半身 | 正前方 | 静止 −Y 随骨转 |
+
+  箭头放在皮肤外面（沿方向找本肢体第一层皮肤，不会扎到另一条腿）。已存在的不动（`overwrite:true` 才重建；
+  重建时清掉旧关键帧/约束——审查 M20）。
+- **膝/肘为什么能刚性绑**：弯曲平面法线（铰链轴）在远端骨上是刚性的——实测（1499 帧、每 4 帧、弯 >20°）
+  小腿 ORG-shin 中位数 3.0°、p90 7.3–7.6°、最大 10°；前臂 ORG-forearm 中位数 5.3/8.5°、p90 13.7/19.5°；
+  上臂只有 p90 31–34°（MMD 腕 更差），所以肘的箭头绑前臂（鹰嘴本来就长在尺骨上）。符号：弯曲的帧上 100% 在外凸侧；
+  与当帧"凸出角平分线"恒差半个弯角（中位数残差 0.2°），投影到 根→梢 连线垂面上方向相同。膝的标定轴与模型作者给
+  ひざ 设的 IK 铰链轴（局部 X）差 8.3–8.8°。
+- `markers adopt {name, part, side}`：用户已经自己把箭头 Ctrl+P→骨骼 绑好的，直接收编（改名 `MCD_palm.L`、打 bound
+  标签、报它与几何估计的最大夹角）。绑错侧、没骨骼父级、自己带关键帧/约束的会被拒并说明原因。
+- **读回规则**：probe / hold_pose / swivel 看到合格的标记（骨骼父级、没有关键帧/驱动/约束、不是 baked）就以它为准，
+  `evidence.<部位>_source="marker"`；不合格的忽略 + warning（`marker_ignored` + `marker_ignored_why`：unbound / keyed /
+  constrained）。
+- `markers check {frame_range}`：**绑定体检**（掌心事件那一类错误）。每支 MCD_* 和场景里的 SINGLE_ARROW 用户箭头：
+  绑定方式（骨骼父级 / 顶点父级 + 顶点组属于哪一侧 / Child Of / 没绑）、离哪个部位最近（没父级的会找它在哪一帧离
+  部位最近——用户多半就是那一帧摆的）、在参照骨局部坐标里的刚性散布、与几何/网格定义的差；`status` = ok / warn / error /
+  unrelated，带 `problems` 和 `fix`。用户的 arrow_problem.blend 实测：`Empty.179frame`（顶点父级的三个顶点 100% 在
+  手首.R、箭头却在左掌心 8.7 cm 处、在 hand_fk.L 坐标里散布 108°）→ error，正是 §13 的结论；arrow_problem2.blend 的
+  `Empty.187`（骨骼父级 手首.L）→ ok、与网格掌心差 2.1°、提示可 adopt。
+- `markers bake`：逐帧把方向 K 到一支**单独命名**的显示箭头 `MCD_bake_<part>.<side>` 上（膝/肘显示当帧凸出角平分线，
+  其它部位显示当帧几何方向），只用来看，probe 不读回；修复后要重 bake。默认的膝肘箭头是 create 建的刚性箭头。
+- `markers list {frame_range}`：每支标记的种类、父级骨、是否合格、与几何估计的最大夹角。
+- 用户在视口里摆的箭头是可信的：2026-10-04 左手三帧实测，与网格掌心法线差 1.5–8°。
 
 ### 并发协议（任务1，2026-10-03）
 
@@ -178,6 +248,13 @@ finger_{l,r}_{index,middle,ring,pinky}{1..3}→f_*.0N.{L,R},
 finger_{l,r}_thumb{1..3}→thumb.0N.{L,R}`（thumb 无 f_ 前缀）
 
 ## 坑（都是踩过的）
+
+- **人看到的 ≠ agent 算的**（2026-10-04 §16 的系统排查，每条都有工具兜住）：
+  "朝前"是角色躯干的前（`forward`），不是世界 −Y；"朝镜头"= 从部位指向镜头（`camera`）；角色左右 ≠ 画面左右
+  （`char_*` vs `screen_*`，`orient_report`/`conventions` 的 `lr`）；scene.camera 不一定是用户在看的视口（`viewer`）；
+  腿是 IK 时 FK 腿骨看不见（probe 读形变链、写入会被拒、swivel 写 thigh_ik）；快照里的腿部角色读的是 FK 骨；
+  标记箭头绑错侧/顶点父级在另一只手/带关键帧（`markers check`）；撤销/静音后基底没 key 的通道会停在最后一帧
+  （revert/ab_toggle 已自动复位）；网格在视口里被禁用时网格标定曾读到静止姿态（已修，审查 M21）。
 
 - NLA delta 是 **COMBINE 右乘**：写 `delta = conj(base) ⊗ desired`，工具内已做
 - `strip.influence` ≤1.0：超过 1 的力度用 `set_influence`（角轴缩放曲线）

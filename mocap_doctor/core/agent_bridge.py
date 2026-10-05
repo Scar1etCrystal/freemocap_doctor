@@ -19,9 +19,12 @@ Client protocol: one JSON object per line, both directions.
 from __future__ import annotations
 
 import json
+import os
 import queue
+import re
 import socket
 import socketserver
+import sys
 import threading
 import time
 import traceback
@@ -64,6 +67,7 @@ _STATUS = {"clients": 0, "last_tool": "", "last_error": ""}
 _LEASES = agent_claims.LeaseTable()
 _JOURNAL = agent_claims.WriteJournal()
 _IN_TOOL = False            # True while a tool runs: its own frame_set must not bump
+_IN_SYNC = False            # True while the fix-list timer mirrors the scene (same rule)
 _LAST_FRAME_SEEN = None     # frame-only depsgraph updates (scrub/playback) ≠ edits
 _ANC_CACHE: dict = {}       # armature name → {bone: ancestors(actual ∪ semantic)}
 # 任务2：信号库的输入是 npz 缓存 + 标注区间 + 设置，agent 写 delta 动不了其中
@@ -174,7 +178,7 @@ def _bump_version(scene=None, depsgraph=None):
     that carry no Action edit.  What is left is an EXTERNAL change (the user
     edited something) → journal row with unscoped bones = stale for all."""
     global _DATA_VERSION, _LAST_BUMP, _LAST_FRAME_SEEN
-    if _IN_TOOL:
+    if _IN_TOOL or _IN_SYNC:
         return
     try:
         frame = int(scene.frame_current) if scene is not None else None
@@ -215,15 +219,31 @@ def _redraw():
         pass
 
 
+def _playback_running() -> bool:
+    try:
+        return any(getattr(w.screen, "is_animation_playing", False)
+                   for w in bpy.context.window_manager.windows)
+    except Exception:
+        return False
+
+
+def _toggle_playback():
+    with bpy.context.temp_override():
+        bpy.ops.screen.animation_play()
+
+
 def _focus_preview(scene, frame_range):
     try:
         agent_ops.set_preview(scene, frame_range)
         scene.frame_set(int(frame_range[0]))
     except Exception:
         pass
+    # animation_play() is a TOGGLE: with several agents writing, playback went
+    # on / off / on.  Only start it when it is not running already.
+    if _playback_running():
+        return
     try:
-        with bpy.context.temp_override():
-            bpy.ops.screen.animation_play()
+        _toggle_playback()
     except Exception:
         pass  # playback start is a nicety, never a failure
 
@@ -231,16 +251,9 @@ def _focus_preview(scene, frame_range):
 def _base_action(armature):
     """The baseline action - active action, or the mcd_base strip's action once
     it has been pushed onto NLA (active action sits ABOVE tracks and REPLACEd
-    our deltas, so the first write pushes it down)."""
-    anim = getattr(armature, "animation_data", None)
-    if anim is None:
-        return None
-    if anim.action is not None:
-        return anim.action
-    for track in anim.nla_tracks:
-        if track.name == agent_ops.BASE_TRACK and track.strips:
-            return track.strips[0].action
-    return None
+    our deltas, so the first write pushes it down).  Same rule as
+    agent_ops.base_action_of (a foreign active Action over mcd_base raises)."""
+    return agent_ops.base_action_of(armature)
 
 
 def _track_by_name(armature, name):
@@ -637,7 +650,12 @@ def _tool_compare(_ctx, channel, a, b, **_):
 
 
 def _tool_snapshot(_ctx, frame, roles=None, **_):
-    return agent_query.snapshot(get_store(), frame, roles)
+    res = agent_query.snapshot(get_store(), frame, roles)
+    warn = _leg_role_warning(_ctx, roles if roles else _LEG_ROLES)
+    if warn and isinstance(res, dict):
+        res = dict(res)
+        res["warnings"] = list(res.get("warnings") or []) + warn[:1]
+    return res
 
 
 def _tool_eval(_ctx, expr, **_):
@@ -678,9 +696,36 @@ def _tool_eval(_ctx, expr, **_):
             "hint": "结果被截断到 4000 字符" if truncated else ""}
 
 
+_LEG_ROLES = ("left_hip", "right_hip", "left_knee", "right_knee", "left_ankle", "right_ankle")
+
+
+def _leg_role_warning(ctx, names) -> list:
+    """快照里的腿部角色（left_hip/left_knee/left_ankle → thigh_fk/shin_fk）是 FK 骨：腿是 IK 时
+    它们看不见——膝位置与视口里的膝差中位数 40–46 mm、最大 236 mm（2026-10-04 §16）。"""
+    arm = ctx.get("armature")
+    if arm is None:
+        return []
+    out = []
+    for n in names or ():
+        s = "L" if str(n).startswith("left") or str(n).endswith(".L") else (
+            "R" if str(n).startswith("right") or str(n).endswith(".R") else None)
+        if s is None:
+            continue
+        if (n in _LEG_ROLES or str(n).startswith(("thigh_fk", "shin_fk"))) and \
+                agent_anatomy.limb_is_ik(arm, "knee", s):
+            out.append(f"{n}：{s} 腿是 IK，这个快照角色映射到 FK 骨（看不见；膝位置与视口里的膝差中位数 4 cm、最大 24 cm）。"
+                       "看膝的朝向/位置用实时工具 probe_anatomy part=knee_front 或 orient_report（读形变骨 = 视口里的膝）")
+    return out
+
+
 def _tool_get_joint_angles(_ctx, bones, frame_range, max_points=60, **_):
-    return agent_query.get_joint_angles(
+    res = agent_query.get_joint_angles(
         get_store(), bones, frame_range, max_points=max_points)
+    warn = _leg_role_warning(_ctx, bones)
+    if warn and isinstance(res, dict):
+        res = dict(res)
+        res["warnings"] = list(res.get("warnings") or []) + warn
+    return res
 
 
 def _tool_effect_check(ctx, track_name=None, op_id=None, bones=None,
@@ -712,42 +757,34 @@ def _tool_effect_check(ctx, track_name=None, op_id=None, bones=None,
         if not frames:
             # 默认采样落在 taper 之外：strip 两端各 blend 帧权重从 0 渐升，
             # 端点权重恰为 0——旧版采 [起, 中, 止] 必然报"1/3 帧有变化"。
+            # 工具自己报了生效段（overlap 的 metrics.inner_frames、motion_copy 的
+            # inner_range）就用它：overlap 的自动 blend 在 params 里记成 None，
+            # 按 0 算会采到 taper 端点。
             fr = op.get("frames")
-            bl = int((op.get("params") or {}).get("blend", 4) or 0)
-            lo, hi = fr[0] + bl, fr[1] - bl
-            if hi < lo:
-                lo, hi = fr[0], fr[1]
+            mets = op.get("metrics") or {}
+            inner = mets.get("inner_frames") or mets.get("inner_range")
+            if inner and int(inner[1]) >= int(inner[0]):
+                lo, hi = int(inner[0]), int(inner[1])
+            else:
+                bl = (op.get("params") or {}).get("blend", 4)
+                if bl is None:
+                    bl = mets.get("blend", 0)
+                bl = int(bl or 0)
+                lo, hi = fr[0] + bl, fr[1] - bl
+                if hi < lo:
+                    lo, hi = fr[0], fr[1]
             frames = sorted({lo, (lo + hi) // 2, hi})
     if track_name is None:
-        # 没指定就查所有 agent 轨（A/B 语义：全部修复一起 mute）
+        # 没指定就查所有 agent 轨（A/B 语义：全部修复一起 mute——一次 A/B，
+        # 不再逐轨测再取最大：既与文档一致，求值次数也从 6×轨数 降到 6）
         armature_anim = getattr(armature, "animation_data", None)
         names = [t.name for t in (armature_anim.nla_tracks if armature_anim else ())
                  if agent_ops.is_agent_track_name(t.name)]
         if not names:
             raise RuntimeError("RIG 上没有 agent 轨")
-        merged = None
-        for nm in names:
-            res = agent_ops.effect_check(ctx["scene"], armature,
-                                         track_name=nm,
-                                         bones=list(bones), frames=list(frames))
-            if merged is None:
-                merged = res
-                merged["tracks"] = [nm]
-            else:
-                merged["tracks"].append(nm)
-                for a, b in zip(merged["per_frame"], res["per_frame"]):
-                    for bone, cell in b["bones"].items():
-                        cur = a["bones"].get(bone)
-                        if cur is None or cell["pos_mm"] > cur["pos_mm"] \
-                                or cell["rot_deg"] > cur["rot_deg"]:
-                            a["bones"][bone] = cell
-                    a["moved"] = a["moved"] or b["moved"]
-        hits = sum(1 for r in merged["per_frame"] if r["moved"])
-        merged["verdict"] = f"{hits}/{len(merged['per_frame'])} 帧有变化"
-        merged["pass"] = hits == len(merged["per_frame"])
-        merged["moved_any"] = hits > 0
-        merged["track"] = "all"
-        res = merged
+        res = agent_ops.effect_check(ctx["scene"], armature, track_names=names,
+                                     bones=list(bones), frames=list(frames))
+        res["tracks"] = names
         label = f"全部 agent 轨({len(names)})"
     else:
         res = agent_ops.effect_check(ctx["scene"], armature,
@@ -758,6 +795,72 @@ def _tool_effect_check(ctx, track_name=None, op_id=None, bones=None,
             "data": res, "warnings": [], "truncated": False, "hint": ""}
 
 
+_FK_LEG = ("thigh_fk.{s}", "shin_fk.{s}", "foot_fk.{s}", "toe_fk.{s}")
+_IK_LEG = ("thigh_ik.{s}", "foot_ik.{s}", "foot_heel_ik.{s}", "foot_spin_ik.{s}")
+_FK_ARM = ("upper_arm_fk.{s}", "forearm_fk.{s}", "hand_fk.{s}")
+_IK_ARM = ("upper_arm_ik.{s}", "hand_ik.{s}")
+
+
+def _invisible_bones(armature, bones) -> list:
+    """写了看不见的控制骨（2026-10-04 §16）：腿是 IK 时的 FK 腿骨、肢体是 FK 时的 IK 控制骨。
+    旧剧本"膝朝向 → hold_pose thigh_fk"在这个 RIG 上就是这样一次"修好了、验收也过了、用户什么都没看到"。"""
+    out = []
+    for b in bones:
+        for s in ("L", "R"):
+            leg_ik = agent_anatomy.limb_is_ik(armature, "knee", s)
+            arm_ik = agent_anatomy.limb_is_ik(armature, "elbow", s)
+            if leg_ik and b in [p.format(s=s) for p in _FK_LEG]:
+                out.append((b, f"{s} 腿是 IK：{b} 写了看不见——膝朝向用 swivel，脚的位置/朝向用 foot_ik.{s}"))
+            elif (not leg_ik) and b in [p.format(s=s) for p in _IK_LEG] and \
+                    armature.pose.bones.get(f"thigh_parent.{s}") is not None:
+                out.append((b, f"{s} 腿是 FK：{b} 写了看不见——改 thigh_fk/shin_fk/foot_fk.{s}"))
+            elif arm_ik and b in [p.format(s=s) for p in _FK_ARM]:
+                out.append((b, f"{s} 臂是 IK：{b} 写了看不见——手用 hand_ik.{s}，肘朝向用 swivel"))
+            elif (not arm_ik) and b in [p.format(s=s) for p in _IK_ARM] and \
+                    armature.pose.bones.get(f"upper_arm_parent.{s}") is not None:
+                out.append((b, f"{s} 臂是 FK：{b} 写了看不见——改 upper_arm_fk/forearm_fk/hand_fk.{s}"))
+    return out
+
+
+def _reject_invisible(armature, bones, tool):
+    bad = _invisible_bones(armature, bones)
+    if bad:
+        raise RuntimeError(f"{tool}：" + "；".join(w for _b, w in bad))
+
+
+def _world_axis_warning(ctx, toward, frame_range) -> list:
+    """给的是世界向量（比如 [0,-1,0]），而这段角色躯干朝别处 → 提醒"朝前"该用 forward。"""
+    if toward is None or isinstance(toward, str):
+        return []
+    try:
+        from mathutils import Vector
+        from . import agent_view
+        from .animation import preserve_scene_frame, set_scene_frame
+        v = Vector([float(x) for x in toward]).normalized()
+        if abs(v.z) > 0.5:
+            return []
+        scene, arm = ctx["scene"], ctx["armature"]
+        mmd = getattr(ctx.get("settings"), "mmd_armature", None)
+        if frame_range:
+            f = (int(frame_range[0]) + int(frame_range[-1])) // 2
+        else:
+            f = int(scene.frame_current)
+        with preserve_scene_frame(scene):
+            set_scene_frame(scene, f)
+            cf = agent_view.char_frame(arm, mmd=mmd)
+        if cf is None:
+            return []
+        h = Vector((v.x, v.y, 0.0)).normalized()
+        diff = agent_view._angle(h, cf["forward"])
+        if diff > 25.0:
+            return [f"你给的是世界向量 {[round(x, 3) for x in v]}；第 {f} 帧角色躯干朝 "
+                    f"{agent_view.yaw_words(cf['forward'])}（与你的向量水平差 {diff:.0f}°）。"
+                    "用户说的'朝前/朝左'指角色自己的前/左：用方向词 forward / char_left（逐帧跟着角色转）"]
+    except Exception:  # noqa: BLE001 - 只是提醒
+        return []
+    return []
+
+
 def _tool_hold_pose(ctx, bones, frame_range, target="values",
                     values=None, ref_frame=None, world_dir=None,
                     world_axis="Y", secondary_axis=None,
@@ -765,13 +868,15 @@ def _tool_hold_pose(ctx, bones, frame_range, target="values",
                     flip_guard_deg=150.0,
                     mode="replace", threshold_deg=8.0, strength=1.0,
                     blend=4, op_mode="preview", track_name=None,
-                    dry_run=False, **_):
+                    dry_run=False, view="camera", **_):
     armature = ctx["armature"]
     if armature is None:
         raise RuntimeError("没有识别到 RIG 骨架")
+    names = _resolve_bones(armature, list(bones))
+    _reject_invisible(armature, names, "hold_pose")
     op = agent_ops.hold_pose(
         armature, _base_action(armature),
-        _resolve_bones(armature, list(bones)), frame_range,
+        names, frame_range,
         target=target, values=values, ref_frame=ref_frame,
         world_dir=world_dir, world_axis=world_axis,
         secondary_axis=secondary_axis,
@@ -781,14 +886,18 @@ def _tool_hold_pose(ctx, bones, frame_range, target="values",
         mode=mode, threshold_deg=float(threshold_deg),
         strength=float(strength), blend=int(blend), op_mode=op_mode,
         data_dir=ctx["data_dir"], track_name=track_name,
-        dry_run=bool(dry_run))
+        dry_run=bool(dry_run), view=str(view))
     if not op.get("dry_run"):
         _write_common(ctx, armature, frame_range)
+    if target == "world_dir" and world_dir is not None and not dir_object:
+        warn = _world_axis_warning(ctx, world_dir, frame_range)
+        if warn:
+            op["_warnings"] = list(op.get("_warnings") or []) + warn
     return op
 
 
 def _tool_probe_anatomy(ctx, part, side=None, bone=None, finger=None,
-                        frame_range=None, toward=None, max_frames=9, **_):
+                        frame_range=None, toward=None, max_frames=9, view="camera", **_):
     """语义解剖探头：从几何推世界方向 + owner 骨局部向量 + 置信度。"""
     armature = ctx["armature"]
     if armature is None:
@@ -796,17 +905,44 @@ def _tool_probe_anatomy(ctx, part, side=None, bone=None, finger=None,
     res = agent_anatomy.probe(
         ctx["scene"], armature, part=part, side=side, bone=bone,
         finger=finger, frame_range=frame_range, toward=toward,
-        max_frames=int(max_frames))
+        max_frames=int(max_frames), view=str(view))
     conf = res.get("confidence")
     summary = (f"{part}{'.' + side if side else ''}: "
                f"world={res.get('world_dir')} conf={conf}"
                + (f" err={res['err_max_deg']}°"
                   if res.get("err_max_deg") is not None else ""))
-    warnings = []
+    warnings = _world_axis_warning(ctx, toward, frame_range)
+    ev0 = res.get("evidence") or {}
+    for kind in ("knee", "elbow"):
+        src = ev0.get(f"{kind}_source")
+        if src == "bend":
+            warnings.append(f"{'膝' if kind == 'knee' else '肘'}朝向没有全片标定（{ev0.get('hinge_calibration')}），"
+                            "用的是当帧弯曲方向：直腿/直臂的帧没有定义。建议 markers create 建 MCD_"
+                            f"{kind}.{(side or 'L').upper()} 让用户确认")
+        elif src == "hinge":
+            cal = res.get("hinge_calibration") or {}
+            if (cal.get("spread_p90_deg") or 0) > 20:
+                warnings.append(f"铰链轴不太刚性（全片 p90 散布 {cal.get('spread_p90_deg')}°）：朝向定义有 ±"
+                                f"{cal.get('spread_p90_deg')}° 的不确定，拿不准就让用户用 MCD_{kind} 箭头确认")
+        if src is not None and res.get("owner_bone") and "_ik." in str(res.get("owner_bone")):
+            warnings.append(f"这条{'腿' if kind == 'knee' else '胳膊'}是 IK：朝向修复用 swivel（swivel_args 可直接用），"
+                            f"别 hold_pose {res.get('owner_bone')}")
     if conf is not None and conf < 0.5:
         warnings.append(f"低置信度({conf})：{res.get('evidence')}")
         if res.get("alternatives"):
             warnings.append("符号歧义：alternatives 给出两个候选方向")
+    ev = res.get("evidence") or {}
+    if str(part).lower() in ("palm", "back_of_hand") and ev.get("palm_source") == "fingers":
+        warnings.append("掌心没做网格标定（" + str(ev.get("mesh_calibration", "没有 settings.target_mesh"))
+                        + "）：按手指几何推断，手指弯曲时与视口里看到的掌心可差 45°+（中位数）；"
+                          "拿不准就报告，别修")
+    if ev.get("sign_conflict"):
+        warnings.append("掌心符号：网格标定（拇指所在侧）与手指弯曲方向不一致——让用户在视口确认一帧再修")
+    if ev.get("marker_ignored"):
+        why = agent_anatomy.MARKER_IGNORE_REASONS.get(ev.get("marker_ignored_why"), "不合格")
+        warnings.append(f"标记箭头 {ev['marker_ignored']} {why}，已忽略（按几何/网格定义算）："
+                        "用 markers 工具重建（action=create, overwrite=true），或在 Blender 里清掉它的关键帧/约束、"
+                        "Ctrl+P→骨骼 绑到对应的骨；markers check 看详情")
     return {"summary": summary, "data": res, "warnings": warnings,
             "truncated": False, "hint": ""}
 
@@ -846,6 +982,8 @@ def _tool_clean_jitter(ctx, frame_range, bone=None, paths=None,
         )
     if not paths:
         raise RuntimeError("clean_jitter 需要 bone 或 paths")
+    _reject_invisible(armature, sorted({b for b in (_bone_of_path(p[0] if isinstance(p, (list, tuple)) else p)
+                                                    for p in paths) if b}), "clean_jitter")
     op = agent_ops.clean_jitter(
         armature, _base_action(armature),
         [tuple(p) for p in paths], frame_range,
@@ -896,6 +1034,8 @@ def _tool_restore_accent(ctx, frame_range, data_path, index=None, method="ease_r
     """data_path 指到 .rotation_quaternion / .location 时四分量/三轴整体
     重塑（index 忽略）；其他通道才需要 index 选分量。"""
     armature = ctx["armature"]
+    if _bone_of_path(data_path):
+        _reject_invisible(armature, [_bone_of_path(data_path)], "restore_accent")
     raw_values = None
     if raw_action:
         raw_act = bpy.data.actions.get(raw_action)
@@ -933,6 +1073,11 @@ def _tool_apply_exemplar(ctx, frame_range, ex_id, loc_path, quat_path,
                          yaw_scale=1.0, mirror=False, blend=4,
                          op_mode="preview", **_):
     armature = ctx["armature"]
+    folder = agent_ops.exemplar_dir(ctx["data_dir"])
+    if not (folder / f"{ex_id}.npz").is_file():
+        have = sorted(p.stem for p in folder.glob("*.npz")) if folder.is_dir() else []
+        raise RuntimeError(f"模板 {ex_id!r} 不存在；这个文件登记过的模板：{have or '无'}。"
+                           "没有模板就别用 apply_exemplar（报告给协调者）")
     ex = agent_ops.load_exemplar(ctx["data_dir"], ex_id)
     op = agent_ops.apply_exemplar(
         armature, ex, target_pos, target_quat, float(anchor_yaw_deg),
@@ -1088,8 +1233,14 @@ def _tool_ab_toggle(ctx, **_):
         return {"muted": None, "note": "没有 agent 轨"}
     # 以"是否有未静音轨"决定方向：有一个还响着 → 全部静音
     new_state = any(not t.mute for t in agent_tracks)
+    chans = set()
     for t in agent_tracks:
         t.mute = new_state
+        for st in t.strips:
+            chans |= agent_ops.action_channels(st.action)
+    if new_state:
+        # 基底没 key 的通道（thigh_ik 的 Y 旋转等）静音后会停在最后一次求值的值上，A 看到的就不是原样
+        agent_ops.settle_unanimated(armature, chans)
     _redraw()
     return {"muted": new_state,
             "tracks": [t.name for t in agent_tracks]}
@@ -1394,7 +1545,8 @@ TOOLS = {
 # A missing module is fine (not shipped yet); a broken one is reported by ping
 # instead of taking every other tool down with it.
 _PLUGIN_MODULES = ("agent_motion", "agent_copy", "agent_principles",
-                   "agent_overlap", "agent_contact")
+                   "agent_overlap", "agent_contact", "agent_markers",
+                   "agent_swivel", "agent_view")
 _PLUGIN_ERRORS: dict = {}
 WRITE_SCOPES: dict = {}
 
@@ -1486,6 +1638,9 @@ def _dispatch(request: Mapping[str, Any]) -> dict:
         _check_version(args, scope, agent_id, ctx, notes)
         if scope is not None:
             if not dry:
+                # 坏掉的 op 日志在写 strip 之前就报出来（M16）：否则 strip 写上了、
+                # 记账失败，留下一条"未登记"的孤儿
+                agent_ops._load_oplog(ctx["data_dir"])
                 _enforce_claims(name, ctx, scope, agent_id, force, notes)
             if name not in _OP_TOOLS and name != "ab_toggle":
                 notes.extend(_stack_warnings(name, ctx, scope, agent_id))
@@ -1607,14 +1762,45 @@ def _watchdog():
     return WATCHDOG_INTERVAL if _running else None
 
 
+# A web page can POST to 127.0.0.1:6211 (text/plain needs no CORS preflight):
+# the body line would be executed - save to any path, eval_bpy.  The JSON-lines
+# protocol never starts with an HTTP request line, so such a connection is
+# dropped before its body is read.  An optional shared token (off by default,
+# protocol unchanged): set MCD_AGENT_TOKEN for Blender and the clients; every
+# request line must then carry "token".
+_HTTP_REQUEST_LINE = re.compile(rb"^[A-Z]{3,10} \S+ HTTP/\d")
+TOKEN_ENV = "MCD_AGENT_TOKEN"
+
+
+def _looks_like_http(line: bytes) -> bool:
+    return bool(_HTTP_REQUEST_LINE.match(line.lstrip(b"\xef\xbb\xbf")))
+
+
 class _Handler(socketserver.StreamRequestHandler):
     def handle(self):
         _STATUS["clients"] += 1
+        token = os.environ.get(TOKEN_ENV) or None
         try:
+            first = True
             for line in self.rfile:
+                if first:
+                    first = False
+                    if _looks_like_http(line):
+                        _STATUS["last_error"] = "拒绝了一个 HTTP 请求（不是 JSON-lines 客户端）"
+                        return
                 try:
                     request = json.loads(line.decode("utf-8"))
-                except json.JSONDecodeError:
+                except (json.JSONDecodeError, UnicodeDecodeError):
+                    continue
+                if not isinstance(request, dict):
+                    continue
+                if token is not None and request.pop("token", None) != token:
+                    self.wfile.write((json.dumps({
+                        "id": request.get("id"), "ok": False, "tool": request.get("tool"),
+                        "error": {"code": "E_AUTH", "message": "token 不对或缺失",
+                                  "fix": f"请求里带 \"token\"（与 Blender 的 {TOKEN_ENV} 相同）"}},
+                        ensure_ascii=False) + "\n").encode("utf-8"))
+                    self.wfile.flush()
                     continue
                 _requests.put((self.wfile, request))
                 _WAKE.set()
@@ -1622,9 +1808,24 @@ class _Handler(socketserver.StreamRequestHandler):
             _STATUS["clients"] -= 1
 
 
+def _bind_flags(platform=None) -> dict:
+    """Windows: SO_REUSEADDR (socketserver sets it when allow_reuse_address)
+    lets a SECOND process bind the same port - two Blenders both "start" the
+    server and requests land on either one, i.e. in the wrong file.  Windows'
+    exclusive bind is SO_EXCLUSIVEADDRUSE.  POSIX SO_REUSEADDR only skips
+    TIME_WAIT and never allows two listeners, so it stays."""
+    win = str(platform if platform is not None else sys.platform).startswith("win")
+    return {"reuse_address": not win, "exclusive": win}
+
+
 class _Server(socketserver.ThreadingTCPServer):
-    allow_reuse_address = True
+    allow_reuse_address = _bind_flags()["reuse_address"]
     daemon_threads = True
+
+    def server_bind(self):
+        if _bind_flags()["exclusive"] and hasattr(socket, "SO_EXCLUSIVEADDRUSE"):
+            self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+        super().server_bind()
 
 
 _server = None
@@ -1734,6 +1935,7 @@ def ensure_layout(settings=None, scene=None) -> dict:
 
 FIXLIST_INTERVAL = 1.0
 _LAST_FIXLIST = 0.0          # wall-clock of last _fixlist_tick
+_FIXLIST_SYNCED = None       # (scene, rig, data dir) the empty list was last synced for
 
 # ---- 参数控件防抖重写 + 方向空物体监视 ------------------------------------
 # 修复条目的参数控件（properties.MD_PG_AgentParam）不直接调 reapply：
@@ -1745,6 +1947,49 @@ PARAM_DEBOUNCE = 0.25
 _PARAM_PENDING: dict = {}      # (op_id, key) -> value
 _PARAM_LAST_EDIT = 0.0
 _EMPTY_WATCH: dict = {}        # op_id -> 方向物体 matrix 签名
+
+
+def _dir_object_signature(obj) -> tuple:
+    """What the user can EDIT on a direction object - not where it happens to be
+    at the current frame.  The old signature was the current-frame matrix_world:
+    an animated or bone-parented arrow (both documented) changed it on every
+    scrub / playback stop and re-ran the whole op (75 f ≈ 0.3 s, 300 f ≈ 1 s)
+    for an identical result.  Parent + parent inverse + constraints + (keyed:
+    the action's keys | static: matrix_basis)."""
+    import hashlib
+    parts = [obj.parent.name if obj.parent is not None else "",
+             str(obj.parent_type), str(getattr(obj, "parent_bone", "") or "")]
+    parts += [round(float(v), 5) for row in obj.matrix_parent_inverse for v in row]
+    for con in getattr(obj, "constraints", ()):
+        parts += [con.type, con.name, bool(con.mute), round(float(con.influence), 5),
+                  getattr(getattr(con, "target", None), "name", ""),
+                  str(getattr(con, "subtarget", "") or "")]
+    anim = getattr(obj, "animation_data", None)
+    act = getattr(anim, "action", None) if anim is not None else None
+    if act is not None:
+        h = hashlib.sha1()
+        for fc in act.fcurves:
+            n = len(fc.keyframe_points)
+            buf = np.empty(2 * n, dtype=np.float32)
+            h.update(f"{fc.data_path}[{fc.array_index}]:{n}:{fc.mute}".encode())
+            for prop in ("co", "handle_left", "handle_right"):
+                fc.keyframe_points.foreach_get(prop, buf)
+                h.update(buf.tobytes())
+            ip = np.empty(n, dtype=np.int32)
+            fc.keyframe_points.foreach_get("interpolation", ip)
+            h.update(ip.tobytes())
+        parts.append(h.hexdigest())
+        # channels the action does not drive are static edits: keep them
+        keyed = {(fc.data_path, fc.array_index) for fc in act.fcurves}
+        parts.append(str(obj.rotation_mode))
+        for prop in ("location", "rotation_euler", "rotation_quaternion",
+                     "rotation_axis_angle", "scale"):
+            for i, v in enumerate(getattr(obj, prop)):
+                if (prop, i) not in keyed:
+                    parts.append(round(float(v), 5))
+    else:
+        parts += [round(float(v), 5) for row in obj.matrix_basis for v in row]
+    return tuple(parts)
 
 
 def schedule_param_apply(op_id, key, value):
@@ -1788,9 +2033,7 @@ def _param_tick():
             obj = bpy.data.objects.get(str(dob))
             if obj is None:
                 continue
-            mw = obj.matrix_world
-            sig = (tuple(round(v, 5) for v in mw.translation)
-                   + tuple(round(v, 5) for v in mw.to_quaternion()))
+            sig = _dir_object_signature(obj)
             prev = _EMPTY_WATCH.get(op.get("id"))
             _EMPTY_WATCH[op["id"]] = sig
             if prev is not None and prev != sig:
@@ -1872,7 +2115,7 @@ def _fixlist_tick():
     Draw may only read; every mutation (NLA migration, collection rebuild)
     happens here.  Stale = op log revision moved ahead of the list, or the
     list is empty while the rig exists (fresh file)."""
-    global _LAST_FIXLIST
+    global _LAST_FIXLIST, _IN_SYNC, _FIXLIST_SYNCED
     _LAST_FIXLIST = time.time()
     try:
         scene = bpy.context.scene
@@ -1881,11 +2124,25 @@ def _fixlist_tick():
         settings = getattr(scene, "mocap_doctor", None)
         if settings is None or not settings.initialized:
             return FIXLIST_INTERVAL
+        rig = _rig_armature(settings, scene)
+        key = (scene.as_pointer(), rig.name if rig is not None else None,
+               str(_data_dir(settings)))
+        # 空列表只在"这个文件/骨架/日志目录还没同步过"时算过期——以前列表为空时
+        # 条件恒真，每秒重建一次并写场景属性，每秒把数据版本号 +1（"外部改动"）
         stale = (int(settings.agent_fixes_rev) != int(settings.agent_ops_rev)
-                 or (len(settings.agent_fixes) == 0
-                     and _rig_armature(settings, scene) is not None))
+                 or (len(settings.agent_fixes) == 0 and rig is not None
+                     and key != _FIXLIST_SYNCED))
         if stale:
-            ensure_layout(settings, scene)
+            # 先把还没求值的改动（用户刚做的编辑）在标志外求值掉，照常记版本
+            bpy.context.view_layer.update()
+            # 镜像场景状态不是编辑：期间（含把这些写入求值掉的 update）不记版本
+            _IN_SYNC = True
+            try:
+                ensure_layout(settings, scene)
+                _FIXLIST_SYNCED = key
+                bpy.context.view_layer.update()
+            finally:
+                _IN_SYNC = False
     except Exception as exc:  # noqa: BLE001 - a timer must never die
         _STATUS["last_error"] = f"fixlist: {exc!r}"
     return FIXLIST_INTERVAL
@@ -1893,8 +2150,20 @@ def _fixlist_tick():
 
 def _on_file_loaded(*_args):
     """A file load can outlive the startup registration - re-arm the timer."""
+    global _STORE, _STORE_EPOCH, _FIXLIST_SYNCED
     _PARAM_PENDING.clear()
     _EMPTY_WATCH.clear()       # 新文件里旧签名无意义
+    _FIXLIST_SYNCED = None
+    # 内存里的信号库属于上一个文件（恢复检查点 = 重新打开文件）：作废，下次读
+    # 按新文件的基底指纹决定用缓存还是重烘
+    _STORE = None
+    _STORE_EPOCH += 1
+    try:
+        agent_anatomy.reset_caches()     # 掌心/铰链标定是"这个文件、这套骨架"的（审查 M21）
+        from . import agent_view
+        agent_view._REST_SIGN.clear()
+    except Exception:
+        pass
     try:
         _data_dir(_settings()[1])   # 文件挪机器后先自愈日志路径
     except Exception:
@@ -1932,11 +2201,19 @@ def _bump_ops_rev_from(settings):
         pass
 
 
+def _same_float(a, b) -> bool:
+    return abs(float(a) - float(b)) <= 1e-6 * max(1.0, abs(float(b)))
+
+
 def sync_fixes_list(settings, scene=None) -> int:
     """Rebuild the panel's fix list from op log + live NLA state.
 
     Values already shown are preserved by op_id, so a rebuild never fights the
-    slider the user is dragging (drags do not touch agent_ops_rev)."""
+    slider the user is dragging (drags do not touch agent_ops_rev).  It mirrors
+    the scene - it must not edit it: an unchanged list is not rewritten, and
+    力度/静音 are written quietly (their update callbacks re-write the strip
+    and frame_set, which the server counted as an external edit → E_STALE for
+    every other agent, once per second while the list was empty)."""
     scene = scene or bpy.context.scene
     rig = _rig_armature(settings, scene)
     if rig is None:
@@ -1952,38 +2229,60 @@ def sync_fixes_list(settings, scene=None) -> int:
     coll = settings.agent_fixes
     keep = {item.op_id: (item.exponent, item.muted, item.selected)
             for item in coll}
-    active_id = (coll[settings.agent_fix_index].op_id
-                 if 0 <= settings.agent_fix_index < len(coll) else "")
-    coll.clear()
+    want = []
     for row in rows:
-        item = coll.add()
-        item.op_id = row["op_id"] or ""
-        item.label = (row.get("label")
-                      or (f"{row['frames'][0]}-{row['frames'][1]} {row['tool']}"
-                          if row.get("frames")
-                          else f"{row['tool']} {row['strip']}"))
-        o = log.get(item.op_id) or {}
+        op_id = row["op_id"] or ""
+        label = (row.get("label")
+                 or (f"{row['frames'][0]}-{row['frames'][1]} {row['tool']}"
+                     if row.get("frames")
+                     else f"{row['tool']} {row['strip']}"))
+        o = log.get(op_id) or {}
         tags = ([str(o["owner"])] if o.get("owner") else []) + (["源已变,需reapply"] if o.get("stale") else [])
         if tags:
-            item.label = f"{item.label} · {' · '.join(tags)}"
-        item.strip = row.get("strip") or ""
-        item.track = row.get("track") or ""
-        item.status = row.get("status") or ""
-        item.alive = bool(row.get("alive"))
-        item.frames = f"{row['frames'][0]}-{row['frames'][1]}" if row.get("frames") else ""
-        prev = keep.get(item.op_id)
+            label = f"{label} · {' · '.join(tags)}"
+        prev = keep.get(op_id)
         if prev is not None and not row.get("alive"):
-            item.exponent, item.muted = prev[0], prev[1]   # 丢失行：保住调过的值
+            exponent, muted = prev[0], prev[1]   # 丢失行：保住调过的值
         else:
-            item.exponent = float(row.get("exponent", 1.0) or 1.0)
-            item.muted = bool(row.get("muted"))
-        item.selected = bool(prev[2]) if prev is not None else False
-    settings.agent_fixes_rev = int(settings.agent_ops_rev)
-    if active_id:
-        for i, item in enumerate(coll):
-            if item.op_id == active_id:
-                _props.set_quietly(settings, "agent_fix_index", i)
-                break
+            exponent = float(row.get("exponent", 1.0))   # 0 = 力度静音，别显示成 1
+            muted = bool(row.get("muted"))
+        want.append({
+            "op_id": op_id, "label": label,
+            "strip": row.get("strip") or "", "track": row.get("track") or "",
+            "status": row.get("status") or "", "alive": bool(row.get("alive")),
+            "frames": (f"{row['frames'][0]}-{row['frames'][1]}"
+                       if row.get("frames") else ""),
+            "exponent": exponent, "muted": muted,
+            "selected": bool(prev[2]) if prev is not None else False,
+        })
+
+    def _same_row(item, w):
+        return (item.op_id == w["op_id"] and item.label == w["label"]
+                and item.strip == w["strip"] and item.track == w["track"]
+                and item.status == w["status"] and bool(item.alive) == w["alive"]
+                and item.frames == w["frames"] and bool(item.muted) == w["muted"]
+                and bool(item.selected) == w["selected"]
+                and _same_float(item.exponent, w["exponent"]))
+
+    if len(coll) != len(want) or not all(_same_row(i, w) for i, w in zip(coll, want)):
+        active_id = (coll[settings.agent_fix_index].op_id
+                     if 0 <= settings.agent_fix_index < len(coll) else "")
+        coll.clear()
+        for w in want:
+            item = coll.add()
+            for name in ("op_id", "label", "strip", "track", "status", "alive",
+                         "frames"):
+                setattr(item, name, w[name])
+            _props.set_quietly(item, "exponent", w["exponent"])
+            _props.set_quietly(item, "muted", w["muted"])
+            _props.set_quietly(item, "selected", w["selected"])
+        if active_id:
+            for i, item in enumerate(coll):
+                if item.op_id == active_id:
+                    _props.set_quietly(settings, "agent_fix_index", i)
+                    break
+    if int(settings.agent_fixes_rev) != int(settings.agent_ops_rev):
+        settings.agent_fixes_rev = int(settings.agent_ops_rev)
     if settings.agent_fix_index >= len(coll):
         _props.set_quietly(settings, "agent_fix_index", max(0, len(coll) - 1))
     return len(coll)

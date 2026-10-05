@@ -24,6 +24,8 @@ PORT = int(os.environ.get("MCD_AGENT_PORT", "6211"))
 
 def call(tool: str, args: dict | None = None, timeout: float = 120.0) -> dict:
     req = {"id": 1, "tool": tool, "args": args or {}}
+    if os.environ.get("MCD_AGENT_TOKEN"):        # 服务端设了 token 才需要（默认关）
+        req["token"] = os.environ["MCD_AGENT_TOKEN"]
     with socket.create_connection((HOST, PORT), timeout=timeout) as sock:
         sock.sendall((json.dumps(req) + "\n").encode("utf-8"))
         parts = []

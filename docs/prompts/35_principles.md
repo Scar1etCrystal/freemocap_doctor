@@ -16,6 +16,9 @@
   "main_bone":"upper_arm_fk.R","brief":true}'
 ```
 - `"brief":true` 去掉逐帧速度序列（约 6 KB）——本剧本只看 `main` / `suggest` / `vs_baseline`，复测也带上它。
+- **先找准是哪一下**（2026-10-04 Haiku 实测：任务说"第 490 帧左手出拳"，它用 [440,520] 分析，挑中了 473 帧那一下更快的回收
+  动作，预备加错了地方）。只给了一个帧号 N 时：`frame_range` 取 **[N−12, N+25]**，确认回包 `main.peak_frame` 在 N±8 以内；
+  不在就把窗口起点挪到被挑中那一下的 `stop_frame` 之后再跑。之后的写入用这次回包的 `suggest.*.args`（钉好了 onset/stop）。
 - **显式给 `main_bone`**（主通道 = 动作的主角骨）。不给时自动选峰速最大的骨——这份数据是舞蹈，
   手几乎一直在转，自动选到手往往不对。任务块写了 main_bone 就用它；只写了起动/停止帧，就选让
   `main.onset_frame`/`stop_frame` 与之吻合（±1 帧）的骨——一般挥臂类是 `upper_arm_fk.*`、甩小臂是
