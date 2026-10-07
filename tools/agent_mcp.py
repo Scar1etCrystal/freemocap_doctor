@@ -22,7 +22,7 @@ if hasattr(sys.stderr, "reconfigure"):
     sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
 HOST = "127.0.0.1"
-PORT = int(os.environ.get("MCD_AGENT_PORT", "6211"))
+PORT = int(os.environ.get("MCD_AGENT_PORT", "6207"))
 
 PROTOCOL_VERSION = "2024-11-05"
 SERVER_INFO = {"name": "mocap-doctor", "version": "1.6.0"}
@@ -36,6 +36,10 @@ TOOL_DEFS = [
     ("list_intervals", "按类型列出标注/可靠区间",
      {"kind": {"type": "string"}, "frame_range": {"type": "array"},
       "tag": {"type": "string"}}),
+    ("list_timeline_markers",
+     "用户在时间轴按 M 放的命名标记（「就是这一下」），每条附覆盖该帧的标注区间",
+     {"frame_range": {"type": "array"}, "name": {"type": "string"},
+      "with_intervals": {"type": "boolean"}}),
     ("describe", "摘要卡片：某区间/帧段各信号统计+前后对比+事件",
      {"target": {}, "channels": {"type": "array"},
       "context": {"type": "integer"}}),

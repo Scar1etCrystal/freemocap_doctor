@@ -106,6 +106,7 @@ ping → 读/探查（确定 scope 和修前基线）→ claim → 写（带 exp
 |---|---|---|---|
 | **快照类** | `describe` `get_series` `find_events` `compare` `snapshot` `bake_range` `get_joint_angles` `list_intervals` `validate` `get_overview` | **最初烘焙的原始动作**（npz 缓存），**修完不会变** | 了解原动作、找问题帧段 |
 | **实时类** | `probe_anatomy` `orient_report` `analyze_motion` `compare_motion` `chain_lag` `slide_report` `ground_report` `effect_check` | **当前可见姿态**（含所有修复） | **修后复测只能用这些** |
+| **场景类** | `conventions` `list_timeline_markers` | **场景本身的状态**（这份文件的约定、用户标的帧），不是姿态 | 开工先看；随时可读，不受修复影响 |
 
 快照里的腿部角色（`left_hip/left_knee/left_ankle` → thigh_fk/shin_fk）是 **FK 骨**：腿是 IK 时看不见（膝位置与视口差中位数
 4 cm、最大 24 cm），get_joint_angles/snapshot 会在 warnings 里提醒。看膝用 `probe_anatomy part=knee_front` / `orient_report`。
@@ -120,6 +121,7 @@ ping → 读/探查（确定 scope 和修前基线）→ claim → 写（带 exp
 | `probe_anatomy` | `part`：palm 掌心 / back_of_hand 手背 / finger_dir 指尖方向 / knuckle 指关节 / hand_axis 腕→指根（刚性，掌心修复的次轴） / sole 脚底 / instep 脚背 / toe 脚尖 / knee_front 膝盖（髌骨）朝向 / **elbow_front 肘尖（鹰嘴）朝向——不是肘窝，肘窝 = 它的反方向** / face 脸 / chest 胸 / pelvis 骨盆 / body_forward 躯干 / bone_axis；`side` `frame_range` `toward`（方向词 / 三元组 / **箭头空物体名**：取它的 +Z） (`bone`/`finger`) `max_frames`(默认 9) `view`(camera/viewer) | `err_inner_deg` `owner_bone` `confidence` `secondary_axis` `hold_pose_args`（可直接展开）；掌心/脚底看 `evidence.palm_source` / `sole_source`：`marker`（用户绑的箭头 MCD_palm.L 等，以它为准）或 `mesh`（目标网格标定）= 可信，`fingers` = 没标定成、按手指几何猜的（弯指时与可见掌心差几十度，**别修，报告**）；均匀采样 max_frames 帧，inner **只去掉首尾各一个采样点、不认识 blend**——所以修前修后都在**用户帧段**（有效区）上量，别用外扩后的写入窗；长段/快动作把 max_frames 调到 31 |
 | `orient_report` | `part` `side` `frame`/`frame_range` `view`(camera/viewer/both) `toward` | 人话：部位朝向相对镜头/视口/角色（"朝镜头偏画面右 20°、偏下 12°"）、在画面哪里、箭头在画面上指几点钟、画面左右是否与角色镜像；`toward` 给了附 `err_deg`。只读，验收仍以 probe 为准 |
 | `conventions` | `frame` | 这份文件的约定：帧号↔视频、单位、角色这一帧面朝哪、镜头/视口在角色哪一侧（`lr`）、每条肢体 IK/FK、标记清单。开工先跑 |
+| `list_timeline_markers` | `frame_range` `name`（子串）`with_intervals`（默认 true） | **用户在时间轴按 M 放的命名标记**——他说"就是这一下"时最精确的表达，比消息里的帧号可靠。每条附 `covered_by`（覆盖该帧的标注区间：contact.L/R、air、jitter.L/R），所以"出拳 505"到手就已经接上"那几帧左脚是 planted"。用户提到帧号之前**先跑一次**：他可能早标好了。没标记时 hint 会说下一步怎么做；`frame_range` 写错报 `E_RANGE` |
 | `render_view` | `frame` `view` `part` `side` `toward` `size` | 能看图的 agent 用：Workbench PNG（绿 = 标记，红 = 部位方向，蓝 = 目标），场景原样还原 |
 | `analyze_motion` | `bones`/`chain` `frame_range` `main_bone` (`onset_frame` `stop_frame` `baseline_op`=你的某个 op_id，结果多一节 `vs_baseline`=修后−该 op 之前) | `data.main`: onset/peak/stop 帧、`peak_speed`(°/帧)、`amplitude_deg`、`counter_move_deg`；每骨 `jitter_deg`；`data.suggest.<工具>.args` 可直接用（帧段若超出你的 scope 见 §4 第 10 条）。`truncated:true` 只表示速度序列按 max_points 抽样，数字不受影响；只要数字时加 `"brief":true`（去掉速度序列，省约 6 KB） |
 | `compare_motion` | `op_id`（验收某个 motion_copy，最省事）或 `a:{bones/chain, frame_range}` `b:{…}` `mirror` `bone_map` `space` `trim` | `err_inner_deg`（复制/镜像是否到位） |

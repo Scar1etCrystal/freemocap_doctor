@@ -213,5 +213,61 @@ class JointAngleTests(unittest.TestCase):
         self.assertAlmostEqual(ja["swing_deg"][0], 0.0, places=3)
 
 
+class TimelineMarkerTests(unittest.TestCase):
+    """list_timeline_markers: the user's M-key markers as anchor frames."""
+
+    INTERVALS = {
+        "contact.L": [{"id": 0, "start": 480, "end": 520}],
+        "air": [{"id": 0, "start": 614, "end": 628}],
+        "jitter.L": [{"id": 0, "start": 490, "end": 560}],
+    }
+    MARKERS = [
+        {"name": "落地", "frame": 620},
+        {"name": "出拳", "frame": 505},
+        {"name": "", "frame": 100},
+    ]
+
+    def test_sorted_and_joined_to_intervals(self):
+        env = agent_query.list_timeline_markers(
+            self.MARKERS, self.INTERVALS, with_intervals=True)
+        items = env["data"]["items"]
+        self.assertEqual([i["frame"] for i in items], [100, 505, 620])
+        self.assertEqual(items[0]["covered_by"], [])
+        # 505 sits inside both the left-hand range and the planted span
+        kinds = {c["kind"] for c in items[1]["covered_by"]}
+        self.assertEqual(kinds, {"contact.L", "jitter.L"})
+        self.assertEqual(items[2]["covered_by"], [{"kind": "air", "start": 614, "end": 628}])
+        self.assertIn("505 出拳", env["summary"])
+
+    def test_frame_range_and_name_filters(self):
+        env = agent_query.list_timeline_markers(
+            self.MARKERS, self.INTERVALS, frame_range=[500, 510])
+        self.assertEqual([i["frame"] for i in env["data"]["items"]], [505])
+        env = agent_query.list_timeline_markers(self.MARKERS, None, name="出拳")
+        self.assertEqual([i["frame"] for i in env["data"]["items"]], [505])
+        # filtered-to-nothing says so instead of looking like "no markers"
+        env = agent_query.list_timeline_markers(self.MARKERS, None, name="没有这个")
+        self.assertEqual(env["data"]["total"], 0)
+        self.assertIn("过滤", env["hint"])
+        self.assertTrue(env["warnings"])
+
+    def test_no_markers_hint_points_at_the_next_step(self):
+        env = agent_query.list_timeline_markers([], None)
+        self.assertEqual(env["data"]["total"], 0)
+        self.assertIn("analyze_motion", env["hint"])
+        self.assertFalse(env["warnings"])
+
+    def test_with_intervals_off(self):
+        env = agent_query.list_timeline_markers(
+            self.MARKERS, self.INTERVALS, with_intervals=False)
+        self.assertNotIn("covered_by", env["data"]["items"][0])
+
+    def test_bad_frame_range_is_E_RANGE(self):
+        for bad in ([5], "505-560", [560, 505]):
+            with self.assertRaises(agent_query.AgentQueryError) as ctx:
+                agent_query.list_timeline_markers(self.MARKERS, None, frame_range=bad)
+            self.assertEqual(ctx.exception.code, "E_RANGE")
+
+
 if __name__ == "__main__":
     unittest.main()

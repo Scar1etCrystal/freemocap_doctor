@@ -233,6 +233,77 @@ def list_intervals(
         else "")
 
 
+def list_timeline_markers(
+    markers: Sequence[Mapping[str, Any]],
+    intervals: Mapping[str, Sequence[Mapping[str, Any]]] | None = None,
+    frame_range: Sequence[int] | None = None,
+    name: str | None = None,
+    with_intervals: bool = True,
+) -> dict:
+    """The user's own timeline markers (Blender ``M`` key) as anchor frames.
+
+    A user pointing at "就是这一下" is far more precise with a named marker on
+    the timeline than with a frame number typed into a message, and unlike a
+    message it survives as long as the file does.  Each marker is reported
+    together with the annotation intervals covering that frame, so "出拳 505"
+    arrives already joined to "那几帧左脚是 planted、在左手区间里" - the
+    agent does not have to re-derive what the user was pointing at.
+    """
+
+    a = b = None
+    if frame_range is not None:
+        if not isinstance(frame_range, (list, tuple)) or len(frame_range) != 2:
+            raise AgentQueryError(
+                f"frame_range 要写成 [起, 止]，收到 {frame_range!r}",
+                code="E_RANGE", fix='例："frame_range":[505,560]')
+        a, b = int(frame_range[0]), int(frame_range[1])
+        if a > b:
+            raise AgentQueryError(f"帧范围 {a}>{b} 颠倒", code="E_RANGE")
+
+    needle = str(name).lower() if name else None
+    items: list[dict[str, Any]] = []
+    for entry in markers:
+        try:
+            frame = int(entry.get("frame"))
+        except (TypeError, ValueError):
+            continue
+        label = str(entry.get("name") or "")
+        if needle is not None and needle not in label.lower():
+            continue
+        if a is not None and not (a <= frame <= b):
+            continue
+        row: dict[str, Any] = {"name": label, "frame": frame}
+        if with_intervals and intervals:
+            row["covered_by"] = [
+                {"kind": kind, "start": int(iv["start"]), "end": int(iv["end"])}
+                for kind, seq in intervals.items()
+                for iv in seq
+                if int(iv["start"]) <= frame <= int(iv["end"])
+            ]
+        items.append(row)
+    items.sort(key=lambda row: row["frame"])
+    shown = items[:MAX_LIST_ITEMS]
+
+    if not markers:
+        hint = ("时间轴上没有标记。用户按 M 键放命名标记来指「就是这一下」；"
+                "没有标记就按他给的帧号用 analyze_motion 在 [N−12, N+25] 上找 onset/stop")
+    elif not items:
+        hint = "有标记但被 frame_range / name 过滤掉了：去掉过滤再看"
+    else:
+        hint = ("标记帧 = 用户指的那一下；写入窗用 analyze_motion 在该帧附近取 "
+                "onset/stop，别把标记帧直接当窗口端点")
+    preview = "、".join(
+        f"{row['frame']}{(' ' + row['name']) if row['name'] else ''}"
+        for row in shown[:6])
+    return _env(
+        f"{len(items)} 个时间轴标记" + (f"：{preview}" if items else ""),
+        {"items": shown, "total": len(items), "shown": len(shown)},
+        warnings=[] if (items or not markers) else ["标记都被 frame_range / name 过滤掉了"],
+        truncated=len(items) > len(shown),
+        hint=hint,
+    )
+
+
 def _flags(store: DataStore, start: int, end: int) -> list:
     """Pre-judged anomalies for the window - one line each."""
     out = []

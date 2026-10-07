@@ -845,6 +845,80 @@ def _evaluated_mesh_min_z(
             evaluated.to_mesh_clear()
 
 
+_BOOT_GROUP_TEMPLATES = ("足首D.{s}", "足先EX.{s}")
+
+
+def boot_vertex_indices(mesh_object: Any, sides: Sequence[str] = ("L", "R")) -> dict[str, list[int]] | None:
+    """Per-side vertex indices of the boot (MMD ``足首D`` / ``足先EX``, weight > 0.5).
+
+    The measured truth for "where is this foot's sole" during a planted span.
+    Returns None when the mesh is not an MMD-named model or the groups are
+    missing, so callers fall back to the bind-pose sole vector instead of
+    guessing.
+    """
+
+    if mesh_object is None or getattr(mesh_object, "type", "") != "MESH":
+        return None
+    vertices = getattr(getattr(mesh_object, "data", None), "vertices", None)
+    if not vertices:
+        return None
+    groups = {group.name: group.index for group in mesh_object.vertex_groups}
+    out: dict[str, list[int]] = {}
+    for side in sides:
+        wanted = {
+            groups[name.format(s=side)]
+            for name in _BOOT_GROUP_TEMPLATES
+            if name.format(s=side) in groups
+        }
+        if not wanted:
+            return None
+        indices = [
+            vertex.index
+            for vertex in vertices
+            if any(entry.group in wanted and entry.weight > 0.5 for entry in vertex.groups)
+        ]
+        if not indices:
+            return None
+        out[side] = indices
+    return out
+
+
+def evaluated_boot_min_z(
+    mesh_object: Any,
+    depsgraph: Any,
+    boot_indices: Mapping[str, Sequence[int]],
+) -> dict[str, float]:
+    """Lowest evaluated world Z of each side's boot vertices at the current frame."""
+
+    import numpy as np
+
+    evaluated = mesh_object.evaluated_get(depsgraph)
+    mesh = None
+    try:
+        mesh = evaluated.to_mesh()
+        if mesh is None or not mesh.vertices:
+            return {}
+        n = len(mesh.vertices)
+        co = np.empty(n * 3, dtype=np.float32)
+        mesh.vertices.foreach_get("co", co)
+        co = co.reshape(n, 3)
+        m = np.array(evaluated.matrix_world, dtype=np.float32)
+        z = (co[:, 0] * m[2, 0]).astype(np.float64)
+        z = z + (co[:, 1] * m[2, 1]).astype(np.float64)
+        z = z + (co[:, 2] * m[2, 2]).astype(np.float64)
+        z = z + np.float64(m[2, 3] * np.float32(1.0))
+        z = z.astype(np.float32)
+        out: dict[str, float] = {}
+        for side, indices in boot_indices.items():
+            usable = [i for i in indices if 0 <= i < n]
+            if usable:
+                out[side] = float(z[usable].min())
+        return out
+    finally:
+        if mesh is not None:
+            evaluated.to_mesh_clear()
+
+
 def repair_mesh_floor_lift_v3_safe(
     scene: Any,
     model_root: Any,
@@ -1410,6 +1484,7 @@ def _settle_pelvis_for_reach(
     pelvis_bone: str,
     ankle_bones: Mapping[str, str],
     grounded_height_for: Any,
+    anchor_z: Mapping[str, Mapping[int, float]] | None = None,
     correction_max: float,
     smooth_frames: int,
     frame_start: int,
@@ -1553,17 +1628,23 @@ def _settle_pelvis_for_reach(
         report.update({"status": "skipped_no_leg_measure"})
         return report
 
-    # Anchored planted foot targets: mid-segment XY, grounded ankle height
-    # under the anchor's own rotation (rolled feet keep their planted
-    # height instead of being flattened to a flat-sole target).
+    # Anchored planted foot targets: mid-segment XY, grounded ankle height.
+    # `anchor_z` carries the measured boot-mesh grounding (same source as the
+    # ankle lock, so the reach solve and the lock agree); without it the
+    # bind-pose sole vector grounds the anchor under its own rotation.
     anchor_target: dict[str, dict[int, Any]] = {"L": {}, "R": {}}
     for side in ("L", "R"):
         for segment in segments[side]:
-            anchor_matrix = sweep[segment["anchor_frame"]][side]["ankle_matrix"]
+            anchor_frame = int(segment["anchor_frame"])
+            anchor_matrix = sweep[anchor_frame][side]["ankle_matrix"]
             target_pos = anchor_matrix.translation.copy()
-            grounded = grounded_height_for(side, anchor_matrix)
-            if grounded is not None:
-                target_pos.z = grounded
+            measured_z = (anchor_z or {}).get(side, {}).get(anchor_frame)
+            if measured_z is not None:
+                target_pos.z = float(measured_z)
+            else:
+                grounded = grounded_height_for(side, anchor_matrix)
+                if grounded is not None:
+                    target_pos.z = grounded
             for frame in range(
                 segment["frames"][0], segment["frames"][1] + 1
             ):
@@ -1826,6 +1907,8 @@ def stabilize_planted_feet(
     pelvis_smooth_frames: int = PELVIS_SMOOTH_FRAMES,
     sole_offset: float = 0.0,
     sole_dirs: Mapping[str, Any] | None = None,
+    ground_mesh: Any = None,
+    ground_clearance: float = 0.0015,
     floor_z: float = 0.0,
     ankle_bones: Mapping[str, str] = DEFAULT_ANKLE_BONES,
     foot_bones: Mapping[str, str] = DEFAULT_FOOT_IK,
@@ -1965,11 +2048,72 @@ def stabilize_planted_feet(
 
     view_layer = current_view_layer()
 
-    # Planted anchors are grounded: contact means the sole touches the floor,
-    # so the anchor's ankle height becomes the planted height under its own
-    # rotation (sole-contact vector projected down), not wherever the
-    # retarget left it floating.  Without sole geometry we keep the anchor's
-    # own height rather than guess one.
+    # Planted anchors are grounded: contact means the sole touches the floor, so
+    # a foot the retarget left floating has to come down.  How far down is a
+    # MEASUREMENT, not a model: `sole_dirs` is one bind-pose vertex per foot, and
+    # the boot is skinned across 足首D + 足先EX, so a pitched foot's real sole
+    # hangs ~2 cm lower than that single point predicts - grounding from it
+    # pushed EVERY planted segment down (measured: all 63 segments, -7..-65 mm,
+    # landing the boot 17-24 mm under the floor).
+    #
+    # Instead, at each segment's anchor frame measure the real boot mesh and
+    # solve the ABSOLUTE ankle height that puts that sole on the floor:
+    #     anchor_z = ankle_z + (floor + clearance - boot_min)
+    # Absolute, not a delta: the reach pass below moves the torso ~4 cm, and a
+    # delta measured before it lands 4 cm off at both consumers.
+    # Grounded segments get their own height back (no move); floating ones come
+    # down by exactly their clearance.  63 mesh evaluations, ~0.2 s.
+    ground_target_z = float(floor_z) + float(ground_clearance)
+    ground_boot: dict[str, list[int]] | None = None
+    if ground_mesh is not None and bpy is not None:
+        ground_boot = boot_vertex_indices(ground_mesh, ("L", "R"))
+
+    def _measure_anchor_z():
+        """Absolute grounded ankle height per (side, anchor frame), from the mesh.
+
+        Read live rather than cached: the boot's lowest vertex does NOT travel
+        1:1 with the ankle (it is skinned across 足首D + 足先EX, and the leg's
+        joint angles change when the reach pass lowers the torso), so the
+        measurement is only valid for the pose it was taken in.  Called once
+        before the reach pass (for its foot targets) and once after it - the
+        second one is what the ankle lock grounds to, and it is why the foot
+        lands on the floor instead of 4.5 mm under it.
+        """
+
+        result: dict[str, dict[int, float]] = {"L": {}, "R": {}}
+        if ground_boot is None:
+            return result
+        with preserve_scene_frame(scene, view_layer):
+            for side in ("L", "R"):
+                bone_name = ankle_bones.get(side)
+                if bone_name is None:
+                    continue
+                for segment in segments[side]:
+                    anchor_frame = int(segment["anchor_frame"])
+                    set_scene_frame(scene, anchor_frame, view_layer)
+                    depsgraph = bpy.context.evaluated_depsgraph_get()
+                    minima = evaluated_boot_min_z(
+                        ground_mesh, depsgraph, ground_boot
+                    )
+                    measured_sole = minima.get(side)
+                    if measured_sole is None:
+                        continue
+                    ankle = pose_bone_point_world(
+                        sample_armature.evaluated_get(depsgraph), bone_name, "head"
+                    )
+                    if ankle is None:
+                        continue
+                    result[side][anchor_frame] = float(ankle.z) + (
+                        ground_target_z - float(measured_sole)
+                    )
+        return result
+
+    anchor_z = _measure_anchor_z()
+
+    # Fallback when the boot cannot be measured (non-MMD naming, no groups):
+    # the old bind-pose sole vector, which grounds under the anchor's own
+    # rotation.  Without any sole geometry we keep the anchor's own height
+    # rather than guess one.
     def _grounded_height(side, anchor_matrix):
         direction = sole_dirs.get(side) if sole_dirs else None
         if direction is not None:
@@ -1981,8 +2125,12 @@ def stabilize_planted_feet(
             return float(floor_z) + float(sole_offset)
         return None
 
-    def _anchor_pos(anchor_matrix, side):
+    def _anchor_pos(anchor_matrix, side, anchor_frame):
         pos = anchor_matrix.translation.copy()
+        measured_z = anchor_z[side].get(int(anchor_frame))
+        if measured_z is not None:
+            pos.z = float(measured_z)
+            return pos
         grounded = _grounded_height(side, anchor_matrix)
         if grounded is not None:
             pos.z = grounded
@@ -2002,6 +2150,7 @@ def stabilize_planted_feet(
             pelvis_bone=str(pelvis_bone),
             ankle_bones=ankle_bones,
             grounded_height_for=_grounded_height,
+            anchor_z=anchor_z,
             correction_max=float(pelvis_correction_max),
             smooth_frames=int(pelvis_smooth_frames),
             frame_start=start,
@@ -2010,6 +2159,16 @@ def stabilize_planted_feet(
         )
     else:
         report["pelvis_solve"] = {"status": "disabled"}
+
+    # The reach pass just changed the leg's joint angles, so the boot's lowest
+    # vertex moved relative to the ankle.  Re-measure now that the pose is
+    # final; this reading is what the ankle lock grounds to.  (The write path
+    # below can only run ONCE per call - a second pass re-enters the fcurve
+    # writes that corrupt Blender 4.5's guarded allocator - so the correction
+    # has to be computed right the first time, not iterated.)
+    settled_anchor_z = _measure_anchor_z()
+    if any(settled_anchor_z[side] for side in ("L", "R")):
+        anchor_z = settled_anchor_z
 
     def _measure(frames_to_scan):
         data: dict[int, dict[str, Any]] = {}
@@ -2057,7 +2216,9 @@ def stabilize_planted_feet(
                 if anchor_matrix is None:
                     continue
                 anchor_quat = anchor_matrix.to_quaternion()
-                anchor_loc = _anchor_pos(anchor_matrix, side)
+                anchor_loc = _anchor_pos(
+                    anchor_matrix, side, segment["anchor_frame"]
+                )
                 for frame in range(
                     segment["frames"][0], segment["frames"][1] + 1
                 ):
@@ -2101,7 +2262,9 @@ def stabilize_planted_feet(
                 if anchor_matrix is None:
                     continue
                 anchor_quat = anchor_matrix.to_quaternion()
-                anchor_loc = _anchor_pos(anchor_matrix, side)
+                anchor_loc = _anchor_pos(
+                    anchor_matrix, side, segment["anchor_frame"]
+                )
                 for frame, weight in segment["weights"].items():
                     sample = measured.get(frame, {}).get(side, {})
                     ankle_matrix = sample.get("ankle")

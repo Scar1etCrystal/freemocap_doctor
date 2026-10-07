@@ -5,7 +5,7 @@
     python agent_client.py fix_ground '{"side":"L","loc_path":"...","frame_range":[100,130],"mode":"lift"}'
 
 Prints the JSON response.  Use --pretty for indented output.
-Set MCD_AGENT_PORT env var to override the default port 6211.
+Set MCD_AGENT_PORT env var to override the default port 6207.
 """
 
 import json
@@ -19,7 +19,7 @@ if hasattr(sys.stderr, "reconfigure"):
     sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
 HOST = "127.0.0.1"
-PORT = int(os.environ.get("MCD_AGENT_PORT", "6211"))
+PORT = int(os.environ.get("MCD_AGENT_PORT", "6207"))
 
 
 def call(tool: str, args: dict | None = None, timeout: float = 120.0) -> dict:

@@ -8,6 +8,8 @@
   Q3   例子真的做到了文档说的事：掌心朝镜头、左膝朝前 err_inner < 5°；contact.L:13 drift < 1 mm；
        motion_copy compare_motion < 0.05°；ab_toggle 两次后回到"修复生效"
   Q4   fixture 文件没被写（save 只校验参数、绝不执行）
+  Q5   list_timeline_markers 读场景里的 M 键标记、接上覆盖帧的标注区间、能过滤、反向帧段报 E_RANGE
+       （标记在内存里建、跑完删掉，不动共享 fixture）
 """
 import json
 import os
@@ -123,6 +125,35 @@ check("Q3 the examples do what the doc says: palm→camera & knee→forward err_
 
 check("Q4 the fixture file was never written (no save)", os.path.getmtime(bpy.data.filepath) == blend_mtime0,
       f"mtime {blend_mtime0} → {os.path.getmtime(bpy.data.filepath)}")
+
+# Q5: the bridge end of list_timeline_markers - reads the real scene and joins
+# each marker to the annotation intervals covering that frame.  Markers are
+# created in memory and removed again, so the shared fixture stays untouched.
+sc = bpy.context.scene
+_keep = [(m.name, m.frame) for m in sc.timeline_markers]
+for m in list(sc.timeline_markers):
+    sc.timeline_markers.remove(m)
+try:
+    sc.timeline_markers.new("出拳", frame=505)
+    sc.timeline_markers.new("落地", frame=620)
+    q5 = call("list_timeline_markers")
+    items = (q5.get("data") or {}).get("items") or []
+    frames = [i["frame"] for i in items]
+    kinds = {c["kind"] for i in items for c in (i.get("covered_by") or [])}
+    empty = call("list_timeline_markers", frame_range=[900, 950])
+    bad = call("list_timeline_markers", frame_range=[560, 505])
+    check("Q5 list_timeline_markers reads the scene, joins covering intervals, "
+          "filters, and rejects a reversed range with E_RANGE",
+          q5.get("ok") and frames == [505, 620] and kinds
+          and empty.get("ok") and (empty.get("data") or {}).get("total") == 0
+          and not bad.get("ok") and (bad.get("error") or {}).get("code") == "E_RANGE",
+          f"frames={frames} kinds={sorted(kinds)} empty={(empty.get('data') or {}).get('total')} "
+          f"bad={(bad.get('error') or {}).get('code')}")
+finally:
+    for m in list(sc.timeline_markers):
+        sc.timeline_markers.remove(m)
+    for _name, _frame in _keep:
+        sc.timeline_markers.new(_name, frame=_frame)
 
 fl = [x for x in RESULTS if not x[1]]
 print(f"\n==== {len(RESULTS) - len(fl)}/{len(RESULTS)} PASS ====")

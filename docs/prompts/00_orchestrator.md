@@ -18,8 +18,9 @@ bash <套件>/tools/mcd.sh server-start <工作文件.blend>  # 起 headless 服
   （check 会把场景里用户自己的 SINGLE_ARROW 也体检一遍：绑错侧、顶点父级在另一只手、没父级、带关键帧都报 error + fix；
   status=ok 的用户箭头 `action:"adopt"` 收编）；没有就 `action:"create"`（默认 palm/sole/knee/elbow）建好，告诉用户在视口里
   过一眼。膝/肘的标记是刚性的（绑小腿/前臂，直腿也有定义）；想看当帧凸出角平分线才用 `bake`（`MCD_bake_*`）。
-- 用户只给了模糊说法（"左手那一下"、"膝盖别内扣"）：`orient_report` 把现状翻成人话、对着用户的话核对一遍再派单；
-  能看图就 `render_view` 渲一张给自己/用户看。
+- 用户只给了模糊说法（"左手那一下"、"膝盖别内扣"）：先 `list_timeline_markers` 看**用户在时间轴上标了什么**
+  （他说的"就是这一下"通常已经用 M 键放好命名标记，每条还带覆盖该帧的标注区间）；再 `orient_report` 把现状翻成人话、
+  对着用户的话核对一遍再派单；能看图就 `render_view` 渲一张给自己/用户看。
 
 ## 1. 拆任务（每条 = 一个剧本 + 一个 scope）
 

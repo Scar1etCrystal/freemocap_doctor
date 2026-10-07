@@ -37,7 +37,7 @@ from . import (agent_anatomy, agent_bake, agent_claims, agent_fx, agent_io,
              agent_ops, agent_query)
 
 HOST = "127.0.0.1"
-PORT = 6211
+PORT = int(os.environ.get("MCD_AGENT_PORT", "6207"))
 TIMER_INTERVAL = 0.07
 BUSY_INTERVAL = 0.005     # GUI timer: re-poll quickly right after serving
 _PUMP_BUSY = False
@@ -625,6 +625,27 @@ def _tool_overview(_ctx, force_refresh=False, **_):
 def _tool_list_intervals(_ctx, kind=None, frame_range=None, tag=None, **_):
     return agent_query.list_intervals(
         get_store(), kind=kind, frame_range=frame_range, tag=tag)
+
+
+def _tool_list_timeline_markers(_ctx, frame_range=None, name=None,
+                                with_intervals=True, **_):
+    """The user's M-key timeline markers, joined to the covering intervals.
+
+    Reads the live scene (markers are scene state, not action data), so it
+    works before any bake and stays correct while the user keeps adding them.
+    """
+    scene = _ctx.get("scene")
+    markers = [
+        {"name": str(getattr(marker, "name", "") or ""),
+         "frame": int(getattr(marker, "frame", 0))}
+        for marker in (getattr(scene, "timeline_markers", None) or ())
+    ]
+    intervals = None
+    if with_intervals and scene is not None:
+        intervals = agent_io.scene_intervals(scene)
+    return agent_query.list_timeline_markers(
+        markers, intervals, frame_range=frame_range, name=name,
+        with_intervals=bool(with_intervals))
 
 
 def _tool_describe(_ctx, target=None, channels=None, context=15,
@@ -1507,6 +1528,7 @@ TOOLS = {
     "ping": _tool_ping,
     "get_overview": _tool_overview,
     "list_intervals": _tool_list_intervals,
+    "list_timeline_markers": _tool_list_timeline_markers,
     "describe": _tool_describe,
     "get_series": _tool_get_series,
     "find_events": _tool_find_events,
@@ -1762,7 +1784,7 @@ def _watchdog():
     return WATCHDOG_INTERVAL if _running else None
 
 
-# A web page can POST to 127.0.0.1:6211 (text/plain needs no CORS preflight):
+# A web page can POST to 127.0.0.1:6207 (text/plain needs no CORS preflight):
 # the body line would be executed - save to any path, eval_bpy.  The JSON-lines
 # protocol never starts with an HTTP request line, so such a connection is
 # dropped before its body is read.  An optional shared token (off by default,

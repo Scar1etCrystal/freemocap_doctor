@@ -34,6 +34,15 @@
 ```
 回包 `summary` 就是一句人话，比如"右掌心 @135：朝镜头，偏画面右 42°…；画面上指向右下（4 点钟）；朝角色前方偏左 59°"。
 
+用户说"第 N 帧那一下"之前，先看他有没有在时间轴上标好（他按 M 键放的命名标记）：
+```
+<套件>/tools/agent list_timeline_markers '{"agent_id":"<ME>"}'
+```
+回包 `summary` 形如"2 个时间轴标记：505 出拳、620 落地"；每条还带 `covered_by`＝覆盖那一帧的标注区间
+（contact.L/R、air、jitter.L/R），所以"出拳 505"到手就已经接上"那几帧左脚是 planted"。
+**标记帧是"用户指的那一下"，不是写入窗的端点**——仍要用 `analyze_motion` 在它附近取 onset/stop。
+没有标记时 hint 会说下一步怎么办，别自己猜帧号。
+
 ## 3. 用户的话 → 方向词（`toward` / `world_dir` 都收这些词，工具每帧现算）
 
 | 用户说 | 写成 | 说明 |
@@ -284,7 +293,7 @@ overlap 的 `frame_range` **就写用户帧段、不外扩**（它自己按延�
 2. **"朝前" ≠ [0,-1,0]**：角色会转身（这份数据里第 1 帧躯干与世界 −Y 差 66°）。用 `"forward"`；给了世界向量时 warnings 会提醒。
 3. **"朝镜头" = `"camera"`**（从部位指向镜头）。用户在视口里看、说"朝我/朝屏幕" → `"viewer"`。
 4. **腿是 IK**：脚的位置/朝向改 `foot_ik.<侧>`，膝朝向用 `swivel`。`thigh_fk/shin_fk/foot_fk` 写了看不见（会被拒）；快照工具里的 `left_knee` 等腿部角色读的也是看不见的 FK 骨。
-5. **快照 vs 实时**：`describe/get_series/get_joint_angles/snapshot/validate/list_intervals/get_overview` 读的是**最初烘焙的原始动作**，修完不变——别拿它们复测。复测只用：`probe_anatomy` `orient_report` `analyze_motion` `compare_motion` `chain_lag` `slide_report` `ground_report` `effect_check`。
+5. **快照 vs 实时**：`describe/get_series/get_joint_angles/snapshot/validate/list_intervals/get_overview` 读的是**最初烘焙的原始动作**，修完不变——别拿它们复测。复测只用：`probe_anatomy` `orient_report` `analyze_motion` `compare_motion` `chain_lag` `slide_report` `ground_report` `effect_check`。`conventions` 和 `list_timeline_markers` 属**场景类**（读场景本身，不是姿态），随时可读。
 6. **err_inner_deg，不是 err_max_deg**：两端 taper 帧本来就没修到位。probe 用**用户帧段**量，别用外扩后的写入窗。
 7. **单位**：位置米，`slide_report`/`ground_report` 毫米；`rest_clearance` 米。
 8. **dry_run**：hold_pose、clean_jitter、restore_accent 和全部新工具（swivel、motion_copy、预备/跟随/过冲/重叠/time_warp、foot_lock）支持；fix_ground、solve_pelvis、apply_exemplar 不支持（会报错，不会偷偷写）。回包里没有 `dry_run:true` 就说明真写了。

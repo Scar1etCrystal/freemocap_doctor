@@ -1456,6 +1456,12 @@ def _run_foot_lock(context, settings):
         sole_dirs=core_target.sole_contact_offsets(
             armature, settings.target_mesh
         ),
+        # Grounding reference: the real boot mesh at each segment's anchor
+        # frame ("how far off the floor is it, move it that much"), not the
+        # bind-pose single-point sole vector, which is ~2 cm low and pushed
+        # every planted segment through the floor.
+        ground_mesh=settings.target_mesh,
+        ground_clearance=settings.target_clearance,
         # Same floor the ground_feet step pins to; without it the anchors
         # were grounded at Z=0 whatever 地面 Z said.
         floor_z=settings.target_floor_z,

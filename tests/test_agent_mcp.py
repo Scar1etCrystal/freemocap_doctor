@@ -44,12 +44,21 @@ def _free_port():
         return s.getsockname()[1]
 
 
-def _load_mcp(port):
-    os.environ["MCD_AGENT_PORT"] = str(port)
+def _load_mcp(port=None):
+    if port is None:
+        os.environ.pop("MCD_AGENT_PORT", None)
+    else:
+        os.environ["MCD_AGENT_PORT"] = str(port)
     spec = importlib.util.spec_from_file_location(
         "agent_mcp_under_test", os.path.join(HERE, "..", "tools", "agent_mcp.py"))
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
+    return mod
+
+
+def _check_default_port():
+    mod = _load_mcp(None)
+    check("default MCP port is the Windows-safe 6207", mod.PORT == 6207, mod.PORT)
     return mod
 
 
@@ -70,6 +79,7 @@ def check(name, ok, detail=""):
         fails.append(name)
 
 
+_check_default_port()
 port = _free_port()
 srv = socketserver.ThreadingTCPServer(("127.0.0.1", port), _Handler)
 srv.daemon_threads = True

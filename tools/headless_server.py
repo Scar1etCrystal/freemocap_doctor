@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""在后台 Blender 里起 agent socket 服务（127.0.0.1:6211）。
+"""在后台 Blender 里起 agent socket 服务（127.0.0.1:6207，MCD_AGENT_PORT 可覆盖）。
 
     blender -b work/fixture_1499_3.blend --python tools/headless_server.py
 

@@ -1,6 +1,6 @@
 # MoCap Doctor · Agent 工具手册（subagent 提示词用）
 
-socket 服务：`127.0.0.1:6211`，JSON-lines，一问一答。客户端：
+socket 服务：`127.0.0.1:6207`（可用 `MCD_AGENT_PORT` 覆盖），JSON-lines，一问一答。客户端：
 `<套件>/tools/agent <tool> '<json-args>'`（远程套件，任何 shell/目录可用，
 自带 `--pretty`）或 `python tools/agent_client.py <tool> '<json-args>' --pretty`。
 **先 `ping`**——服务默认不开，没开就让用户去 N 面板 → Agent 协作 → 启动服务
@@ -81,6 +81,7 @@ list_ops       确认新 op 在册
 | `ping` | — | version/tools 列表 |
 | `get_overview` | `force_refresh` | 骨架/通道/bake 缺失/角色名表 |
 | `list_intervals` | `kind`(contact.L/contact.R/air/jitter.L/jitter.R) `frame_range` `tag` | 标注区间 |
+| `list_timeline_markers` | `frame_range` `name`(子串) `with_intervals`(默认 true) | **用户在时间轴按 M 放的命名标记**（"就是这一下"），每条附**覆盖该帧的标注区间**（contact.L/R、air、jitter.L/R）。用户说"第 N 帧那一下"之前先看这里——他可能已经标好了 |
 | `describe` | `target`("contact.L:0"或帧段) `channels` `context` | 区间摘要 |
 | `get_series` | `channels` `frame_range` `max_points` `agg` | 通道采样序列 |
 | `find_events` | `cond` `frame_range` | 条件事件 |
@@ -157,6 +158,7 @@ screen_* viewer`）/ 物体名（SINGLE_ARROW 空物体=箭头 +Z 轴方向；�
 |---|---|---|
 | 快照类 | describe / get_series / find_events / compare / snapshot / bake_range / get_joint_angles / list_intervals / validate / get_overview | 最初烘焙的 npz（原始动作），**修复后不变** |
 | 实时类 | probe_anatomy / analyze_motion / compare_motion / chain_lag / slide_report / ground_report / effect_check | 当前可见姿态（含全部修复）——**修后复测只用这些** |
+| 场景类 | conventions / list_timeline_markers | 场景本身的状态（约定、用户标的帧），不是姿态；随时可读，不受修复影响 |
 
 ### 新工具（2026-10-03）
 
