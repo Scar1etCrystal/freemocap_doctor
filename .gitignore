@@ -26,3 +26,14 @@ __pycache__/
 .agents/
 .codex/
 .repo_git/
+
+# Local-only notes, session reports and incident logs: kept on disk, never published
+HANDOFF.md
+PIPELINE_MAP.html
+index.md
+INCIDENT_*.md
+新方案.txt
+阶段A_汇总.md
+agent_reports/
+pack_patch_stage1/
+pack_patch_stage1.zip
