@@ -18,6 +18,15 @@
 4. 一切写入都是 preview。**绝不 commit**。
 5. 写完自查：`list_ops {"agent_id":"<ME>","owner":"<ME>","compact":true}` → 你的 op 在 `fixes` 里、
    `status=preview`、`alive=true`、`owner=<你>`。（别拉全量 list_ops：几十 KB 历史。）
+5b. **抖动闸门（和上面一样是硬性的，缺了报告按未完成退回）**：写完必须再跑一次
+   `analyze_motion {"chain":"<你改的链>","frame_range":[A,B],"brief":true}`，把**每根骨的 `jitter_deg` 和
+   `peak_speed`** 修前/修后并排贴进报告，并自己判：
+   ① 修后 `jitter_deg` > 修前 **2 倍** → 不通过；② 非加速类任务，修后 `peak_speed` > 修前 **2 倍** → 不通过；
+   ③ **孤立尖峰**（`peak_speed` 那帧的前后两帧速度平均不到它的 1/2）→ 不通过。
+   "局部关节角对上了"不等于"世界动作对了"——2026-10-06 有一条 `motion_copy` 的 `compare_motion err_inner`
+   只有 **0.001°**，但 `forearm_fk.L` 的 jitter 从 **1.75 涨到 8.94**、峰速 **19.09 → 57.06**，
+   288/290 帧手腕单帧位移 57/55 mm（邻帧 15–24 mm），是用户一眼看出来的"跳变"。
+   **指标好看不等于画面好看；这道闸门就是补这个洞的。**
 6. **复测只用实时类读工具**（probe_anatomy / orient_report / analyze_motion / compare_motion / chain_lag /
    slide_report / ground_report / effect_check）。describe/get_series 等快照类读的是原始动作，修完不会变。
    膝/肘朝向用 `swivel`（不是 hold_pose）；腿是 IK，FK 腿骨写了看不见（会被拒）。

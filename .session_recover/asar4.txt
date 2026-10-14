@@ -1,0 +1,374 @@
+json len 3392048 data offset 3392064
+total files 12967
+--- paths containing preset ---
+   /dsh/node_modules/@deepseek-ai/dsh-agent-preset-registry/LICENSE 1065 11113365
+   /dsh/node_modules/@deepseek-ai/dsh-agent-preset-registry/README.i18n.yaml 2015 11114430
+   /dsh/node_modules/@deepseek-ai/dsh-agent-preset-registry/README.md 4924 11116445
+   /dsh/node_modules/@deepseek-ai/dsh-agent-preset-registry/README.zh.md 4329 11121369
+   /dsh/node_modules/@deepseek-ai/dsh-agent-preset-registry/lib/index.js 31875 11125698
+   /dsh/node_modules/@deepseek-ai/dsh-agent-preset-registry/lib/invariant.js 32929 11157573
+   /dsh/node_modules/@deepseek-ai/dsh-agent-preset-registry/lib/typert.host.js 53160 11190502
+   /dsh/node_modules/@deepseek-ai/dsh-agent-preset-registry/lib/typert.remote-client.js 5293 11243662
+   /dsh/node_modules/@deepseek-ai/dsh-agent-preset-registry/lib/types/composition-inventory.js 4271 11248955
+   /dsh/node_modules/@deepseek-ai/dsh-agent-preset-registry/lib/types/definition.js 1170 11253226
+   /dsh/node_modules/@deepseek-ai/dsh-agent-preset-registry/lib/types/display.js 1926 11254396
+   /dsh/node_modules/@deepseek-ai/dsh-agent-preset-registry/lib/types/index.js 20193 11256322
+   /dsh/node_modules/@deepseek-ai/dsh-agent-preset-registry/lib/types/invariant.js 2781 11276515
+   /dsh/node_modules/@deepseek-ai/dsh-agent-preset-registry/lib/types/mount.js 10340 11279296
+   /dsh/node_modules/@deepseek-ai/dsh-agent-preset-registry/lib/types/preset.js 45 11289636
+   /dsh/node_modules/@deepseek-ai/dsh-agent-preset-registry/lib/types/session.js 1344 11289681
+   /dsh/node_modules/@deepseek-ai/dsh-agent-preset-registry/lib/types/types.js 44 11291025
+   /dsh/node_modules/@deepseek-ai/dsh-agent-preset-registry/package.json 3292 11291069
+   /dsh/node_modules/@deepseek-ai/dsh-agent-preset/LICENSE 1065 11294361
+   /dsh/node_modules/@deepseek-ai/dsh-agent-preset/README.i18n.yaml 1381 11295426
+   /dsh/node_modules/@deepseek-ai/dsh-agent-preset/README.md 4356 11296807
+   /dsh/node_modules/@deepseek-ai/dsh-agent-preset/README.zh.md 4074 11301163
+   /dsh/node_modules/@deepseek-ai/dsh-agent-preset/lib/index.js 898 11305237
+   /dsh/node_modules/@deepseek-ai/dsh-agent-preset/package.json 1450 11306135
+   /dsh/node_modules/@deepseek-ai/dsh-agent-preset/skills/agent-experience/SKILL.md 2093 11307585
+   /dsh/node_modules/@deepseek-ai/dsh-agent-preset/skills/cordis-composition-reference/SKILL.md 2806 11309678
+   /dsh/node_modules/@deepseek-ai/dsh-agent-preset/skills/cordis-composition-reference/references/packages.md 38782 11312484
+   /dsh/node_modules/@deepseek-ai/dsh-agent-preset/skills/cordis-plugin-development/SKILL.md 8144 11351266
+   /dsh/node_modules/@deepseek-ai/dsh-agent-preset/skills/cordis-plugin-development/references/host-plugin.md 3280 11359410
+   /dsh/node_modules/@deepseek-ai/dsh-agent-preset/skills/cordis-plugin-development/references/mcp-bundle.md 984 11362690
+   /dsh/node_modules/@deepseek-ai/dsh-agent-preset/skills/cordis-plugin-development/references/practices.md 7631 11363674
+   /dsh/node_modules/@deepseek-ai/dsh-agent-preset/skills/cordis-plugin-development/references/ui-plugin.md 1992 11371305
+   /dsh/node_modules/@deepseek-ai/dsh-agent-preset/skills/cordis-plugin-development/references/user-actions.md 1375 11373297
+   /dsh/node_modules/@deepseek-ai/dsh-agent-preset/skills/cordis-plugin-development/references/verification.md 954 11374672
+   /dsh/node_modules/@deepseek-ai/dsh-agent-preset/skills/cordis-plugin-development/templates/decoration/client.js 686 11375626
+   /dsh/node_modules/@deepseek-ai/dsh-agent-preset/skills/cordis-plugin-development/templates/decoration/cordis.patch.yml 69 11376312
+   /dsh/node_modules/@deepseek-ai/dsh-agent-preset/skills/cordis-plugin-development/templates/decoration/index.js 108 11376381
+   /dsh/node_modules/@deepseek-ai/dsh-agent-preset/skills/cordis-plugin-development/templates/decoration/package.json 360 11376489
+   /dsh/node_modules/@deepseek-ai/dsh-agent-preset/skills/cordis-plugin-development/templates/mcp/cordis.patch.yml 217 11376849
+   /dsh/node_modules/@deepseek-ai/dsh-agent-preset/skills/cordis-plugin-development/templates/mcp/package.json 151 11377066
+   /dsh/node_modules/@deepseek-ai/dsh-agent-preset/skills/editing-cordis-compositions/SKILL.md 5739 11377217
+   /dsh/node_modules/@deepseek-ai/dsh-client-ui-agent-preset/LICENSE 1065 15579193
+   /dsh/node_modules/@deepseek-ai/dsh-client-ui-agent-preset/README.i18n.yaml 1484 15580258
+   /dsh/node_modules/@deepseek-ai/dsh-client-ui-agent-preset/README.md 4034 15581742
+   /dsh/node_modules/@deepseek-ai/dsh-client-ui-agent-preset/README.zh.md 3665 15585776
+   /dsh/node_modules/@deepseek-ai/dsh-client-ui-agent-preset/lib/client.js 83087 15589441
+   /dsh/node_modules/@deepseek-ai/dsh-client-ui-agent-preset/lib/index.js 422 15672528
+   /dsh/node_modules/@deepseek-ai/dsh-client-ui-agent-preset/package.json 2440 15672950
+   /dsh/node_modules/@deepseek-ai/dsh-client-ui-permission-presets/LICENSE 1065 18015844
+   /dsh/node_modules/@deepseek-ai/dsh-client-ui-permission-presets/README.i18n.yaml 1798 18016909
+   /dsh/node_modules/@deepseek-ai/dsh-client-ui-permission-presets/README.md 7346 18018707
+   /dsh/node_modules/@deepseek-ai/dsh-client-ui-permission-presets/README.zh.md 6572 18026053
+   /dsh/node_modules/@deepseek-ai/dsh-client-ui-permission-presets/lib/client.js 37502 18032625
+   /dsh/node_modules/@deepseek-ai/dsh-client-ui-permission-presets/lib/index.js 460 18070127
+   /dsh/node_modules/@deepseek-ai/dsh-client-ui-permission-presets/package.json 2449 18070587
+   /dsh/node_modules/@deepseek-ai/dsh-permission-presets/LICENSE 1065 50096954
+   /dsh/node_modules/@deepseek-ai/dsh-permission-presets/README.i18n.yaml 2602 50098019
+   /dsh/node_modules/@deepseek-ai/dsh-permission-presets/README.md 10742 50100621
+   /dsh/node_modules/@deepseek-ai/dsh-permission-presets/README.zh.md 9791 50111363
+   /dsh/node_modules/@deepseek-ai/dsh-permission-presets/lib/index.js 16503 50121154
+   /dsh/node_modules/@deepseek-ai/dsh-permission-presets/lib/invariant.js 1571 50137657
+   /dsh/node_modules/@deepseek-ai/dsh-permission-presets/lib/typert.host.js 43344 50139228
+   /dsh/node_modules/@deepseek-ai/dsh-permission-presets/lib/typert.remote-client.js 1404 50182572
+   /dsh/node_modules/@deepseek-ai/dsh-permission-presets/lib/types/client.js 400 50183976
+   /dsh/node_modules/@deepseek-ai/dsh-permission-presets/lib/types/index.js 20395 50184376
+   /dsh/node_modules/@deepseek-ai/dsh-permission-presets/lib/types/invariant.js 1798 50204771
+   /dsh/node_modules/@deepseek-ai/dsh-permission-presets/lib/types/types.js 509 50206569
+   /dsh/node_modules/@deepseek-ai/dsh-permission-presets/package.json 2765 50207078
+   /dsh/node_modules/@deepseek-ai/dsh-web-app/presets/cordis.patch.yml 8089 58696935
+   /dsh/node_modules/@deepseek-ai/dsh-web-app/presets/minimal.patch.yml 3184 58705024
+   /dsh/node_modules/@deepseek-ai/dsh-web-app/presets/ptc.patch.yml 7697 58708208
+   /dsh/node_modules/@deepseek-ai/dsh-web-app/presets/standard.patch.yml 7511 58715905
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/presets/autotext/mytexts.bau 557 None
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/presets/config/autotbl.fmt 35313 None
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/presets/database/biblio.odb 2892 None
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/presets/database/biblio/biblio.dbf 75798 None
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/presets/database/biblio/biblio.dbt 46601 None
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/presets/database/evolocal.odb 3759 None
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/presets/gallery/sg30.sdv 2048 None
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/presets/gallery/sg30.thm 565 None
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/filter/oox-drawingml-cs-presets 1696554 None
+--- config dir ---
+   /dsh/node_modules/@deepseek-ai/cordis-plugin-loader/src/config/diff.ts 2171
+   /dsh/node_modules/@deepseek-ai/cordis-plugin-loader/src/config/entry.ts 8049
+   /dsh/node_modules/@deepseek-ai/cordis-plugin-loader/src/config/group.ts 2610
+   /dsh/node_modules/@deepseek-ai/cordis-plugin-loader/src/config/isolate.ts 5560
+   /dsh/node_modules/@deepseek-ai/cordis-plugin-loader/src/config/tree.ts 4260
+   /dsh/node_modules/@deepseek-ai/cordis-plugin-loader/src/config/utils.ts 1051
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/presets/config/autotbl.fmt 35313
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/modules/scalc/popupmenu/anchor.xml 598
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/modules/scalc/popupmenu/audit.xml 878
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/modules/scalc/popupmenu/cell.xml 3233
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/modules/scalc/popupmenu/celledit.xml 1493
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/modules/scalc/popupmenu/colheader.xml 1200
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/modules/scalc/popupmenu/column_operations.xml 1286
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/modules/scalc/popupmenu/conditional.xml 759
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/modules/scalc/popupmenu/conditional_easy.xml 843
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/modules/scalc/popupmenu/datatablemenu.xml 485
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/modules/scalc/popupmenu/draw.xml 2734
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/modules/scalc/popupmenu/drawtext.xml 1243
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/modules/scalc/popupmenu/form.xml 2064
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/modules/scalc/popupmenu/formrichtext.xml 1789
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/modules/scalc/popupmenu/formulabar.xml 617
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/modules/scalc/popupmenu/freezepanes.xml 532
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/modules/scalc/popupmenu/graphic.xml 3249
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/modules/scalc/popupmenu/media.xml 2034
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/modules/scalc/popupmenu/oleobject.xml 1824
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/modules/scalc/popupmenu/pagebreak.xml 3435
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/modules/scalc/popupmenu/pivot.xml 782
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/modules/scalc/popupmenu/preview.xml 640
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/modules/scalc/popupmenu/printranges.xml 580
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/modules/scalc/popupmenu/row_operations.xml 1258
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/modules/scalc/popupmenu/rowheader.xml 1181
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/modules/scalc/popupmenu/sheettab.xml 1088
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/modules/scalc/popupmenu/sparkline.xml 3183
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/modules/scalc/popupmenu/sparklinemenu.xml 743
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/modules/scalc/popupmenu/statisticsmenu.xml 1072
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/modules/scalc/statusbar/statusbar.xml 2737
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/modules/scalc/ui/inputbar.ui 5227
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/modules/scalc/ui/posbox.ui 1101
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/modules/schart/popupmenu/draw.xml 1158
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/modules/schart/popupmenu/drawtext.xml 1057
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/modules/schart/statusbar/statusbar.xml 1362
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/modules/sdraw/popupmenu/3dobject.xml 2095
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/modules/sdraw/popupmenu/3dscene.xml 1831
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/modules/sdraw/popupmenu/3dscene2.xml 1876
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/modules/sdraw/popupmenu/annotation.xml 442
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/modules/sdraw/popupmenu/bezier.xml 1017
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/modules/sdraw/popupmenu/connector.xml 2054
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/modules/sdraw/popupmenu/curve.xml 2457
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/modules/sdraw/popupmenu/draw.xml 2325
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/modules/sdraw/popupmenu/drawtext.xml 1221
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/modules/sdraw/popupmenu/form.xml 1629
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/modules/sdraw/popupmenu/formrichtext.xml 1788
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/modules/sdraw/popupmenu/gluepoint.xml 1179
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/modules/sdraw/popupmenu/graphic.xml 2949
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/modules/sdraw/popupmenu/group.xml 2157
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/modules/sdraw/popupmenu/layertab.xml 625
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/modules/sdraw/popupmenu/line.xml 2108
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/modules/sdraw/popupmenu/measure.xml 2429
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/modules/sdraw/popupmenu/media.xml 1268
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/modules/sdraw/popupmenu/multiselect.xml 2953
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/modules/sdraw/popupmenu/objectalign.xml 758
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/modules/sdraw/popupmenu/oleobject.xml 2204
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/modules/sdraw/popupmenu/page.xml 1979
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/modules/sdraw/popupmenu/pagepane.xml 709
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/modules/sdraw/popupmenu/pagepanemaster.xml 751
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/modules/sdraw/popupmenu/pagepanenosel.xml 571
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/modules/sdraw/popupmenu/pagepanenoselmaster.xml 577
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/modules/sdraw/popupmenu/pagetab.xml 661
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/modules/sdraw/popupmenu/table.xml 3083
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/modules/sdraw/popupmenu/textbox.xml 2119
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/modules/sdraw/statusbar/statusbar.xml 2406
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/modules/sglobal/popupmenu/anchor.xml 731
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/modules/sglobal/popupmenu/annotation.xml 1286
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/modules/sglobal/popupmenu/draw.xml 3639
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/modules/sglobal/popupmenu/drawtext.xml 1341
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/modules/sglobal/popupmenu/form.xml 2374
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/modules/sglobal/popupmenu/formrichtext.xml 1788
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/modules/sglobal/popupmenu/frame.xml 2095
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/modules/sglobal/popupmenu/graphic.xml 2897
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/modules/sglobal/popupmenu/insertfield.xml 1006
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/modules/sglobal/popupmenu/media.xml 2323
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/modules/sglobal/popupmenu/oleobject.xml 2119
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/modules/sglobal/popupmenu/preview.xml 654
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/modules/sglobal/popupmenu/showtrackedchanges.xml 625
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/modules/sglobal/popupmenu/table.xml 7388
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/modules/sglobal/popupmenu/text.xml 4609
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/modules/sglobal/statusbar/statusbar.xml 3004
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/modules/simpress/popupmenu/3dobject.xml 2253
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/modules/simpress/popupmenu/3dscene.xml 2013
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/modules/simpress/popupmenu/3dscene2.xml 2058
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/modules/simpress/popupmenu/annotation.xml 442
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/modules/simpress/popupmenu/bezier.xml 1017
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/modules/simpress/popupmenu/connector.xml 2212
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/modules/simpress/popupmenu/curve.xml 2615
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/modules/simpress/popupmenu/draw.xml 2483
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/modules/simpress/popupmenu/drawtext.xml 1455
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/modules/simpress/popupmenu/form.xml 1629
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/modules/simpress/popupmenu/formrichtext.xml 1788
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/modules/simpress/popupmenu/gluepoint.xml 1179
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/modules/simpress/popupmenu/graphic.xml 3107
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/modules/simpress/popupmenu/group.xml 2315
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/modules/simpress/popupmenu/line.xml 2266
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/modules/simpress/popupmenu/measure.xml 2587
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/modules/simpress/popupmenu/media.xml 1450
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/modules/simpress/popupmenu/multiselect.xml 3065
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/modules/simpress/popupmenu/objectalign.xml 759
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/modules/simpress/popupmenu/oleobject.xml 2362
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/modules/simpress/popupmenu/outline.xml 1437
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/modules/simpress/popupmenu/page.xml 3599
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/modules/simpress/popupmenu/pagepane.xml 3044
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/modules/simpress/popupmenu/pagepanecanvas.xml 477
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/modules/simpress/popupmenu/pagepanecanvasmaster.xml 487
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/modules/simpress/popupmenu/pagepanemaster.xml 679
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/modules/simpress/popupmenu/pagepanenosel.xml 572
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/modules/simpress/popupmenu/pagepanenoselmaster.xml 577
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/modules/simpress/popupmenu/pagetab.xml 709
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/modules/simpress/popupmenu/table.xml 3083
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/modules/simpress/popupmenu/textbox.xml 2301
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/modules/simpress/statusbar/statusbar.xml 2391
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/modules/simpress/ui/tabviewbar.ui 1701
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/modules/smath/popupmenu/edit.xml 24541
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/modules/smath/popupmenu/view.xml 759
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/modules/smath/statusbar/statusbar.xml 1721
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/modules/sweb/popupmenu/anchor.xml 731
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/modules/sweb/popupmenu/annotation.xml 1079
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/modules/sweb/popupmenu/form.xml 2374
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/modules/sweb/popupmenu/formrichtext.xml 1788
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/modules/sweb/popupmenu/frame.xml 2095
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/modules/sweb/popupmenu/graphic.xml 2897
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/modules/sweb/popupmenu/insertfield.xml 820
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/modules/sweb/popupmenu/oleobject.xml 2119
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/modules/sweb/popupmenu/preview.xml 654
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/modules/sweb/popupmenu/showtrackedchanges.xml 625
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/modules/sweb/popupmenu/source.xml 571
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/modules/sweb/popupmenu/table.xml 7315
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/modules/sweb/popupmenu/text.xml 4536
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/modules/sweb/statusbar/statusbar.xml 2863
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/modules/swform/popupmenu/anchor.xml 662
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/modules/swform/popupmenu/annotation.xml 1079
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/modules/swform/popupmenu/draw.xml 3639
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/modules/swform/popupmenu/drawtext.xml 1341
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/modules/swform/popupmenu/form.xml 2374
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/modules/swform/popupmenu/formrichtext.xml 1788
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/modules/swform/popupmenu/frame.xml 2095
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/modules/swform/popupmenu/graphic.xml 2897
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/modules/swform/popupmenu/insertfield.xml 1006
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/modules/swform/popupmenu/media.xml 2323
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/modules/swform/popupmenu/oleobject.xml 2119
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/modules/swform/popupmenu/preview.xml 654
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/modules/swform/popupmenu/table.xml 7388
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/modules/swform/popupmenu/text.xml 4609
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/modules/swform/statusbar/statusbar.xml 2374
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/modules/swreport/popupmenu/anchor.xml 662
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/modules/swreport/popupmenu/annotation.xml 1079
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/modules/swreport/popupmenu/draw.xml 3639
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/modules/swreport/popupmenu/drawtext.xml 1341
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/modules/swreport/popupmenu/form.xml 2374
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/modules/swreport/popupmenu/formrichtext.xml 1788
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/modules/swreport/popupmenu/frame.xml 2095
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/modules/swreport/popupmenu/graphic.xml 2897
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/modules/swreport/popupmenu/insertfield.xml 1006
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/modules/swreport/popupmenu/media.xml 2323
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/modules/swreport/popupmenu/oleobject.xml 2119
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/modules/swreport/popupmenu/preview.xml 654
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/modules/swreport/popupmenu/showtrackedchanges.xml 625
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/modules/swreport/popupmenu/table.xml 4222
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/modules/swreport/popupmenu/text.xml 2711
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/modules/swreport/statusbar/statusbar.xml 2374
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/modules/swriter/popupmenu/anchor.xml 662
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/modules/swriter/popupmenu/annotation.xml 1286
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/modules/swriter/popupmenu/draw.xml 3639
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/modules/swriter/popupmenu/drawtext.xml 1341
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/modules/swriter/popupmenu/form.xml 2374
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/modules/swriter/popupmenu/formrichtext.xml 1788
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/modules/swriter/popupmenu/frame.xml 2142
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/modules/swriter/popupmenu/graphic.xml 3102
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/modules/swriter/popupmenu/insertfield.xml 1006
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/modules/swriter/popupmenu/media.xml 2323
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/modules/swriter/popupmenu/oleobject.xml 2119
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/modules/swriter/popupmenu/preview.xml 654
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/modules/swriter/popupmenu/recordtrackedchanges.xml 537
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/modules/swriter/popupmenu/showtrackedchanges.xml 625
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/modules/swriter/popupmenu/table.xml 7796
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/modules/swriter/popupmenu/text.xml 4869
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/modules/swriter/statusbar/statusbar.xml 3025
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/modules/swriter/ui/annotation.ui 11021
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/modules/swxform/popupmenu/anchor.xml 662
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/modules/swxform/popupmenu/annotation.xml 1079
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/modules/swxform/popupmenu/draw.xml 3639
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/modules/swxform/popupmenu/drawtext.xml 1341
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/modules/swxform/popupmenu/form.xml 2374
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/modules/swxform/popupmenu/formrichtext.xml 1788
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/modules/swxform/popupmenu/frame.xml 2095
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/modules/swxform/popupmenu/graphic.xml 2897
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/modules/swxform/popupmenu/insertfield.xml 1006
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/modules/swxform/popupmenu/media.xml 2323
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/modules/swxform/popupmenu/oleobject.xml 2119
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/modules/swxform/popupmenu/preview.xml 654
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/modules/swxform/popupmenu/showtrackedchanges.xml 625
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/modules/swxform/popupmenu/table.xml 7388
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/modules/swxform/popupmenu/text.xml 4558
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/modules/swxform/statusbar/statusbar.xml 2863
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/simpress/effects.xml 238550
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/simpress/layoutlist.xml 7058
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/simpress/objectlist.xml 2900
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/simpress/styles.xml 12019
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/simpress/transitions-ogl.xml 4607
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/simpress/transitions.xml 13538
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/svt/ui/scrollbars.ui 1759
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/soffice.cfg/svt/ui/tabbuttons.ui 5288
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/wizard/form/styles/beige.css 2371
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/wizard/form/styles/bgr.css 2332
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/wizard/form/styles/dark.css 2371
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/wizard/form/styles/grey.css 2332
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/wizard/form/styles/ibg.css 2371
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/wizard/form/styles/ice.css 2371
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/wizard/form/styles/orange.css 2371
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/wizard/form/styles/red.css 2332
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/wizard/form/styles/violet.css 2332
+   /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/share/config/wizard/form/styles/water.css 2335
+   /dsh/node_modules/@opentelemetry/sdk-logs/build/esm/config/LoggerConfigurators.js 2930
+   /dsh/node_modules/@opentelemetry/sdk-logs/build/esnext/config/LoggerConfigurators.js 2930
+   /dsh/node_modules/@opentelemetry/sdk-logs/build/src/config/LoggerConfigurators.js 3112
+   /dsh/node_modules/@smithy/core/dist-cjs/submodules/config/index.browser.js 14398
+   /dsh/node_modules/@smithy/core/dist-cjs/submodules/config/index.js 29346
+   /dsh/node_modules/@smithy/core/dist-cjs/submodules/config/index.native.js 13849
+   /dsh/node_modules/@smithy/core/dist-es/submodules/config/config-resolver/endpointsConfig/NodeUseDualstackEndpointConfigOptions.js 945
+   /dsh/node_modules/@smithy/core/dist-es/submodules/config/config-resolver/endpointsConfig/NodeUseFipsEndpointConfigOptions.js 890
+   /dsh/node_modules/@smithy/core/dist-es/submodules/config/config-resolver/endpointsConfig/resolveCustomEndpointsConfig.js 467
+   /dsh/node_modules/@smithy/core/dist-es/submodules/config/config-resolver/endpointsConfig/resolveEndpointsConfig.js 690
+   /dsh/node_modules/@smithy/core/dist-es/submodules/config/config-resolver/endpointsConfig/utils/getEndpointFromRegion.js 749
+   /dsh/node_modules/@smithy/core/dist-es/submodules/config/config-resolver/regionConfig/checkRegion.js 643
+   /dsh/node_modules/@smithy/core/dist-es/submodules/config/config-resolver/regionConfig/config.js 616
+   /dsh/node_modules/@smithy/core/dist-es/submodules/config/config-resolver/regionConfig/getInstanceMetadataRegion.js 3089
+   /dsh/node_modules/@smithy/core/dist-es/submodules/config/config-resolver/regionConfig/getRealRegion.js 257
+   /dsh/node_modules/@smithy/core/dist-es/submodules/config/config-resolver/regionConfig/isFipsRegion.js 128
+   /dsh/node_modules/@smithy/core/dist-es/submodules/config/config-resolver/regionConfig/resolveRegionConfig.js 959
+   /dsh/node_modules/@smithy/core/dist-es/submodules/config/config-resolver/regionInfo/EndpointVariant.js 11
+   /dsh/node_modules/@smithy/core/dist-es/submodules/config/config-resolver/regionInfo/EndpointVariantTag.js 11
+   /dsh/node_modules/@smithy/core/dist-es/submodules/config/config-resolver/regionInfo/PartitionHash.js 11
+   /dsh/node_modules/@smithy/core/dist-es/submodules/config/config-resolver/regionInfo/RegionHash.js 11
+   /dsh/node_modules/@smithy/core/dist-es/submodules/config/config-resolver/regionInfo/getHostnameFromVariants.js 238
+   /dsh/node_modules/@smithy/core/dist-es/submodules/config/config-resolver/regionInfo/getRegionInfo.js 1629
+   /dsh/node_modules/@smithy/core/dist-es/submodules/config/config-resolver/regionInfo/getResolvedHostname.js 239
+   /dsh/node_modules/@smithy/core/dist-es/submodules/config/config-resolver/regionInfo/getResolvedPartition.js 169
+   /dsh/node_modules/@smithy/core/dist-es/submodules/config/config-resolver/regionInfo/getResolvedSigningRegion.js 492
+   /dsh/node_modules/@smithy/core/dist-es/submodules/config/defaults-mode/constants.js 594
+   /dsh/node_modules/@smithy/core/dist-es/submodules/config/defaults-mode/defaultsModeConfig.js 368
+   /dsh/node_modules/@smithy/core/dist-es/submodules/config/defaults-mode/resolveDefaultsModeConfig.browser.js 1354
+   /dsh/node_modules/@smithy/core/dist-es/submodules/config/defaults-mode/resolveDefaultsModeConfig.js 2094
+   /dsh/node_modules/@smithy/core/dist-es/submodules/config/defaults-mode/resolveDefaultsModeConfig.native.js 805
+   /dsh/node_modules/@smithy/core/dist-es/submodules/config/index.browser.js 2277
+   /dsh/node_modules/@smithy/core/dist-es/submodules/config/index.js 2652
+   /dsh/node_modules/@smithy/core/dist-es/submodules/config/index.native.js 2276
+   /dsh/node_modules/@smithy/core/dist-es/submodules/config/node-config-provider/configLoader.js 644
+   /dsh/node_modules/@smithy/core/dist-es/submodules/config/node-config-provider/fromEnv.js 564
+   /dsh/node_modules/@smithy/core/dist-es/submodules/config/node-config-provider/fromSharedConfigFiles.js 1329
+   /dsh/node_modules/@smithy/core/dist-es/submodules/config/node-config-provider/fromStatic.js 248
+   /dsh/node_modules/@smithy/core/dist-es/submodules/config/node-config-provider/getSelectorName.js 383
+   /dsh/node_modules/@smithy/core/dist-es/submodules/config/property-provider/CredentialsProviderError.js 307
+   /dsh/node_modules/@smithy/core/dist-es/submodules/config/property-provider/ProviderError.js 820
+   /dsh/node_modules/@smithy/core/dist-es/submodules/config/property-provider/TokenProviderError.js 289
+   /dsh/node_modules/@smithy/core/dist-es/submodules/config/property-provider/chain.js 579
+   /dsh/node_modules/@smithy/core/dist-es/submodules/config/property-provider/fromValue.js 78
+   /dsh/node_modules/@smithy/core/dist-es/submodules/config/property-provider/memoize.js 1201
+   /dsh/node_modules/@smithy/core/dist-es/submodules/config/shared-ini-file-loader/constants.js 44
+   /dsh/node_modules/@smithy/core/dist-es/submodules/config/shared-ini-file-loader/externalDataInterceptor.js 445
+   /dsh/node_modules/@smithy/core/dist-es/submodules/config/shared-ini-file-loader/getConfigData.js 748
+   /dsh/node_modules/@smithy/core/dist-es/submodules/config/shared-ini-file-loader/getConfigFilepath.js 236
+   /dsh/node_modules/@smithy/core/dist-es/submodules/config/shared-ini-file-loader/getCredentialsFilepath.js 268
+   /dsh/node_modules/@smithy/core/dist-es/submodules/config/shared-ini-file-loader/getHomeDir.js 681
+   /dsh/node_modules/@smithy/core/dist-es/submodules/config/shared-ini-file-loader/getProfileName.js 185
+   /dsh/node_modules/@smithy/core/dist-es/submodules/config/shared-ini-file-loader/getSSOTokenFilepath.js 337
+   /dsh/node_modules/@smithy/core/dist-es/submodules/config/shared-ini-file-loader/getSSOTokenFromFile.js 423
+   /dsh/node_modules/@smithy/core/dist-es/submodules/config/shared-ini-file-loader/getSsoSessionData.js 392
+   /dsh/node_modules/@smithy/core/dist-es/submodules/config/shared-ini-file-loader/loadSharedConfigFiles.js 1489
+   /dsh/node_modules/@smithy/core/dist-es/submodules/config/shared-ini-file-loader/loadSsoSessionData.js 408
+   /dsh/node_modules/@smithy/core/dist-es/submodules/config/shared-ini-file-loader/mergeConfigFiles.js 383
+   /dsh/node_modules/@smithy/core/dist-es/submodules/config/shared-ini-file-loader/parseIni.js 2262
+   /dsh/node_modules/@smithy/core/dist-es/submodules/config/shared-ini-file-loader/parseKnownFiles.js 313
+   /dsh/node_modules/@smithy/core/dist-es/submodules/config/shared-ini-file-loader/readFile.js 406
+   /dsh/node_modules/@smithy/core/dist-es/submodules/config/shared-ini-file-loader/types.js 11
+   /dsh/node_modules/@smithy/core/dist-es/submodules/config/util-config-provider/booleanSelector.js 306
+   /dsh/node_modules/@smithy/core/dist-es/submodules/config/util-config-provider/numberSelector.js 317
+   /dsh/node_modules/@smithy/core/dist-es/submodules/config/util-config-provider/types.js 178
+   /dsh/node_modules/@smithy/credential-provider-imds/dist-es/config/Endpoint.js 175
+   /dsh/node_modules/@smithy/credential-provider-imds/dist-es/config/EndpointConfigOptions.js 341
+   /dsh/node_modules/@smithy/credential-provider-imds/dist-es/config/EndpointMode.js 163
+   /dsh/node_modules/@smithy/credential-provider-imds/dist-es/config/EndpointModeConfigOptions.js 431

@@ -1,0 +1,4 @@
+pickle/header sizes 4 3392056
+Traceback (most recent call last):
+  File "<string>", line 6, in <module>
+UnicodeDecodeError: 'utf-8' codec can't decode byte 0xc2 in position 1: invalid continuation byte

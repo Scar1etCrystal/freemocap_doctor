@@ -1,0 +1,14 @@
+--- top level ---
+  /dsh dir 3
+  /node_modules dir 19
+  /lib dir 7
+  /package.json file 757
+  /renderer dir 12
+--- /dsh children ---
+   desktop-runtime.json 2817387
+   package.json 15931
+   node_modules dir
+--- non-node_modules files under /dsh (sample) ---
+count 2
+   /dsh/desktop-runtime.json 2817387
+   /dsh/package.json 15931

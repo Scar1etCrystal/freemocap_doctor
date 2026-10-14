@@ -142,7 +142,7 @@ ping → 读/探查（确定 scope 和修前基线）→ claim → 写（带 exp
 | `restore_accent` | `frame_range` `data_path` (`index`) `method` `strength` `impact_frame` | 32 |
 | `foot_lock` | `interval`("contact.R:7") 或 `side`+`frame_range`, `lock`(xy/xy+rot/pos/pos+rot) | 33 |
 | `fix_ground` | `frame_range` `side` `loc_path` `mode`(pen/lift/float，**没有 snap**) `rest_clearance`(米，用 ground_report 给的) | 33 |
-| `motion_copy` | `bones`/`chain` `src_range` `dst_start`/`dst_range` `mirror` `bone_map` `space`(local/world) `mode`(replace/add) `channels`(rot/rot+loc) | 34 |
+| `motion_copy` | `bones`/`chain` `src_range` `dst_start`/`dst_range` `mirror` `bone_map` `space`(local/world/world_abs) `mode`(replace/add) `channels`(rot/rot+loc) | 34 |
 | `anticipation` | `bones`/`chain` `frame_range` `main_bone` `amount`(0.10–0.20) `lead` `delay` | 35 |
 | `follow_through` | 同上 + `stop_frame` `amount` `period` `decay` `cycles` `propagate` | 35 |
 | `overshoot` | 同上 + `stop_frame` `amount` `peak_after` `settle` | 35 |
@@ -187,3 +187,39 @@ ping → 读/探查（确定 scope 和修前基线）→ claim → 写（带 exp
 - 没写（被租约挡住、发现别人已有同类修复、超出 scope）也要报告：第一行写
   `<工具> @[A,B] <骨>：未写入（<原因>）`，把你量到的数字和建议写在"遗留"里。
 看不到数字 = 没验成。报数字，不报感觉。最后附"提示词反馈"（若任务块要求）。
+
+### 8.1 抖动闸门（每份报告必带；缺了按"未完成"退回）
+
+**为什么有这一条**：指标好看 ≠ 画面好看。2026-10-06 有一条 `motion_copy`（把左臂一段复制成重复段），
+`compare_motion err_inner = 0.001°` 完美通过、报告里数字齐全，**但用户在视口里一眼看到一个"跳变"**：
+`forearm_fk.L` 的 `jitter_deg` **1.75 → 8.94**、`peak_speed` **19.09 → 57.06 @288**，
+288/290 帧手腕世界位移 **57 / 55 mm**（邻帧 15–24 mm）。**这个尖峰用很高阈值也能挡住**，不该靠人眼发现。
+
+**做法**：每份报告在 §8 那两行之外，再附一张表——用 `analyze_motion {"chain":"<你改的链>","frame_range":[A,B],"brief":true}`
+取**每根骨的 `jitter_deg` 和 `peak_speed`**，修前/修后并排：
+
+```
+骨                jitter 修前→修后    peak_speed 修前→修后
+forearm_fk.L      1.75 → 8.94 ★        19.09 → 57.06 ★      ← ★ = 触闸
+```
+
+**三条判定（任一命中 = 不通过，必须继续调参或 revert 后报告）**：
+
+| # | 条件 | 例外 |
+|---|---|---|
+| 1 | 修后 `jitter_deg` > 修前 **2 倍** | 无 |
+| 2 | 修后 `peak_speed` > 修前 **2 倍** | 任务是"更干脆 / 力量感"这类**加速类**时不查这条 |
+| 3 | **孤立尖峰**：`peak_speed` 所在帧的前后两帧速度平均 **不到它的 1/2** | 无 |
+
+第 3 条是人话版的"这一帧是不是突然抽了一下"——它和第 1、2 条独立，**幅度没变也可能命中**（上例就是）。
+加速类任务（③⑤）只查第 1、3 条。**触闸时不要只说"jitter 略升"**：把触闸的帧号、倍数、以及你打算怎么改写进"遗留"。
+
+**力度 / 静音改动之后必须重跑闸门**：`set_influence`（以及 GUI 的力度滑块——走的是同一条 `agent_ops.set_strip_exponent` 路径）
+是在写完 op 之后**第二次写曲线**，闸门要在这个新状态下重跑。2026-10-06 实例：一条 `motion_copy` 写入时
+`err_inner=0.001°`、闸门全绿；之后它的力度被调到 **0.1374**，`err_inner` 变成 **158°**、
+`forearm_fk.L` 的 jitter 涨到 **12.95**、288/290 帧手腕位移 **57/55 mm** —— 用户一眼看出"跳变"。
+**已知 bug**：`set_strip_exponent` 对 **Euler 通道**做的是逐分量线性缩放（`agent_ops.py:1152-1158`），
+delta 大时**不是合法的部分旋转**（会穿过 Euler 奇异构型逐帧乱摆）；四元数通道（轴角缩放）和 location
+（线性缩放本来就对）没问题。**修好之前：不要对"Euler 骨 + 大转角 delta"的 op 用力度或 `strength<1`**，
+要软化先问协调者。另注意 `reapply` 会把旧 `applied_exp` **重新贴回**新 strip（`agent_ops.py:632-637,685-686`），
+所以 `reapply overrides:{}` 只会复现这个毛病——先 `set_influence value=1.0` 再 reapply。

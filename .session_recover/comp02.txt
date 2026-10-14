@@ -1,0 +1,26 @@
+files:
+   LICENSE 1065
+   README.i18n.yaml 4325
+   README.md 22525
+   README.zh.md 20510
+   lib dir
+   package.json 2274
+  lib/ index.js 49452
+index.js len 49448
+interesting keys: ['summarizationModel', 'summarizationProvider']
+  ... m-tail fraction for every routed model. */ | const DEFAULT_RETAIN_RATIO = .16; | /** Fields shared by top-level defaults and exact-target overrides. */ | const POLICY_CONFIG_KEYS = [ | 	"thresholdRatio", | 	"headroomTokens", | 	"retainRatio", | 	"retainTokens", | 	"summarizationProvider", | 	"summarizationModel", | 	"maxTokens", | 	"compactionRetries", | 	"maxOverflowRetries" | ]; | /** Complete public top-level configuration key set. */ | const BASIC_COMPACT_CONFIG_KEYS = new Set([ | 	...POLICY
+  ---
+  ... ns ?? maxTokens); | 		validateRatioRetention(policy.thresholdRatio ?? thresholdRatio, resolveRetention(policy, retention), `BasicCompactionConfig: modelPolicies[${index}]`); | 	} | 	return deepFreeze({ | 		thresholdRatio, | 		headroomTokens, | 		...retention, | 		summarizationProvider: config.summarizationProvider ?? "", | 		summarizationModel: config.summarizationModel ?? "", | 		maxTokens, | 		compactionRetries: config.compactionRetries ?? 1, | 		maxOverflowRetries: config.maxOverflowRetries ?
+  ---
+  ... tioRetention(policy.thresholdRatio ?? thresholdRatio, resolveRetention(policy, retention), `BasicCompactionConfig: modelPolicies[${index}]`); | 	} | 	return deepFreeze({ | 		thresholdRatio, | 		headroomTokens, | 		...retention, | 		summarizationProvider: config.summarizationProvider ?? "", | 		summarizationModel: config.summarizationModel ?? "", | 		maxTokens, | 		compactionRetries: config.compactionRetries ?? 1, | 		maxOverflowRetries: config.maxOverflowRetries ?? 1, | 		modelPolicies, | 		auto
+  ---
+  ... ider: target.provider, | 			model: target.model | 		}, | 		thresholdRatio: override?.thresholdRatio ?? config.thresholdRatio, | 		headroomTokens: override?.headroomTokens ?? config.headroomTokens, | 		...resolveRetention(override ?? {}, inheritedRetention), | 		summarizationProvider: override?.summarizationProvider ?? config.summarizationProvider, | 		summarizationModel: override?.summarizationModel ?? config.summarizationModel, | 		maxTokens: override?.maxTokens ?? config.maxTokens, | 		compact
+  ---
+  ... target.model | 		}, | 		thresholdRatio: override?.thresholdRatio ?? config.thresholdRatio, | 		headroomTokens: override?.headroomTokens ?? config.headroomTokens, | 		...resolveRetention(override ?? {}, inheritedRetention), | 		summarizationProvider: override?.summarizationProvider ?? config.summarizationProvider, | 		summarizationModel: override?.summarizationModel ?? config.summarizationModel, | 		maxTokens: override?.maxTokens ?? config.maxTokens, | 		compactionRetries: override?.compactionRet
+  ---
+  ... io: override?.thresholdRatio ?? config.thresholdRatio, | 		headroomTokens: override?.headroomTokens ?? config.headroomTokens, | 		...resolveRetention(override ?? {}, inheritedRetention), | 		summarizationProvider: override?.summarizationProvider ?? config.summarizationProvider, | 		summarizationModel: override?.summarizationModel ?? config.summarizationModel, | 		maxTokens: override?.maxTokens ?? config.maxTokens, | 		compactionRetries: override?.compactionRetries ?? config.compactionRetries, | 
+  ---
+  ... target.model} retainTokens (${retainTokens}) must be less than threshold tokens ${thresholdTokens}`); | 	return deepFreeze({ | 		target: { ...policy.target }, | 		contextWindow, | 		thresholdRatio: policy.thresholdRatio, | 		thresholdTokens, | 		retainTokens, | 		summarizationProvider: policy.summarizationProvider, | 		summarizationModel: policy.summarizationModel, | 		maxTokens: policy.maxTokens, | 		compactionRetries: policy.compactionRetries, | 		maxOverflowRetries: policy.maxOverflowRetries 
+  ---
+  ... retainTokens}) must be less than threshold tokens ${thresholdTokens}`); | 	return deepFreeze({ | 		target: { ...policy.target }, | 		contextWindow, | 		thresholdRatio: policy.thresholdRatio, | 		thresholdTokens, | 		retainTokens, | 		summarizationProvider: policy.summarizationProvider, | 		summarizationModel: policy.summarizationModel, | 		maxTokens: policy.maxTokens, | 		compactionRetries: policy.compactionRetries, | 		maxOverflowRetries: policy.maxOverflowRetries | 	}); | } | /** Choose an exp
+  ---

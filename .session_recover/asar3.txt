@@ -1,0 +1,8 @@
+size0 4
+Traceback (most recent call last):
+size1 3392056
+n 3392052 at offset 12
+len raw 3392052
+first 40 b'0\xc23\x00{"files":{"dsh":{"files":{"desktop-r'
+  File "<string>", line 10, in <module>
+UnicodeDecodeError: 'utf-8' codec can't decode byte 0xc2 in position 1: invalid continuation byte

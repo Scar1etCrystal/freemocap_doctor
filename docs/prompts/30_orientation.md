@@ -142,6 +142,26 @@
    ```
    回包 `metrics`：`err_after_inner_deg`（自评）、`end_drift_mm`（脚踝/手腕应 < 0.5）、`end_rot_change_max_deg`（脚/手朝向应 ≈ 0）。
    warnings "要绕连线转 1xx°" = 目标在背面，先核对方向说法；"N 帧目标几乎平行于连线" = 那几帧转不出来（用插值补），写进遗留。
+
+   **3b. 朝空物体 + 按轴瞄准（`toward:"<空物体名>"` + `axis`）**
+
+   用户摆一个空物体、说"膝盖朝它转"时，**不要自己算那个方向**，写物体名让工具每帧现读
+   （非箭头空物体 = 从部位指向它；SINGLE_ARROW 箭头 = 取它的 +Z）。用户说"**只转 Z / 不用管高低差**"
+   时加 `axis`：
+
+   ```
+   <套件>/tools/agent swivel '{"agent_id":"<ME>","joint":"knee","side":"R","frame_range":[A-4,B+4],
+     "toward":"<空物体名>","axis":"z","strength":0.3,"expect_version":<第 1 步的 version>}'
+   ```
+
+   - `axis:"z"` = 把瞄准方向**投影到 ⊥Z 的平面**（只用水平方向，空物体高一点低一点都不影响膝盖仰俯）
+   - `axis:"x"` = ⊥X（YZ 平面）；`axis:"y"` = ⊥Y（XZ 平面）
+   - **不给 `axis` = 原样三维瞄准**（老行为，逐位不变）
+   - 报错有两种，都是可读的：`axis` 写错；或**目标正好落在该轴上**（比如空物体在正上方 + `axis:"z"`）
+     → 挪一下空物体或换 axis，**别自己编方向向量**
+   - `axis` 会进 op 的 `params`，所以 `reapply` 能还原；复测和 `probe_anatomy` 都用**同一个 `axis`**，
+     否则量的和写的不是一个目标
+
 4. **复测**：第 1 步原样 → `err_inner_deg` < 5。没到：`reapply` `{"blend":8}` 或 `{"strength":…}`，别叠新 op。
 5. list_ops → save → release。
 

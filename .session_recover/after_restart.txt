@@ -1,0 +1,4 @@
+contextPressure seq 11426
+   {"surfaceTokens": 437636, "contextWindow": 1000000, "pressureTokens": 0, "sampledSurfaceTokens": 437636}
+contextBreakdown seq 11426
+   {"nodes": [{"seq": 10218, "heuristicTokens": 1481, "system": true}, {"seq": 9696, "heuristicTokens": 3895, "system": false}, {"seq": 9685, "heuristicTokens": 128, "system": false}, {"seq": 9687, "heuristicTokens": 13, "system": false}, {"seq": 9704, "heuristicTokens": 40, "system": false}, {"seq": 9705, "heuristicTokens": 56, "system": false}, {"seq": 9706, "heuristicTokens": 106, "system": false}, {"seq": 9707, "heuristicTokens": 564, "system": false}, {"seq": 9710, "heuristicTokens": 34, "system": false}, {"seq": 9712, "heuristicTokens": 830, "system": false}, {"seq": 9714, "heuristicTokens": 32, "system": false}, {"seq": 9718, "heuristicTokens": 717, "system": false}, {"seq": 9720, "heuri

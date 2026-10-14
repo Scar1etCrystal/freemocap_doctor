@@ -1,0 +1,18 @@
+compaction pkg version: 0.2.0-rc.2
+=== 0.2.0 compaction config keys ===
+types.d.ts missing 'types'
+=== reasoningEffort mentions in compaction index.js ===
+=== preset dirs in asar ===
+12
+    /dsh/node_modules/@deepseek-ai/dsh-web-app/presets/cordis.patch.yml
+    /dsh/node_modules/@deepseek-ai/dsh-web-app/presets/minimal.patch.yml
+    /dsh/node_modules/@deepseek-ai/dsh-web-app/presets/ptc.patch.yml
+    /dsh/node_modules/@deepseek-ai/dsh-web-app/presets/standard.patch.yml
+    /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/presets/autotext/mytexts.bau
+    /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/presets/config/autotbl.fmt
+    /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/presets/database/biblio.odb
+    /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/presets/database/biblio/biblio.dbf
+    /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/presets/database/biblio/biblio.dbt
+    /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/presets/database/evolocal.odb
+    /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/presets/gallery/sg30.sdv
+    /dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64/program/presets/gallery/sg30.thm

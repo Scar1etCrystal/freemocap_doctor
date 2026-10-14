@@ -4,11 +4,17 @@
 > 本页每条命令都在 fixture 上逐条跑过（`tests/e2e_quickstart.py`），照抄格式不会错。
 > 参考手册是 `docs/工具手册_agent.md`，剧本 30–36 是各类修复的详细版——遇到本页没写的情况才去翻。
 
-## 0. 三条铁律
+## 0. 四条铁律
 
 1. **只用下面这条命令调工具**，不碰 bpy、不启动 Blender、不跑 mcd.sh、不 commit。
 2. **修前、修后用同一个实时读工具、同一组参数量一次**，报两个数字。没有数字 = 没做完。
 3. **一段帧、一个意图、一个 op**。要改参数就 `reapply` 那个 op，别再叠一个。
+4. **交报告前必跑抖动闸门**：`analyze_motion {"chain":"<你改的链>","frame_range":[A,B],"brief":true}`，
+   把每根骨的 `jitter_deg` 和 `peak_speed` 修前/修后并排贴上。命中任一条就是**没做完**：
+   ① 修后 `jitter_deg` > 修前 2 倍；② 非加速类任务，修后 `peak_speed` > 修前 2 倍；
+   ③ `peak_speed` 那帧的前后两帧速度平均不到它的 1/2（**这一帧突然抽了一下**）。
+   详见 `tools_io.md` §8.1。**报告漂亮不等于画面漂亮**——2026-10-06 有人 `err_inner=0.001°` 完美通过，
+   却被用户一眼看出跳变（jitter 1.75→8.94、峰速 19.09→57.06）。
 
 ## 1. 命令格式（照抄）
 
@@ -163,9 +169,13 @@
 ### 7.5 打击感（restore_accent）——例：右手 349 帧那一下
 ```
 <套件>/tools/agent analyze_motion '{"agent_id":"<ME>","bones":["hand_fk.R"],"frame_range":[325,373],"brief":true}'
-<套件>/tools/agent restore_accent '{"agent_id":"<ME>","frame_range":[325,373],"data_path":"pose.bones[\"hand_fk.R\"].rotation_quaternion","method":"ease_reshape","strength":0.5,"impact_frame":349,"blend":4}'
+<套件>/tools/agent restore_accent '{"agent_id":"<ME>","frame_range":[325,373],"data_path":"pose.bones[\"hand_fk.R\"].rotation_quaternion","method":"retime","retime_speed":1.5,"impact_frame":349,"blend":4}'
 ```
 - 冲击帧放在窗口**正中**。Euler 骨（`upper_arm_fk/forearm_fk` = `rotation_euler`）要 `"index":0`、`1`、`2` 各写一次。
+- **`method` 用 `"retime"`**（默认值就是它）：只做时间重映射，端点固定、姿态集合不变，
+  所以不会给关节加角度。**不要用 `"ease_reshape"`**——那是在冲击前后加一段角度鼓包，
+  用户实测判定为"错的效应"（小到看不见、大到变成"手多弯一下"）。
+- 验收看 `peak_speed` 上升（`analyze_motion`），**幅度 `amplitude_deg` 应基本不变**，`jitter_deg` 涨幅 ≤2 倍。
 
 ### 7.6 脚滑（foot_lock）——例：左脚 400–450 帧着地别滑
 ```

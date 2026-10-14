@@ -1,0 +1,7 @@
+request/context at [14, 4600, 4685, 5292, 5413, 5494, 6122, 6166, 6179, 6285, 6323, 6340, 6354, 6367, 6395, 6417, 7256, 7279, 7750, 8283, 8312, 8325, 8354, 9098, 9681, 9749, 10223, 10254, 10928, 10984, 11111]
+=== line 10928 seq 10927
+{"type": "request/context", "seq": 10927, "time": 1791215234084, "data": {"provider": "gpt2", "model": "gpt-6.1-sol", "contextWindow": 1000000}}
+=== line 10984 seq 10983
+{"type": "request/context", "seq": 10983, "time": 1791216410845, "data": {"provider": "deepseek-official", "model": "deepseek-flash", "contextWindow": 1000000, "systemPromptUpdate": "in-history"}}
+=== line 11111 seq 11110
+{"type": "request/context", "seq": 11110, "time": 1791218126867, "data": {"provider": "gpt2", "model": "gpt-6.1-sol", "contextWindow": 1000000}}

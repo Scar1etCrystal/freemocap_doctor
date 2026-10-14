@@ -1047,13 +1047,20 @@ def _tool_fix_ground(ctx, frame_range, side, loc_path,
     return op
 
 
-def _tool_restore_accent(ctx, frame_range, data_path, index=None, method="ease_reshape",
+def _tool_restore_accent(ctx, frame_range, data_path, index=None, method="retime",
                          strength=0.5, impact_frame=None,
                          retime_speed=1.5, retime_split=0.35,
                          raw_action=None, blend=4, op_mode="preview",
                          dry_run=False, **_):
     """data_path 指到 .rotation_quaternion / .location 时四分量/三轴整体
-    重塑（index 忽略）；其他通道才需要 index 选分量。"""
+    重塑（index 忽略）；其他通道才需要 index 选分量。
+
+    默认 `method="retime"`（**真正的「时间重塑」**：只重映射时间、端点固定、姿态集合
+    不变 → 结构上不可能产生角度偏移）。2026-10-06 前默认是 `ease_reshape`——它在冲击
+    前后**加一段角度鼓包**（实测：strength 0.5 时 9 帧内峰值 −31.9°、strength 1.0 时
+    总转角 63.7°），用户判定为"错的效应"：0.5 看不见、1.0 变成"手多弯一下"。要过冲
+    效果请显式写 `method="ease_reshape"`，并知道自己在要什么。
+    """
     armature = ctx["armature"]
     if _bone_of_path(data_path):
         _reject_invisible(armature, [_bone_of_path(data_path)], "restore_accent")
@@ -1239,9 +1246,15 @@ def _tool_reapply(ctx, op_id, overrides=None, **_):
             "data": op, "warnings": [], "truncated": False, "hint": ""}
 
 
-def _tool_ab_toggle(ctx, **_):
+def _tool_ab_toggle(ctx, muted=None, **_):
     """A/B 对比：mute/unmute 所有 agent 轨（每条修复各自一轨），
-    mcd_base 保持原样。"""
+    mcd_base 保持原样。
+
+    `muted=true/false` = **显式目标状态**（幂等：调几次都一样）；不给 = 老的"翻转"。
+    2026-10-06 为什么要加：老语义是"**只要有一个还响着 → 全部静音；全静音了 → 全部恢复**"，
+    于是"静音 → 写新 op → 恢复"这套流程里的"恢复"会把**刚写的新 op 一起静音**，
+    下一轮的"静音"反而变成取消静音（w5 跑完时 10 条全落成 muted=true）。
+    要做 A/B 请用显式状态，别靠翻转。"""
     armature = ctx["armature"]
     anim = getattr(armature, "animation_data", None)
     agent_tracks = [t for t in (anim.nla_tracks if anim else ())
@@ -1252,8 +1265,11 @@ def _tool_ab_toggle(ctx, **_):
         agent_tracks = [t for t in agent_tracks if t.name in mine]
     if not agent_tracks:
         return {"muted": None, "note": "没有 agent 轨"}
-    # 以"是否有未静音轨"决定方向：有一个还响着 → 全部静音
-    new_state = any(not t.mute for t in agent_tracks)
+    # 显式给了就照办（幂等）；没给才回退到老的方向判定
+    if muted is None:
+        new_state = any(not t.mute for t in agent_tracks)
+    else:
+        new_state = bool(muted)
     chans = set()
     for t in agent_tracks:
         t.mute = new_state

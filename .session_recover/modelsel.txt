@@ -1,0 +1,9 @@
+last model/selection before cut:
+  seq 10974 {"provider": "deepseek-official", "model": "deepseek-flash", "reasoningEffort": "max"}
+  seq 11101 {"provider": "gpt2", "model": "gpt-6.1-sol", "reasoningEffort": "high"}
+  seq 11424 {"provider": "deepseek-official", "model": "deepseek-flash", "reasoningEffort": "high"}
+  seq 11425 {"provider": "deepseek-official", "model": "deepseek-flash", "reasoningEffort": "max"}
+last turn/end records:
+  seq 11287 {"turn": 166, "reason": {"kind": "completed"}}
+  seq 11336 {"turn": 167, "reason": {"kind": "error", "error": {"message": "upstream_error: Upstream request failed", "code": "PI_AI_ERROR"}}}
+  seq 11423 {"turn": 168, "reason": {"kind": "error", "error": {"message": "gpt2 API error (403): {\"message\":\"预扣积分失败, 用户剩余积分: 0.856086 🍑, 需要预扣积分: 0.92947 🍑 (request id: 202610051722424595737328268d9d6IigdQtQc)

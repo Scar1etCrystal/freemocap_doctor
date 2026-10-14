@@ -28,7 +28,9 @@ agent 认领）`E_OWNER`（改别人的 op）`E_SCOPE`（超界）`E_UNKNOWN`（
 
 ## 方向怎么说（2026-10-04 §16：人看到的 = agent 算的）
 
-`toward`（probe_anatomy / orient_report / swivel）和 `world_dir`（hold_pose）都收**方向词**，工具每帧现算：
+`toward`（probe_anatomy / orient_report / swivel）和 `world_dir`（hold_pose）都收**方向词**，工具每帧现算。
+**还可以给 `toward` / `world_dir` 一个空物体名**（用户拖物体、部位跟着转）；用户说"**只转 Z / 不用管高低差**"
+时再加 `axis:"z"`（投影到 ⊥Z 平面；`"x"`/`"y"` 同理；不给 = 原样三维）——`swivel` 已支持，见下面那一行。
 
 | 词 | 意思 |
 |---|---|
@@ -106,7 +108,7 @@ list_ops       确认新 op 在册
 | `finger_dir` | 手指指向 | hand_fk.{s} |
 | `knuckle` | 指根连线方向 | hand_fk.{s} |
 | `hand_axis` | 腕→指根中心（刚性、⊥掌心约 84°）；掌心/手背修复的**次轴** | hand_fk.{s} |
-| `sole` | 脚底法线（标记箭头 `MCD_sole.{s}` 优先；否则三点定面，小腿在脚背侧定号；`evidence.sole_source`） | foot_ik.{s} |
+| `sole` | 脚底法线（标记箭头 `MCD_sole.{s}` 优先；否则三点定面，小腿在脚背侧定号；`evidence.sole_source`）。**⚠ 三点法把踝关节当脚后跟**——厚底靴上踝比鞋底高 ~55mm，三点几乎共面于脚的矢状面，法线会偏到侧面（实测踩地帧仰角 −12.7°，应 ≈ −90°，**偏 79°**）。2026-10-06 试过用靴子网格面法线聚类自动标定，实测仍差 60–70°，**用户拍板"摆正让人来"**：做脚底方向类修复前，让用户摆一支 `MCD_sole.{s}` 箭头（或用 `markers create` 建好、用户在视口里转正），`markers check` 报"与几何定义差 N°"是**预期的**（那是让用户拍板）。`evidence.sole_bones_caveat` 会提醒这件事 | foot_ik.{s} |
 | `instep` / `toe` | 脚背 / 脚尖 | foot_ik.{s} |
 | `knee_front`（别名 `knee`） | 膝盖骨朝向：小腿上与铰链轴、小腿都垂直、指向外凸侧的方向（直腿也有定义）。读**形变链** ORG-*（= MMD ひざ = 网格；旧版读 IK 腿上看不见的 thigh_fk/shin_fk，膝位置差中位数 42 mm、方向差 13°）。来源 `evidence.knee_source`：`marker`（MCD_knee.{s}）> `hinge`（全片运动标定，小腿上刚性 p90 7.5°；弯 >15° 起渐变跟当帧弯曲平面）> `bend`（当帧凸出角平分线，直腿无定义）。带 toward 时误差 = **绕 髋→踝 连线还差多少度**（`err_metric:"swivel"`）。修复用 `swivel`（`swivel_args` 可直接用） | thigh_ik.{s}（IK 腿）/ thigh_fk.{s}（FK 腿） |
 | `elbow_front`（别名 `elbow`） | **肘尖（鹰嘴）**朝向：前臂上 ⊥ 前臂、外凸侧（不是肘窝；肘窝 = 反方向）。铰链在**前臂**上刚性（p90 14–20°；上臂上 31–34° 不刚性），来源同上 `elbow_source`；误差按 肩→腕 连线 | upper_arm_fk.{s} |
@@ -130,10 +132,10 @@ screen_* viewer`）/ 物体名（SINGLE_ARROW 空物体=箭头 +Z 轴方向；�
 | 工具 | 关键参数 | 干什么 |
 |---|---|---|
 | `hold_pose` | `bones` `frame_range` `target`+`values`/`ref_frame`/`world_dir` `world_axis` `secondary_axis` `dir_object` `dir_mode`(arrow/aim) `flip_guard_deg` `mode`(replace/clamp/outlier) `threshold_deg` `strength` `blend` `op_mode` `track_name` `view` | 姿态保持/方向对齐（四元数骨与 Euler 手臂骨都支持；strength 只作用一次，0.5=一半，>1 超量）。`world_dir` 可以是方向词（逐帧解析；`"camera"` 从 probe 主轴那个部位的位置量）。写**看不见的骨**（腿是 IK 时的 thigh_fk/shin_fk/foot_fk 等）直接报错 |
-| `swivel` | `joint`(knee/elbow) `side` `frame_range` `toward` `view` `strength` `blend` `keep_end` `dry_run` | 膝/肘朝向：绕 髋→踝 / 肩→腕 连线转整条腿/胳膊，脚/手的位置和朝向不动。IK 腿写 `thigh_ik.{s}` 的 Y 旋转（实测转 θ 膝绕连线转 0.85–0.99θ，割线修正一次后误差 0.0°、踝漂 0.07 mm）；FK 臂写 `upper_arm_fk` + `hand_fk` 反转（手腕 0.000 mm、手朝向 0.000°）。转角在旋转空间渐入渐出（Euler 增量 taper 会把手腕甩开）。`metrics`：`err_before/after_inner_deg`、`end_drift_mm`、`end_rot_change_max_deg`、`degenerate_frames`（目标几乎平行于连线的帧，插值补） |
+| `swivel` | `joint`(knee/elbow) `side` `frame_range` `toward` `view` `strength` `blend` `keep_end` **`axis`** `dry_run` | 膝/肘朝向：绕 髋→踝 / 肩→腕 连线转整条腿/胳膊，脚/手的位置和朝向不动。IK 腿写 `thigh_ik.{s}` 的 Y 旋转（实测转 θ 膝绕连线转 0.85–0.99θ，割线修正一次后误差 0.0°、踝漂 0.07 mm）；FK 臂写 `upper_arm_fk` + `hand_fk` 反转（手腕 0.000 mm、手朝向 0.000°）。转角在旋转空间渐入渐出（Euler 增量 taper 会把手腕甩开）。**`axis`（2026-10-06 新增）**：`"z"` 把瞄准方向投影到 ⊥Z 平面（只管水平转动，物体高低差不影响）；`"x"`/`"y"` 同理；不给 = 原样三维瞄准（老行为）。配 `toward:"<空物体名>"` 用——用户拖物体，膝盖跟着转。`axis` 进 `params`，`reapply` 能还原；**复测要用同一个 `axis`**。`metrics`：`err_before/after_inner_deg`、`end_drift_mm`、`end_rot_change_max_deg`、`degenerate_frames`（目标几乎平行于连线的帧，插值补） |
 | `reapply` | `op_id` `overrides`（params 局部覆盖 dict） | 同轨重写该 op：删旧 strip 写新的，op_id 不变 |
 | `clean_jitter` | `frame_range` `bone`\|`paths` `strength` `width` `blend` | 零相位平滑 |
-| `restore_accent` | `frame_range` `data_path` `index` `method`(ease_reshape/retime/hf_reinject/refilter) `strength` `impact_frame` `retime_speed` `retime_split` `raw_action` `blend` | 力量感（quat 四分量整体重塑） |
+| `restore_accent` | `frame_range` `data_path` `index` `method`(**默认 `retime`**；另有 ease_reshape/hf_reinject/refilter) `strength` `impact_frame` `retime_speed` `retime_split` `raw_action` `blend` | 力量感（quat 四分量整体重塑）。**默认 `retime` = 真正的时间重塑**（只重映射时间、端点固定、姿态集合不变 → 不会给关节加角度）。`ease_reshape` 是**加角度鼓包**（0.5 看不见、1.0 变"手多弯一下"，用户 2026-10-06 判定为错的效应），只在你明确要过冲时才用 |
 | `fix_ground` | `frame_range` `side` `loc_path` `mode`（`pen` 推上穿地帧 / `lift` 拉下悬空帧 / `float` 整段钉住；**没有 snap**，旧版此处写错）`rest_clearance`（米：脚底关节点正常着地离地高度，穿鞋模型不是 0——用 `ground_report` 的 `fix_ground_args`）`pin_xy` `blend` | 脚底贴地（按快照高度算） |
 | `solve_pelvis` | `frame_range` `pelvis_path` `pelvis_dz` `blend` | 骨盆高度曲线 |
 | `apply_exemplar` | `frame_range` `ex_id` `loc_path` `quat_path` `target_pos` `target_quat` `anchor_yaw_deg` `yaw_scale` `mirror` `blend` | 模板残差重放 |
@@ -164,12 +166,12 @@ screen_* viewer`）/ 物体名（SINGLE_ARROW 空物体=箭头 +Z 轴方向；�
 
 | 工具 | 类型 | 关键参数 | 干什么 / 验收看什么 |
 |---|---|---|---|
-| `analyze_motion` | 读 | `bones`/`chain` `frame_range` `main_bone` `onset_frame` `stop_frame` `baseline_op` | 主通道 onset/peak/stop、幅度、反向位移、过冲、每骨 `jitter_deg`；`suggest.<工具>.args` 可直接用 |
+| `analyze_motion` | 读 | `bones`/`chain` `frame_range` `main_bone` `onset_frame` `stop_frame` `baseline_op` | 主通道 onset/peak/stop、幅度、反向位移、过冲、每骨 `jitter_deg`；`suggest.<工具>.args` 可直接用。**每份报告必用它跑「抖动闸门」**（`tools_io.md` §8.1）：修后 `jitter_deg` > 修前 2 倍、或非加速类任务 `peak_speed` > 修前 1.5 倍、或出现孤立尖峰（峰速帧前后两帧速度平均不到它 1/2）= 不通过 |
 | `compare_motion` | 读 | `op_id`（直接验收某个 motion_copy，等价于它的 verify.args）或 `a:{bones/chain,frame_range}` `b:{…}` `mirror` `bone_map` `space` `trim` | 两段动作逐帧角差 `err_inner_deg`（复制/镜像验收；a 放目标窗） |
 | `chain_lag` | 读 | `bones`/`chain` `frame_range` `max_lag` `signal` | 每骨相对链内父骨的滞后帧数（只信 `reliable=true`） |
 | `slide_report` | 读 | `side` `frame_range` `threshold_mm` | 每段接触 foot_ik 水平漂移 `drift_mm`（**毫米**），flagged 行带 foot_lock 参数 |
 | `ground_report` | 读 | `frame_range` `side` `threshold_mm`(默认 10) `detail` | 实时脚底高度（DEF-foot 头/尾 + DEF-toe 尾取最低，与快照同一组点）。先从全片 contact 标注标定每只脚"正常着地"高度 `contact_height_mm`（关节中心不是鞋底，穿鞋模型踩实时也离地几厘米），再按相对值判：`pen_max_mm`/`pen_frames`（下沉）、`contacts[].floating`（悬空）；`fix_ground_args` 带好 `mode` 和 `rest_clearance`（米）；`snapshot_diff_max_mm` > 1 mm = 快照已过时，fix_ground 会按旧高度算；`mesh:true` 另报目标网格靴底（顶点组 足首D/足先EX）的真实离地高度 |
-| `motion_copy` | 写 | `bones`/`chain` `src_range` `dst_start`/`dst_range`/`time_scale` `mirror` `bone_map` `space`(local/world) `channels`(rot/rot+loc) `mode`(replace/add) | 动作搬到别的时间/另一侧/别的部位；镜像用 rest 标定的 F=Rest_src⁻¹·S·Rest_dst |
+| `motion_copy` | 写 | `bones`/`chain` `src_range` `dst_start`/`dst_range`/`time_scale` `mirror` `bone_map` `space`(local/world/world_abs) `channels`(rot/rot+loc) `mode`(replace/add) | 动作搬到别的时间/另一侧/别的部位；镜像用 rest 标定的 F=Rest_src⁻¹·S·Rest_dst |
 | `anticipation` | 写 | `bones`/`chain` `frame_range` `main_bone` `amount` `lead` `delay` | 发力前反向小动 + 起点后移 + 时间重映射补回总时长 |
 | `follow_through` | 写 | 同上 + `stop_frame` `amount` `period` `decay` `cycles` `propagate` | 停止点后衰减振荡 |
 | `overshoot` | 写 | 同上 + `amount` `peak_after` `settle` | 停太急 → 冲过头一点再回位（单瓣） |

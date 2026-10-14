@@ -1,0 +1,17 @@
+file                 : C:\Users\George\.dsh\sessions\--F-mocap_ai_doctor--\session-2c3a0cb5-3175-4358-a29a-34ccc991b9da\session.v4.jsonl.zstd
+frames               : 6351  firstFrameLines="{\"type\":\"session\",\"version\":4,\"id\":\"session-2c3a0cb5-3175-43…"
+header               : id=session-2c3a0cb5-3175-4358-a29a-34ccc991b9da createdAt=1790785171786 cwd=F:\mocap_ai_doctor
+events decoded       : 11432 (last seq 11431)
+lines                : 11433
+file:///C:/Users/George/dsh-app/node_modules/@deepseek-ai/dsh-session/lib/index.js:308
+		if (raw.surfaceOp !== void 0) throw new Error(`session event "${event.type}" is not surface-eligible and cannot carry surfaceOp`);
+		                                    ^
+
+Error: session event "system/message" is not surface-eligible and cannot carry surfaceOp
+    at surfaceOpOf (file:///C:/Users/George/dsh-app/node_modules/@deepseek-ai/dsh-session/lib/index.js:308:39)
+    at planSurfaceEvent (file:///C:/Users/George/dsh-app/node_modules/@deepseek-ai/dsh-session/lib/index.js:399:20)
+    at applySurfaceEvent (file:///C:/Users/George/dsh-app/node_modules/@deepseek-ai/dsh-session/lib/index.js:421:33)
+    at foldSurface (file:///C:/Users/George/dsh-app/node_modules/@deepseek-ai/dsh-session/lib/index.js:448:23)
+    at file:///F:/mocap_ai_doctor/.session_recover/rollback.mjs:112:16
+
+Node.js v24.21.0

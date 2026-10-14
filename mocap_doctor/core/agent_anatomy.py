@@ -596,6 +596,14 @@ def _foot_frame(armature: Any, side: str) -> dict | None:
         "confidence": confidence,
         "alternatives": [] if sign_evidence else [[*(-n0)], [*n0]],
     }
+    # 已知局限（2026-10-06 与用户确认，**不自动标定**）：三点法把 `DEF-foot` 的
+    # head（**踝关节**）当脚后跟。厚底靴上踝比鞋底高 ~55 mm，三点几乎共面于脚的
+    # 矢状面 → 法线偏到侧面（实测踩地帧仰角 −12.7°，应 ≈ −90°，偏 79°）。
+    # 试过用靴子网格面法线聚类标定，实测仍差 60–70°，用户拍板"摆正让人来"：
+    # **方向类修复请摆一支 `MCD_sole.{s}` 箭头并由用户肉眼确认**，以箭头为准
+    # （见 markers/adopt；`markers check` 报"与几何定义差 N°"是预期的，那是让你拍板）。
+    out["evidence"]["sole_bones_caveat"] = (
+        "三点法（踝当脚跟）在厚底靴上可偏几十度；摆 MCD_sole 箭头并以它为准")
     mk, why = bound_marker("sole", side)
     if mk is not None:
         msole = marker_dir(mk)

@@ -1,0 +1,11 @@
+file            : C:\Users\George\.dsh\sessions\--F-mocap_ai_doctor--\session-2c3a0cb5-3175-4358-a29a-34ccc991b9da\session.v4.jsonl.zstd
+frames          : 6351; first frame = '{"type":"session","version":4,"id":"sess'
+header          : id=session-2c3a0cb5-3175-4358-a29a-34ccc991b9da cwd=F:\mocap_ai_doctor
+records         : 11432 (last seq 11431 command/done)
+surface CURRENT : 4 nodes, tail=[10218, 11429, 11416, 11418]
+boundary        : seq 11423 = turn/end (turn 168)
+dropped         : 8 records: ['model/selection', 'model/selection', 'command/run', 'compaction/start', 'compaction/summary', 'user/message', 'compaction/end', 'command/done']
+surface RESTORED: 596 nodes, tail=[11408, 11411, 11413, 11416, 11418]
+  first 8 nodes : [10218, 9696, 9685, 9687, 9704, 9705, 9706, 9707]
+wrote           : F:\mocap_ai_doctor\.session_recover\backup\restored-session.v4.jsonl.zstd (9140457 bytes, 13 frames)
+verify OK       : 13 frames, 11424 records, last seq 11423, surface nodes 596

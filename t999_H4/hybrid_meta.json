@@ -1,0 +1,177 @@
+{
+ "take": "t999",
+ "variant": "H4",
+ "R_wc_vs_level_deg": 1.65534349671461,
+ "gated": {
+  "L": [
+   [
+    34,
+    45
+   ],
+   [
+    86,
+    127
+   ],
+   [
+    730,
+    737
+   ],
+   [
+    742,
+    754
+   ],
+   [
+    763,
+    777
+   ],
+   [
+    784,
+    792
+   ],
+   [
+    802,
+    810
+   ],
+   [
+    915,
+    925
+   ],
+   [
+    990,
+    998
+   ]
+  ],
+  "R": [
+   [
+    24,
+    31
+   ],
+   [
+    38,
+    50
+   ],
+   [
+    57,
+    62
+   ],
+   [
+    160,
+    165
+   ],
+   [
+    340,
+    345
+   ],
+   [
+    374,
+    379
+   ],
+   [
+    385,
+    391
+   ],
+   [
+    406,
+    413
+   ],
+   [
+    418,
+    427
+   ],
+   [
+    529,
+    546
+   ],
+   [
+    687,
+    694
+   ],
+   [
+    763,
+    775
+   ],
+   [
+    783,
+    794
+   ],
+   [
+    801,
+    808
+   ],
+   [
+    897,
+    912
+   ],
+   [
+    990,
+    998
+   ]
+  ]
+ },
+ "filled": {
+  "L": {
+   "frames": 128,
+   "pct": 12.8,
+   "by_signal_pct": {
+    "disagree": 5.0,
+    "occluded": 1.2,
+    "speed": 5.0
+   }
+  },
+  "R": {
+   "frames": 154,
+   "pct": 15.4,
+   "by_signal_pct": {
+    "disagree": 5.0,
+    "occluded": 0.7,
+    "speed": 5.0
+   }
+  }
+ },
+ "twist_jump_thr": {
+  "L": 40.0,
+  "R": 40.0
+ },
+ "twist_jump_frames": {
+  "L": 29,
+  "R": 13
+ },
+ "twist": {
+  "L": {
+   "tau_p95_abs": 135.00565377008255,
+   "tau_range": [
+    -159.3175827397117,
+    33.68028894681146
+   ],
+   "phi_range": [
+    -87.62467050684144,
+    18.524158920746302
+   ],
+   "phi_rate_limited_frames": 0,
+   "tau_jump_max": 31.80938125907906
+  },
+  "R": {
+   "tau_p95_abs": 76.53564717581617,
+   "tau_range": [
+    -59.59075060309084,
+    85.80980795119547
+   ],
+   "phi_range": [
+    -32.774912831699964,
+    47.19539437315751
+   ],
+   "phi_rate_limited_frames": 0,
+   "tau_jump_max": 37.71083704230739
+  }
+ },
+ "merge_log_tail": [
+  "[HandBodyMerge] Loading HAMER: /home/sb/fsb_frontend/out_hybrid/t999_H4/hamer/0001-0999_f_full_20260925_162525_hamer_data.pkl",
+  "[HandBodyMerge] HAMER frames: 999, L valid: 999, R valid: 999",
+  "[HandBodyMerge] Missing hand fill: hold L/R=0/0, interp L/R=0/0, valid now L/R=999/999",
+  "[HandBodyMerge] GVHMR branches: ['incam', 'global']",
+  "[HandBodyMerge] Reference branch: incam",
+  "[HandBodyMerge] Post-processing: smooth=one_euro, fps=30.0, max_jump=90.0°, forearm_twist=False",
+  "[HandBodyMerge] Post-processing complete",
+  "[HandBodyMerge] Saved: /home/sb/fsb_frontend/out_hybrid/t999_H4/hamer/merged.pkl"
+ ]
+}

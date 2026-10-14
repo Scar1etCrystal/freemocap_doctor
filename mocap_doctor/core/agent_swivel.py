@@ -62,7 +62,7 @@ def controls(armature, joint, side) -> tuple[str, str | None, bool]:
     return root, end, ik
 
 
-def _measure_fn(joint, side, toward, view, mmd):
+def _measure_fn(joint, side, toward, view, mmd, axis=None):
     jfn = A.frame_joint_fn(joint, side)
     end_name = _END_VISIBLE[joint].format(s=side)
 
@@ -71,7 +71,7 @@ def _measure_fn(joint, side, toward, view, mmd):
         if d is None or d.get("front") is None:
             return None
         t, how = V.resolve_direction(toward, scene=scene, armature=armature, origin=d["joint"],
-                                     view=view, mmd=mmd, side=side)
+                                     view=view, mmd=mmd, side=side, axis=axis)
         phi = A.swivel_error_deg(d["front"], t, d["chord"], pole=d.get("pole"))
         eb = armature.pose.bones.get(end_name)
         endq = (armature.matrix_world @ eb.matrix).to_quaternion() if eb is not None else None
@@ -128,7 +128,7 @@ def _drop(armature, track_name, strip_name):
 
 
 def swivel(scene, armature, *, joint, side, frame_range, toward="forward", view="camera",
-           strength=1.0, blend=4, keep_end=True, op_mode="preview", data_dir=None,
+           strength=1.0, blend=4, keep_end=True, axis=None, op_mode="preview", data_dir=None,
            track_name=None, dry_run=False, record=True):
     joint, side = _joint(joint), _side(side)
     a, b, frames = P.strip_window(frame_range)
@@ -138,7 +138,7 @@ def swivel(scene, armature, *, joint, side, frame_range, toward="forward", view=
     root, end, ik = controls(armature, joint, side)
     mmd = getattr(getattr(scene, "mocap_doctor", None), "mmd_armature", None)
     cal = A.hinge_calibration(armature, side, joint, scene)
-    mfn = _measure_fn(joint, side, toward, view, mmd)
+    mfn = _measure_fn(joint, side, toward, view, mmd, axis=axis)
     bones = [root] + ([end] if (end and keep_end) else [])
     smp = P.sample_visible(scene, armature, bones, frames, world=True, extra_fn=mfn)
     meas0 = smp["extra"]
@@ -164,7 +164,8 @@ def swivel(scene, armature, *, joint, side, frame_range, toward="forward", view=
     if isinstance(cal, dict) and cal.get("spread_p90_deg") is not None:
         metrics["hinge_spread_p90_deg"] = cal["spread_p90_deg"]
     params = {"joint": joint, "side": side, "frame_range": [a, b], "toward": toward, "view": view,
-              "strength": k, "blend": int(blend), "keep_end": bool(keep_end), "bones": bones}
+              "strength": k, "blend": int(blend), "keep_end": bool(keep_end), "bones": bones,
+              "axis": axis}
     warns = []
     big = float(np.abs(phi0[inner]).max()) if len(phi0[inner]) else 0.0
     if big > 120.0:

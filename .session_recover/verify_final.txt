@@ -1,0 +1,6 @@
+preset-standard: 32 rows identical to shipped (nested groups included); compaction-basic gains config.summarizationProvider=deepseek-official, summarizationModel=deepseek-flash
+profile patch: 8 top-level entries
+  ui-chat, ui-settings, ui-settings-account, agent-default-model, llm-pi-ai, subagent-model-selection-settings, preset-standard, llm-deepseek
+llm-deepseek: name=@deepseek-ai/dsh-llm-deepseek-api-key config={"reasoningEffort":"max"}
+preset-standard: name=@deepseek-ai/dsh-agent-preset plugins=19
+OK

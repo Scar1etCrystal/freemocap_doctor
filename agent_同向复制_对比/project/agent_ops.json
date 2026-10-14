@@ -1,0 +1,3972 @@
+[
+ {
+  "id": "solve_pelvis_451369565",
+  "tool": "solve_pelvis",
+  "params": {
+   "pelvis_path": "pose.bones[\"torso_root\"].location"
+  },
+  "frames": [
+   111,
+   126
+  ],
+  "strip": "agent_pelvis_111_126",
+  "track": "agent_pelvis_111_126",
+  "status": "preview",
+  "metrics": {
+   "max_dz": 0.081
+  },
+  "ts": "2026-10-08 17:22:49",
+  "owner": "w1-jump"
+ },
+ {
+  "id": "solve_pelvis_451386575",
+  "tool": "solve_pelvis",
+  "params": {
+   "pelvis_path": "pose.bones[\"torso_root\"].location"
+  },
+  "frames": [
+   447,
+   462
+  ],
+  "strip": "agent_pelvis_447_462",
+  "track": "agent_pelvis_447_462",
+  "status": "preview",
+  "metrics": {
+   "max_dz": 0.081
+  },
+  "ts": "2026-10-08 17:23:06",
+  "owner": "w1-jump"
+ },
+ {
+  "id": "overshoot_451451796",
+  "tool": "overshoot",
+  "params": {
+   "bones": [
+    "foot_ik.L",
+    "foot_ik.R"
+   ],
+   "frame_range": [
+    399,
+    428
+   ],
+   "main_bone": "thigh_fk.L",
+   "onset_frame": 404,
+   "stop_frame": 415,
+   "amount": 0.08,
+   "peak_after": 2,
+   "settle": 6,
+   "lead_in": null,
+   "onset_frac": 0.15,
+   "stop_frac": 0.12,
+   "smooth": 3,
+   "axis_frames": 3,
+   "strength": 1.0,
+   "blend": 3
+  },
+  "frames": [
+   399,
+   428
+  ],
+  "strip": "agent_overshoot_399_428",
+  "track": "agent_overshoot_399_428",
+  "status": "preview",
+  "metrics": {
+   "main_bone": "thigh_fk.L",
+   "onset_frame": 404,
+   "peak_frame": 410,
+   "stop_frame": 415,
+   "peak_speed": 11.77,
+   "rise_start_frame": 413,
+   "overshoot_peak_frame": 417,
+   "settle_end_frame": 423,
+   "amplitude_deg": 70.12,
+   "overshoot_deg": 5.61,
+   "changed_frames": [
+    413,
+    423
+   ],
+   "pinned": [
+    "onset",
+    "stop"
+   ],
+   "bones": {
+    "foot_ik.L": {
+     "amplitude_deg": 51.3,
+     "overshoot_deg": 4.1,
+     "approach_axis": [
+      0.097,
+      -0.07,
+      0.993
+     ],
+     "axis_frames": 3,
+     "rot_mode": "QUATERNION",
+     "rot_change_max_deg": 4.1,
+     "rot_change_mean_deg": 0.68
+    },
+    "foot_ik.R": {
+     "amplitude_deg": 37.76,
+     "overshoot_deg": 3.02,
+     "approach_axis": [
+      -0.036,
+      -0.19,
+      -0.981
+     ],
+     "axis_frames": 4,
+     "rot_mode": "QUATERNION",
+     "rot_change_max_deg": 3.02,
+     "rot_change_mean_deg": 0.5
+    }
+   },
+   "verify": "analyze_motion 复测（同 frame_range、main_bone，stop_frame=415，baseline_op=<本 op_id>）：vs_baseline.bones[主骨].approach_peak_deg≈5.61 @ 417，单瓣；423 之后 diff≈0"
+  },
+  "ts": "2026-10-08 17:24:11",
+  "owner": "w3-legsnap"
+ },
+ {
+  "id": "time_warp_451518654",
+  "tool": "time_warp",
+  "params": {
+   "bones": [
+    "foot_ik.L",
+    "foot_ik.R"
+   ],
+   "chain": null,
+   "frame_range": [
+    399,
+    428
+   ],
+   "map": [
+    [
+     404,
+     404
+    ],
+    [
+     415,
+     423
+    ],
+    [
+     425,
+     425
+    ]
+   ],
+   "speed": null,
+   "pivot": null,
+   "ease": "linear",
+   "strength": 1.0,
+   "blend": 3
+  },
+  "frames": [
+   399,
+   428
+  ],
+  "strip": "agent_timewarp_399_428",
+  "track": "agent_timewarp_399_428",
+  "status": "preview",
+  "metrics": {
+   "bones": {
+    "foot_ik.L": {
+     "rot_mode": "QUATERNION",
+     "rot_change_max_deg": 25.69,
+     "rot_change_mean_deg": 4.28,
+     "loc_change_max_m": 0.2219
+    },
+    "foot_ik.R": {
+     "rot_mode": "QUATERNION",
+     "rot_change_max_deg": 24.17,
+     "rot_change_mean_deg": 3.4,
+     "loc_change_max_m": 0.2178
+    }
+   },
+   "skipped_bones": {},
+   "ease": "linear",
+   "mode": "map",
+   "map_used": [
+    [
+     399,
+     399
+    ],
+    [
+     404,
+     404
+    ],
+    [
+     415,
+     423
+    ],
+    [
+     425,
+     425
+    ],
+    [
+     428,
+     428
+    ]
+   ],
+   "time_map": [
+    [
+     399,
+     399.0
+    ],
+    [
+     401,
+     401.0
+    ],
+    [
+     403,
+     403.0
+    ],
+    [
+     405,
+     405.73
+    ],
+    [
+     407,
+     409.18
+    ],
+    [
+     409,
+     412.64
+    ],
+    [
+     411,
+     416.09
+    ],
+    [
+     413,
+     419.55
+    ],
+    [
+     415,
+     423.0
+    ],
+    [
+     417,
+     423.4
+    ],
+    [
+     419,
+     423.8
+    ],
+    [
+     421,
+     424.2
+    ],
+    [
+     423,
+     424.6
+    ],
+    [
+     425,
+     425.0
+    ],
+    [
+     427,
+     427.0
+    ],
+    [
+     428,
+     428.0
+    ]
+   ],
+   "shift_max_frames": 8.0,
+   "speed_min": 0.2,
+   "speed_max": 1.727,
+   "read_range": [
+    399,
+    428
+   ],
+   "inner_frames": [
+    402,
+    425
+   ],
+   "warnings": []
+  },
+  "ts": "2026-10-08 17:25:18",
+  "owner": "w3-legsnap"
+ },
+ {
+  "id": "restore_accent_451533919",
+  "tool": "restore_accent",
+  "params": {
+   "path": "pose.bones[\"hand_fk.L\"].rotation_quaternion",
+   "index": null,
+   "method": "ease_reshape",
+   "strength": 0.5,
+   "impact_frame": 649,
+   "retime_speed": 1.5,
+   "retime_split": 0.35,
+   "blend": 2,
+   "frame_range": [
+    641,
+    657
+   ]
+  },
+  "frames": [
+   641,
+   657
+  ],
+  "strip": "agent_accent_ease_reshape_641_657",
+  "track": "agent_accent_ease_reshape_641_657",
+  "status": "reverted",
+  "metrics": {
+   "max_pose_shift_deg": 10.9,
+   "impact_frame": 649
+  },
+  "ts": "2026-10-08 17:25:33",
+  "owner": "w4-accent"
+ },
+ {
+  "id": "restore_accent_451541024",
+  "tool": "restore_accent",
+  "params": {
+   "path": "pose.bones[\"forearm_fk.L\"].rotation_euler",
+   "index": 0,
+   "method": "ease_reshape",
+   "strength": 0.5,
+   "impact_frame": 649,
+   "retime_speed": 1.5,
+   "retime_split": 0.35,
+   "blend": 2,
+   "frame_range": [
+    641,
+    657
+   ]
+  },
+  "frames": [
+   641,
+   657
+  ],
+  "strip": "agent_accent_ease_reshape_641_657.001",
+  "track": "agent_accent_ease_reshape_641_657.001",
+  "status": "reverted",
+  "metrics": {
+   "peak_acc_before": 0.08666,
+   "peak_acc_after": 0.13959,
+   "peak_jerk_after": 0.11977
+  },
+  "ts": "2026-10-08 17:25:41",
+  "owner": "w4-accent"
+ },
+ {
+  "id": "restore_accent_451541403",
+  "tool": "restore_accent",
+  "params": {
+   "path": "pose.bones[\"forearm_fk.L\"].rotation_euler",
+   "index": 1,
+   "method": "ease_reshape",
+   "strength": 0.5,
+   "impact_frame": 649,
+   "retime_speed": 1.5,
+   "retime_split": 0.35,
+   "blend": 2,
+   "frame_range": [
+    641,
+    657
+   ]
+  },
+  "frames": [
+   641,
+   657
+  ],
+  "strip": "agent_accent_ease_reshape_641_657.002",
+  "track": "agent_accent_ease_reshape_641_657.002",
+  "status": "reverted",
+  "metrics": {
+   "peak_acc_before": 0.16047,
+   "peak_acc_after": 0.24773,
+   "peak_jerk_after": 0.27323
+  },
+  "ts": "2026-10-08 17:25:41",
+  "owner": "w4-accent"
+ },
+ {
+  "id": "restore_accent_451541578",
+  "tool": "restore_accent",
+  "params": {
+   "path": "pose.bones[\"forearm_fk.L\"].rotation_euler",
+   "index": 2,
+   "method": "ease_reshape",
+   "strength": 0.5,
+   "impact_frame": 649,
+   "retime_speed": 1.5,
+   "retime_split": 0.35,
+   "blend": 2,
+   "frame_range": [
+    641,
+    657
+   ]
+  },
+  "frames": [
+   641,
+   657
+  ],
+  "strip": "agent_accent_ease_reshape_641_657.003",
+  "track": "agent_accent_ease_reshape_641_657.003",
+  "status": "reverted",
+  "metrics": {
+   "peak_acc_before": 0.16139,
+   "peak_acc_after": 0.20767,
+   "peak_jerk_after": 0.24201
+  },
+  "ts": "2026-10-08 17:25:41",
+  "owner": "w4-accent"
+ },
+ {
+  "id": "restore_accent_451541753",
+  "tool": "restore_accent",
+  "params": {
+   "path": "pose.bones[\"upper_arm_fk.L\"].rotation_euler",
+   "index": 0,
+   "method": "ease_reshape",
+   "strength": 0.5,
+   "impact_frame": 649,
+   "retime_speed": 1.5,
+   "retime_split": 0.35,
+   "blend": 2,
+   "frame_range": [
+    641,
+    657
+   ]
+  },
+  "frames": [
+   641,
+   657
+  ],
+  "strip": "agent_accent_ease_reshape_641_657.004",
+  "track": "agent_accent_ease_reshape_641_657.004",
+  "status": "reverted",
+  "metrics": {
+   "peak_acc_before": 0.04186,
+   "peak_acc_after": 0.05954,
+   "peak_jerk_after": 0.03645
+  },
+  "ts": "2026-10-08 17:25:41",
+  "owner": "w4-accent"
+ },
+ {
+  "id": "restore_accent_451541945",
+  "tool": "restore_accent",
+  "params": {
+   "path": "pose.bones[\"upper_arm_fk.L\"].rotation_euler",
+   "index": 1,
+   "method": "ease_reshape",
+   "strength": 0.5,
+   "impact_frame": 649,
+   "retime_speed": 1.5,
+   "retime_split": 0.35,
+   "blend": 2,
+   "frame_range": [
+    641,
+    657
+   ]
+  },
+  "frames": [
+   641,
+   657
+  ],
+  "strip": "agent_accent_ease_reshape_641_657.005",
+  "track": "agent_accent_ease_reshape_641_657.005",
+  "status": "reverted",
+  "metrics": {
+   "peak_acc_before": 0.13239,
+   "peak_acc_after": 0.13853,
+   "peak_jerk_after": 0.11351
+  },
+  "ts": "2026-10-08 17:25:41",
+  "owner": "w4-accent"
+ },
+ {
+  "id": "restore_accent_451542151",
+  "tool": "restore_accent",
+  "params": {
+   "path": "pose.bones[\"upper_arm_fk.L\"].rotation_euler",
+   "index": 2,
+   "method": "ease_reshape",
+   "strength": 0.5,
+   "impact_frame": 649,
+   "retime_speed": 1.5,
+   "retime_split": 0.35,
+   "blend": 2,
+   "frame_range": [
+    641,
+    657
+   ]
+  },
+  "frames": [
+   641,
+   657
+  ],
+  "strip": "agent_accent_ease_reshape_641_657.006",
+  "track": "agent_accent_ease_reshape_641_657.006",
+  "status": "reverted",
+  "metrics": {
+   "peak_acc_before": 0.0774,
+   "peak_acc_after": 0.0774,
+   "peak_jerk_after": 0.05901
+  },
+  "ts": "2026-10-08 17:25:42",
+  "owner": "w4-accent"
+ },
+ {
+  "id": "restore_accent_451542346",
+  "tool": "restore_accent",
+  "params": {
+   "path": "pose.bones[\"hand_fk.L\"].rotation_quaternion",
+   "index": null,
+   "method": "ease_reshape",
+   "strength": 0.5,
+   "impact_frame": 672,
+   "retime_speed": 1.5,
+   "retime_split": 0.35,
+   "blend": 2,
+   "frame_range": [
+    665,
+    679
+   ]
+  },
+  "frames": [
+   665,
+   679
+  ],
+  "strip": "agent_accent_ease_reshape_665_679",
+  "track": "agent_accent_ease_reshape_665_679",
+  "status": "reverted",
+  "metrics": {
+   "max_pose_shift_deg": 6.8,
+   "impact_frame": 672
+  },
+  "ts": "2026-10-08 17:25:42",
+  "owner": "w4-accent"
+ },
+ {
+  "id": "restore_accent_451542520",
+  "tool": "restore_accent",
+  "params": {
+   "path": "pose.bones[\"forearm_fk.L\"].rotation_euler",
+   "index": 0,
+   "method": "ease_reshape",
+   "strength": 1.0,
+   "impact_frame": 670,
+   "retime_speed": 1.5,
+   "retime_split": 0.35,
+   "blend": 2,
+   "frame_range": [
+    662,
+    678
+   ]
+  },
+  "frames": [
+   662,
+   678
+  ],
+  "strip": "agent_accent_ease_reshape_662_678",
+  "track": "agent_accent_ease_reshape_662_678",
+  "status": "reverted",
+  "metrics": {
+   "peak_acc_before": 0.15023,
+   "peak_acc_after": 0.42679,
+   "peak_jerk_after": 0.48661
+  },
+  "ts": "2026-10-08 20:37:11",
+  "owner": "w4-accent"
+ },
+ {
+  "id": "restore_accent_451542645",
+  "tool": "restore_accent",
+  "params": {
+   "path": "pose.bones[\"forearm_fk.L\"].rotation_euler",
+   "index": 1,
+   "method": "ease_reshape",
+   "strength": 1.0,
+   "impact_frame": 670,
+   "retime_speed": 1.5,
+   "retime_split": 0.35,
+   "blend": 2,
+   "frame_range": [
+    662,
+    678
+   ]
+  },
+  "frames": [
+   662,
+   678
+  ],
+  "strip": "agent_accent_ease_reshape_662_678.001",
+  "track": "agent_accent_ease_reshape_662_678.001",
+  "status": "reverted",
+  "metrics": {
+   "peak_acc_before": 0.14294,
+   "peak_acc_after": 0.23745,
+   "peak_jerk_after": 0.24237
+  },
+  "ts": "2026-10-08 20:37:15",
+  "owner": "w4-accent"
+ },
+ {
+  "id": "restore_accent_451542750",
+  "tool": "restore_accent",
+  "params": {
+   "path": "pose.bones[\"forearm_fk.L\"].rotation_euler",
+   "index": 2,
+   "method": "ease_reshape",
+   "strength": 1.0,
+   "impact_frame": 670,
+   "retime_speed": 1.5,
+   "retime_split": 0.35,
+   "blend": 2,
+   "frame_range": [
+    662,
+    678
+   ]
+  },
+  "frames": [
+   662,
+   678
+  ],
+  "strip": "agent_accent_ease_reshape_662_678.002",
+  "track": "agent_accent_ease_reshape_662_678.002",
+  "status": "reverted",
+  "metrics": {
+   "peak_acc_before": 0.22104,
+   "peak_acc_after": 0.40849,
+   "peak_jerk_after": 0.43942
+  },
+  "ts": "2026-10-08 20:37:08",
+  "owner": "w4-accent"
+ },
+ {
+  "id": "restore_accent_451542930",
+  "tool": "restore_accent",
+  "params": {
+   "path": "pose.bones[\"upper_arm_fk.L\"].rotation_euler",
+   "index": 0,
+   "method": "ease_reshape",
+   "strength": 0.5,
+   "impact_frame": 671,
+   "retime_speed": 1.5,
+   "retime_split": 0.35,
+   "blend": 2,
+   "frame_range": [
+    663,
+    679
+   ]
+  },
+  "frames": [
+   663,
+   679
+  ],
+  "strip": "agent_accent_ease_reshape_663_679",
+  "track": "agent_accent_ease_reshape_663_679",
+  "status": "reverted",
+  "metrics": {
+   "peak_acc_before": 0.06579,
+   "peak_acc_after": 0.10843,
+   "peak_jerk_after": 0.20211
+  },
+  "ts": "2026-10-08 17:25:42",
+  "owner": "w4-accent"
+ },
+ {
+  "id": "restore_accent_451543124",
+  "tool": "restore_accent",
+  "params": {
+   "path": "pose.bones[\"upper_arm_fk.L\"].rotation_euler",
+   "index": 1,
+   "method": "ease_reshape",
+   "strength": 0.5,
+   "impact_frame": 671,
+   "retime_speed": 1.5,
+   "retime_split": 0.35,
+   "blend": 2,
+   "frame_range": [
+    663,
+    679
+   ]
+  },
+  "frames": [
+   663,
+   679
+  ],
+  "strip": "agent_accent_ease_reshape_663_679.001",
+  "track": "agent_accent_ease_reshape_663_679.001",
+  "status": "reverted",
+  "metrics": {
+   "peak_acc_before": 0.13786,
+   "peak_acc_after": 0.15293,
+   "peak_jerk_after": 0.09778
+  },
+  "ts": "2026-10-08 17:25:43",
+  "owner": "w4-accent"
+ },
+ {
+  "id": "restore_accent_451543321",
+  "tool": "restore_accent",
+  "params": {
+   "path": "pose.bones[\"upper_arm_fk.L\"].rotation_euler",
+   "index": 2,
+   "method": "ease_reshape",
+   "strength": 0.5,
+   "impact_frame": 671,
+   "retime_speed": 1.5,
+   "retime_split": 0.35,
+   "blend": 2,
+   "frame_range": [
+    663,
+    679
+   ]
+  },
+  "frames": [
+   663,
+   679
+  ],
+  "strip": "agent_accent_ease_reshape_663_679.002",
+  "track": "agent_accent_ease_reshape_663_679.002",
+  "status": "reverted",
+  "metrics": {
+   "peak_acc_before": 0.09648,
+   "peak_acc_after": 0.20619,
+   "peak_jerk_after": 0.33447
+  },
+  "ts": "2026-10-08 17:25:43",
+  "owner": "w4-accent"
+ },
+ {
+  "id": "restore_accent_451543512",
+  "tool": "restore_accent",
+  "params": {
+   "path": "pose.bones[\"upper_arm_fk.R\"].rotation_euler",
+   "index": 0,
+   "method": "ease_reshape",
+   "strength": 0.5,
+   "impact_frame": 664,
+   "retime_speed": 1.5,
+   "retime_split": 0.35,
+   "blend": 2,
+   "frame_range": [
+    656,
+    672
+   ]
+  },
+  "frames": [
+   656,
+   672
+  ],
+  "strip": "agent_accent_ease_reshape_656_672",
+  "track": "agent_accent_ease_reshape_656_672",
+  "status": "reverted",
+  "metrics": {
+   "peak_acc_before": 0.09034,
+   "peak_acc_after": 0.09953,
+   "peak_jerk_after": 0.0806
+  },
+  "ts": "2026-10-08 17:25:43",
+  "owner": "w4-accent"
+ },
+ {
+  "id": "restore_accent_451543716",
+  "tool": "restore_accent",
+  "params": {
+   "path": "pose.bones[\"upper_arm_fk.R\"].rotation_euler",
+   "index": 1,
+   "method": "ease_reshape",
+   "strength": 0.5,
+   "impact_frame": 664,
+   "retime_speed": 1.5,
+   "retime_split": 0.35,
+   "blend": 2,
+   "frame_range": [
+    656,
+    672
+   ]
+  },
+  "frames": [
+   656,
+   672
+  ],
+  "strip": "agent_accent_ease_reshape_656_672.001",
+  "track": "agent_accent_ease_reshape_656_672.001",
+  "status": "reverted",
+  "metrics": {
+   "peak_acc_before": 0.06901,
+   "peak_acc_after": 0.10668,
+   "peak_jerk_after": 0.13708
+  },
+  "ts": "2026-10-08 17:25:43",
+  "owner": "w4-accent"
+ },
+ {
+  "id": "restore_accent_451543922",
+  "tool": "restore_accent",
+  "params": {
+   "path": "pose.bones[\"upper_arm_fk.R\"].rotation_euler",
+   "index": 2,
+   "method": "ease_reshape",
+   "strength": 0.5,
+   "impact_frame": 664,
+   "retime_speed": 1.5,
+   "retime_split": 0.35,
+   "blend": 2,
+   "frame_range": [
+    656,
+    672
+   ]
+  },
+  "frames": [
+   656,
+   672
+  ],
+  "strip": "agent_accent_ease_reshape_656_672.002",
+  "track": "agent_accent_ease_reshape_656_672.002",
+  "status": "reverted",
+  "metrics": {
+   "peak_acc_before": 0.09757,
+   "peak_acc_after": 0.13341,
+   "peak_jerk_after": 0.17894
+  },
+  "ts": "2026-10-08 17:25:43",
+  "owner": "w4-accent"
+ },
+ {
+  "id": "restore_accent_451544113",
+  "tool": "restore_accent",
+  "params": {
+   "path": "pose.bones[\"forearm_fk.R\"].rotation_euler",
+   "index": 0,
+   "method": "ease_reshape",
+   "strength": 0.5,
+   "impact_frame": 664,
+   "retime_speed": 1.5,
+   "retime_split": 0.35,
+   "blend": 2,
+   "frame_range": [
+    657,
+    671
+   ]
+  },
+  "frames": [
+   657,
+   671
+  ],
+  "strip": "agent_accent_ease_reshape_657_671",
+  "track": "agent_accent_ease_reshape_657_671",
+  "status": "reverted",
+  "metrics": {
+   "peak_acc_before": 0.17905,
+   "peak_acc_after": 0.23276,
+   "peak_jerk_after": 0.216
+  },
+  "ts": "2026-10-08 17:25:44",
+  "owner": "w4-accent"
+ },
+ {
+  "id": "restore_accent_451544310",
+  "tool": "restore_accent",
+  "params": {
+   "path": "pose.bones[\"forearm_fk.R\"].rotation_euler",
+   "index": 1,
+   "method": "ease_reshape",
+   "strength": 0.5,
+   "impact_frame": 664,
+   "retime_speed": 1.5,
+   "retime_split": 0.35,
+   "blend": 2,
+   "frame_range": [
+    657,
+    671
+   ]
+  },
+  "frames": [
+   657,
+   671
+  ],
+  "strip": "agent_accent_ease_reshape_657_671.001",
+  "track": "agent_accent_ease_reshape_657_671.001",
+  "status": "reverted",
+  "metrics": {
+   "peak_acc_before": 0.11098,
+   "peak_acc_after": 0.0908,
+   "peak_jerk_after": 0.17896
+  },
+  "ts": "2026-10-08 17:25:44",
+  "owner": "w4-accent"
+ },
+ {
+  "id": "restore_accent_451544505",
+  "tool": "restore_accent",
+  "params": {
+   "path": "pose.bones[\"forearm_fk.R\"].rotation_euler",
+   "index": 2,
+   "method": "ease_reshape",
+   "strength": 0.5,
+   "impact_frame": 664,
+   "retime_speed": 1.5,
+   "retime_split": 0.35,
+   "blend": 2,
+   "frame_range": [
+    657,
+    671
+   ]
+  },
+  "frames": [
+   657,
+   671
+  ],
+  "strip": "agent_accent_ease_reshape_657_671.002",
+  "track": "agent_accent_ease_reshape_657_671.002",
+  "status": "reverted",
+  "metrics": {
+   "peak_acc_before": 0.10286,
+   "peak_acc_after": 0.16863,
+   "peak_jerk_after": 0.15611
+  },
+  "ts": "2026-10-08 17:25:44",
+  "owner": "w4-accent"
+ },
+ {
+  "id": "restore_accent_451544712",
+  "tool": "restore_accent",
+  "params": {
+   "path": "pose.bones[\"forearm_fk.R\"].rotation_euler",
+   "index": 0,
+   "method": "ease_reshape",
+   "strength": 1.0,
+   "impact_frame": 675,
+   "retime_speed": 1.5,
+   "retime_split": 0.35,
+   "blend": 1,
+   "frame_range": [
+    671,
+    679
+   ]
+  },
+  "frames": [
+   671,
+   679
+  ],
+  "strip": "agent_accent_ease_reshape_671_679",
+  "track": "agent_accent_ease_reshape_671_679",
+  "status": "reverted",
+  "metrics": {
+   "peak_acc_before": 0.10448,
+   "peak_acc_after": 0.17821,
+   "peak_jerk_after": 0.14561
+  },
+  "ts": "2026-10-08 20:37:19",
+  "owner": "w4-accent"
+ },
+ {
+  "id": "restore_accent_451544839",
+  "tool": "restore_accent",
+  "params": {
+   "path": "pose.bones[\"forearm_fk.R\"].rotation_euler",
+   "index": 1,
+   "method": "ease_reshape",
+   "strength": 1.0,
+   "impact_frame": 675,
+   "retime_speed": 1.5,
+   "retime_split": 0.35,
+   "blend": 1,
+   "frame_range": [
+    671,
+    679
+   ]
+  },
+  "frames": [
+   671,
+   679
+  ],
+  "strip": "agent_accent_ease_reshape_671_679.001",
+  "track": "agent_accent_ease_reshape_671_679.001",
+  "status": "reverted",
+  "metrics": {
+   "peak_acc_before": 0.02837,
+   "peak_acc_after": 0.10363,
+   "peak_jerk_after": 0.11436
+  },
+  "ts": "2026-10-08 20:37:24",
+  "owner": "w4-accent"
+ },
+ {
+  "id": "restore_accent_451545018",
+  "tool": "restore_accent",
+  "params": {
+   "path": "pose.bones[\"forearm_fk.R\"].rotation_euler",
+   "index": 2,
+   "method": "ease_reshape",
+   "strength": 1.0,
+   "impact_frame": 675,
+   "retime_speed": 1.5,
+   "retime_split": 0.35,
+   "blend": 1,
+   "frame_range": [
+    671,
+    679
+   ]
+  },
+  "frames": [
+   671,
+   679
+  ],
+  "strip": "agent_accent_ease_reshape_671_679.002",
+  "track": "agent_accent_ease_reshape_671_679.002",
+  "status": "reverted",
+  "metrics": {
+   "peak_acc_before": 0.18574,
+   "peak_acc_after": 0.51371,
+   "peak_jerk_after": 0.8651
+  },
+  "ts": "2026-10-08 20:37:28",
+  "owner": "w4-accent"
+ },
+ {
+  "id": "restore_accent_451545213",
+  "tool": "restore_accent",
+  "params": {
+   "path": "pose.bones[\"hand_fk.R\"].rotation_quaternion",
+   "index": null,
+   "method": "ease_reshape",
+   "strength": 0.5,
+   "impact_frame": 675,
+   "retime_speed": 1.5,
+   "retime_split": 0.35,
+   "blend": 1,
+   "frame_range": [
+    671,
+    679
+   ]
+  },
+  "frames": [
+   671,
+   679
+  ],
+  "strip": "agent_accent_ease_reshape_671_679.003",
+  "track": "agent_accent_ease_reshape_671_679.003",
+  "status": "reverted",
+  "metrics": {
+   "max_pose_shift_deg": 10.9,
+   "impact_frame": 675
+  },
+  "ts": "2026-10-08 17:25:45",
+  "owner": "w4-accent"
+ },
+ {
+  "id": "swivel_451644009",
+  "tool": "swivel",
+  "params": {
+   "joint": "knee",
+   "side": "R",
+   "frame_range": [
+    938,
+    949
+   ],
+   "toward": "char_left",
+   "view": "camera",
+   "strength": 0.3659,
+   "blend": 1,
+   "keep_end": true,
+   "bones": [
+    "thigh_ik.R"
+   ]
+  },
+  "frames": [
+   938,
+   949
+  ],
+  "strip": "agent_swivel_kneeR_938_949",
+  "track": "agent_swivel_kneeR_938_949",
+  "status": "reverted",
+  "metrics": {
+   "joint": "knee",
+   "side": "R",
+   "limb": "IK",
+   "control": "thigh_ik.R",
+   "keep_end_bone": null,
+   "front_source": "marker",
+   "toward_how": "char_left(躯干)",
+   "err_before_inner_deg": 85.9,
+   "err_before_mean_deg": 82.0,
+   "degenerate_frames": 0,
+   "inner_frames": [
+    939,
+    948
+   ],
+   "bend_deg_range": [
+    47.6,
+    88.0
+   ],
+   "hinge_spread_p90_deg": 2.9,
+   "ik_gain_median": 0.997,
+   "err_after_inner_deg": 54.5,
+   "applied_max_deg": 31.5,
+   "applied_mean_deg": 25.1,
+   "end_drift_mm": 0.01,
+   "root_drift_mm": 0.0,
+   "joint_moved_max_mm": 135.7,
+   "end_rot_change_max_deg": 0.0,
+   "note": "复测：probe_anatomy part=knee_front side=R toward=<同一个目标> frame_range=<用户帧段> → err_inner_deg（swivel 平面）"
+  },
+  "ts": "2026-10-08 17:27:24",
+  "owner": "w5-swivel"
+ },
+ {
+  "id": "swivel_451644294",
+  "tool": "swivel",
+  "params": {
+   "joint": "knee",
+   "side": "R",
+   "frame_range": [
+    949,
+    952
+   ],
+   "toward": "char_right",
+   "view": "camera",
+   "strength": 0.3033,
+   "blend": 1,
+   "keep_end": true,
+   "bones": [
+    "thigh_ik.R"
+   ]
+  },
+  "frames": [
+   949,
+   952
+  ],
+  "strip": "agent_swivel_kneeR_949_952",
+  "track": "agent_swivel_kneeR_949_952",
+  "status": "reverted",
+  "metrics": {
+   "joint": "knee",
+   "side": "R",
+   "limb": "IK",
+   "control": "thigh_ik.R",
+   "keep_end_bone": null,
+   "front_source": "marker",
+   "toward_how": "char_right(躯干)",
+   "err_before_inner_deg": 99.8,
+   "err_before_mean_deg": 98.8,
+   "degenerate_frames": 0,
+   "inner_frames": [
+    950,
+    951
+   ],
+   "bend_deg_range": [
+    64.8,
+    75.6
+   ],
+   "hinge_spread_p90_deg": 2.9,
+   "ik_gain_median": 1.001,
+   "err_after_inner_deg": 69.5,
+   "applied_max_deg": 30.2,
+   "applied_mean_deg": 15.0,
+   "end_drift_mm": 0.01,
+   "root_drift_mm": 0.0,
+   "joint_moved_max_mm": 117.8,
+   "end_rot_change_max_deg": 0.0,
+   "note": "复测：probe_anatomy part=knee_front side=R toward=<同一个目标> frame_range=<用户帧段> → err_inner_deg（swivel 平面）"
+  },
+  "ts": "2026-10-08 17:27:24",
+  "owner": "w5-swivel"
+ },
+ {
+  "id": "swivel_451644593",
+  "tool": "swivel",
+  "params": {
+   "joint": "knee",
+   "side": "R",
+   "frame_range": [
+    952,
+    958
+   ],
+   "toward": "char_left",
+   "view": "camera",
+   "strength": 0.3628,
+   "blend": 1,
+   "keep_end": true,
+   "bones": [
+    "thigh_ik.R"
+   ]
+  },
+  "frames": [
+   952,
+   958
+  ],
+  "strip": "agent_swivel_kneeR_952_958",
+  "track": "agent_swivel_kneeR_952_958",
+  "status": "reverted",
+  "metrics": {
+   "joint": "knee",
+   "side": "R",
+   "limb": "IK",
+   "control": "thigh_ik.R",
+   "keep_end_bone": null,
+   "front_source": "marker",
+   "toward_how": "char_left(躯干)",
+   "err_before_inner_deg": 84.6,
+   "err_before_mean_deg": 83.0,
+   "degenerate_frames": 0,
+   "inner_frames": [
+    953,
+    957
+   ],
+   "bend_deg_range": [
+    63.4,
+    71.8
+   ],
+   "hinge_spread_p90_deg": 2.9,
+   "ik_gain_median": 0.997,
+   "err_after_inner_deg": 53.9,
+   "applied_max_deg": 30.8,
+   "applied_mean_deg": 21.6,
+   "end_drift_mm": 0.01,
+   "root_drift_mm": 0.0,
+   "joint_moved_max_mm": 117.2,
+   "end_rot_change_max_deg": 0.0,
+   "note": "复测：probe_anatomy part=knee_front side=R toward=<同一个目标> frame_range=<用户帧段> → err_inner_deg（swivel 平面）"
+  },
+  "ts": "2026-10-08 17:27:24",
+  "owner": "w5-swivel"
+ },
+ {
+  "id": "swivel_451644922",
+  "tool": "swivel",
+  "params": {
+   "joint": "knee",
+   "side": "R",
+   "frame_range": [
+    958,
+    964
+   ],
+   "toward": "char_right",
+   "view": "camera",
+   "strength": 0.3061,
+   "blend": 1,
+   "keep_end": true,
+   "bones": [
+    "thigh_ik.R"
+   ]
+  },
+  "frames": [
+   958,
+   964
+  ],
+  "strip": "agent_swivel_kneeR_958_964",
+  "track": "agent_swivel_kneeR_958_964",
+  "status": "reverted",
+  "metrics": {
+   "joint": "knee",
+   "side": "R",
+   "limb": "IK",
+   "control": "thigh_ik.R",
+   "keep_end_bone": null,
+   "front_source": "marker",
+   "toward_how": "char_right(躯干)",
+   "err_before_inner_deg": 99.9,
+   "err_before_mean_deg": 97.9,
+   "degenerate_frames": 0,
+   "inner_frames": [
+    959,
+    963
+   ],
+   "bend_deg_range": [
+    61.3,
+    71.0
+   ],
+   "hinge_spread_p90_deg": 2.9,
+   "ik_gain_median": 1.0,
+   "err_after_inner_deg": 69.4,
+   "applied_max_deg": 30.6,
+   "applied_mean_deg": 21.4,
+   "end_drift_mm": 0.01,
+   "root_drift_mm": 0.0,
+   "joint_moved_max_mm": 114.5,
+   "end_rot_change_max_deg": 0.0,
+   "note": "复测：probe_anatomy part=knee_front side=R toward=<同一个目标> frame_range=<用户帧段> → err_inner_deg（swivel 平面）"
+  },
+  "ts": "2026-10-08 17:27:24",
+  "owner": "w5-swivel"
+ },
+ {
+  "id": "swivel_451645253",
+  "tool": "swivel",
+  "params": {
+   "joint": "knee",
+   "side": "R",
+   "frame_range": [
+    964,
+    968
+   ],
+   "toward": "char_left",
+   "view": "camera",
+   "strength": 0.3741,
+   "blend": 1,
+   "keep_end": true,
+   "bones": [
+    "thigh_ik.R"
+   ]
+  },
+  "frames": [
+   964,
+   968
+  ],
+  "strip": "agent_swivel_kneeR_964_968",
+  "track": "agent_swivel_kneeR_964_968",
+  "status": "reverted",
+  "metrics": {
+   "joint": "knee",
+   "side": "R",
+   "limb": "IK",
+   "control": "thigh_ik.R",
+   "keep_end_bone": null,
+   "front_source": "marker",
+   "toward_how": "char_left(躯干)",
+   "err_before_inner_deg": 81.7,
+   "err_before_mean_deg": 79.9,
+   "degenerate_frames": 0,
+   "inner_frames": [
+    965,
+    967
+   ],
+   "bend_deg_range": [
+    56.0,
+    61.3
+   ],
+   "hinge_spread_p90_deg": 2.9,
+   "ik_gain_median": 0.997,
+   "err_after_inner_deg": 51.1,
+   "applied_max_deg": 30.6,
+   "applied_mean_deg": 18.0,
+   "end_drift_mm": 0.0,
+   "root_drift_mm": 0.0,
+   "joint_moved_max_mm": 102.8,
+   "end_rot_change_max_deg": 0.0,
+   "note": "复测：probe_anatomy part=knee_front side=R toward=<同一个目标> frame_range=<用户帧段> → err_inner_deg（swivel 平面）"
+  },
+  "ts": "2026-10-08 17:27:25",
+  "owner": "w5-swivel"
+ },
+ {
+  "id": "swivel_451645541",
+  "tool": "swivel",
+  "params": {
+   "joint": "knee",
+   "side": "R",
+   "frame_range": [
+    968,
+    972
+   ],
+   "toward": "char_right",
+   "view": "camera",
+   "strength": 0.3003,
+   "blend": 1,
+   "keep_end": true,
+   "bones": [
+    "thigh_ik.R"
+   ]
+  },
+  "frames": [
+   968,
+   972
+  ],
+  "strip": "agent_swivel_kneeR_968_972",
+  "track": "agent_swivel_kneeR_968_972",
+  "status": "reverted",
+  "metrics": {
+   "joint": "knee",
+   "side": "R",
+   "limb": "IK",
+   "control": "thigh_ik.R",
+   "keep_end_bone": null,
+   "front_source": "marker",
+   "toward_how": "char_right(躯干)",
+   "err_before_inner_deg": 101.5,
+   "err_before_mean_deg": 100.1,
+   "degenerate_frames": 0,
+   "inner_frames": [
+    969,
+    971
+   ],
+   "bend_deg_range": [
+    56.0,
+    60.3
+   ],
+   "hinge_spread_p90_deg": 2.9,
+   "ik_gain_median": 0.999,
+   "err_after_inner_deg": 71.0,
+   "applied_max_deg": 30.5,
+   "applied_mean_deg": 18.1,
+   "end_drift_mm": 0.01,
+   "root_drift_mm": 0.0,
+   "joint_moved_max_mm": 98.9,
+   "end_rot_change_max_deg": 0.0,
+   "note": "复测：probe_anatomy part=knee_front side=R toward=<同一个目标> frame_range=<用户帧段> → err_inner_deg（swivel 平面）"
+  },
+  "ts": "2026-10-08 17:27:25",
+  "owner": "w5-swivel"
+ },
+ {
+  "id": "swivel_451645867",
+  "tool": "swivel",
+  "params": {
+   "joint": "knee",
+   "side": "R",
+   "frame_range": [
+    972,
+    978
+   ],
+   "toward": "char_left",
+   "view": "camera",
+   "strength": 0.3686,
+   "blend": 1,
+   "keep_end": true,
+   "bones": [
+    "thigh_ik.R"
+   ]
+  },
+  "frames": [
+   972,
+   978
+  ],
+  "strip": "agent_swivel_kneeR_972_978",
+  "track": "agent_swivel_kneeR_972_978",
+  "status": "reverted",
+  "metrics": {
+   "joint": "knee",
+   "side": "R",
+   "limb": "IK",
+   "control": "thigh_ik.R",
+   "keep_end_bone": null,
+   "front_source": "marker",
+   "toward_how": "char_left(躯干)",
+   "err_before_inner_deg": 83.3,
+   "err_before_mean_deg": 81.7,
+   "degenerate_frames": 0,
+   "inner_frames": [
+    973,
+    977
+   ],
+   "bend_deg_range": [
+    53.9,
+    60.7
+   ],
+   "hinge_spread_p90_deg": 2.9,
+   "ik_gain_median": 0.997,
+   "err_after_inner_deg": 52.6,
+   "applied_max_deg": 30.8,
+   "applied_mean_deg": 21.6,
+   "end_drift_mm": 0.0,
+   "root_drift_mm": 0.0,
+   "joint_moved_max_mm": 106.2,
+   "end_rot_change_max_deg": 0.0,
+   "note": "复测：probe_anatomy part=knee_front side=R toward=<同一个目标> frame_range=<用户帧段> → err_inner_deg（swivel 平面）"
+  },
+  "ts": "2026-10-08 17:27:25",
+  "owner": "w5-swivel"
+ },
+ {
+  "id": "swivel_451646166",
+  "tool": "swivel",
+  "params": {
+   "joint": "knee",
+   "side": "R",
+   "frame_range": [
+    978,
+    982
+   ],
+   "toward": "char_right",
+   "view": "camera",
+   "strength": 0.3018,
+   "blend": 1,
+   "keep_end": true,
+   "bones": [
+    "thigh_ik.R"
+   ]
+  },
+  "frames": [
+   978,
+   982
+  ],
+  "strip": "agent_swivel_kneeR_978_982",
+  "track": "agent_swivel_kneeR_978_982",
+  "status": "reverted",
+  "metrics": {
+   "joint": "knee",
+   "side": "R",
+   "limb": "IK",
+   "control": "thigh_ik.R",
+   "keep_end_bone": null,
+   "front_source": "marker",
+   "toward_how": "char_right(躯干)",
+   "err_before_inner_deg": 101.1,
+   "err_before_mean_deg": 99.7,
+   "degenerate_frames": 0,
+   "inner_frames": [
+    979,
+    981
+   ],
+   "bend_deg_range": [
+    54.4,
+    67.1
+   ],
+   "hinge_spread_p90_deg": 2.9,
+   "ik_gain_median": 1.0,
+   "err_after_inner_deg": 70.6,
+   "applied_max_deg": 30.5,
+   "applied_mean_deg": 18.1,
+   "end_drift_mm": 0.01,
+   "root_drift_mm": 0.0,
+   "joint_moved_max_mm": 107.4,
+   "end_rot_change_max_deg": 0.0,
+   "note": "复测：probe_anatomy part=knee_front side=R toward=<同一个目标> frame_range=<用户帧段> → err_inner_deg（swivel 平面）"
+  },
+  "ts": "2026-10-08 17:27:26",
+  "owner": "w5-swivel"
+ },
+ {
+  "id": "swivel_451646525",
+  "tool": "swivel",
+  "params": {
+   "joint": "knee",
+   "side": "R",
+   "frame_range": [
+    982,
+    991
+   ],
+   "toward": "char_left",
+   "view": "camera",
+   "strength": 0.3659,
+   "blend": 1,
+   "keep_end": true,
+   "bones": [
+    "thigh_ik.R"
+   ]
+  },
+  "frames": [
+   982,
+   991
+  ],
+  "strip": "agent_swivel_kneeR_982_991",
+  "track": "agent_swivel_kneeR_982_991",
+  "status": "reverted",
+  "metrics": {
+   "joint": "knee",
+   "side": "R",
+   "limb": "IK",
+   "control": "thigh_ik.R",
+   "keep_end_bone": null,
+   "front_source": "marker",
+   "toward_how": "char_left(躯干)",
+   "err_before_inner_deg": 84.9,
+   "err_before_mean_deg": 82.1,
+   "degenerate_frames": 0,
+   "inner_frames": [
+    983,
+    990
+   ],
+   "bend_deg_range": [
+    47.9,
+    68.6
+   ],
+   "hinge_spread_p90_deg": 2.9,
+   "ik_gain_median": 0.997,
+   "err_after_inner_deg": 53.8,
+   "applied_max_deg": 31.1,
+   "applied_mean_deg": 24.1,
+   "end_drift_mm": 0.01,
+   "root_drift_mm": 0.0,
+   "joint_moved_max_mm": 119.1,
+   "end_rot_change_max_deg": 0.0,
+   "note": "复测：probe_anatomy part=knee_front side=R toward=<同一个目标> frame_range=<用户帧段> → err_inner_deg（swivel 平面）"
+  },
+  "ts": "2026-10-08 17:27:26",
+  "owner": "w5-swivel"
+ },
+ {
+  "id": "restore_accent_451647991",
+  "tool": "restore_accent",
+  "params": {
+   "path": "pose.bones[\"upper_arm_fk.L\"].rotation_euler",
+   "index": 0,
+   "method": "ease_reshape",
+   "strength": 0.5,
+   "impact_frame": 659,
+   "retime_speed": 1.5,
+   "retime_split": 0.35,
+   "blend": 1,
+   "frame_range": [
+    655,
+    663
+   ]
+  },
+  "frames": [
+   655,
+   663
+  ],
+  "strip": "agent_accent_ease_reshape_655_663",
+  "track": "agent_accent_ease_reshape_655_663",
+  "status": "reverted",
+  "metrics": {
+   "peak_acc_before": 0.07474,
+   "peak_acc_after": 0.10091,
+   "peak_jerk_after": 0.08267
+  },
+  "ts": "2026-10-08 17:27:27",
+  "owner": "w4-accent"
+ },
+ {
+  "id": "restore_accent_451648348",
+  "tool": "restore_accent",
+  "params": {
+   "path": "pose.bones[\"upper_arm_fk.L\"].rotation_euler",
+   "index": 1,
+   "method": "ease_reshape",
+   "strength": 0.5,
+   "impact_frame": 659,
+   "retime_speed": 1.5,
+   "retime_split": 0.35,
+   "blend": 1,
+   "frame_range": [
+    655,
+    663
+   ]
+  },
+  "frames": [
+   655,
+   663
+  ],
+  "strip": "agent_accent_ease_reshape_655_663.001",
+  "track": "agent_accent_ease_reshape_655_663.001",
+  "status": "reverted",
+  "metrics": {
+   "peak_acc_before": 0.13239,
+   "peak_acc_after": 0.25907,
+   "peak_jerk_after": 0.33651
+  },
+  "ts": "2026-10-08 17:27:28",
+  "owner": "w4-accent"
+ },
+ {
+  "id": "restore_accent_451648537",
+  "tool": "restore_accent",
+  "params": {
+   "path": "pose.bones[\"upper_arm_fk.L\"].rotation_euler",
+   "index": 2,
+   "method": "ease_reshape",
+   "strength": 0.5,
+   "impact_frame": 659,
+   "retime_speed": 1.5,
+   "retime_split": 0.35,
+   "blend": 1,
+   "frame_range": [
+    655,
+    663
+   ]
+  },
+  "frames": [
+   655,
+   663
+  ],
+  "strip": "agent_accent_ease_reshape_655_663.002",
+  "track": "agent_accent_ease_reshape_655_663.002",
+  "status": "reverted",
+  "metrics": {
+   "peak_acc_before": 0.09314,
+   "peak_acc_after": 0.09489,
+   "peak_jerk_after": 0.13125
+  },
+  "ts": "2026-10-08 17:27:28",
+  "owner": "w4-accent"
+ },
+ {
+  "id": "restore_accent_451648743",
+  "tool": "restore_accent",
+  "params": {
+   "path": "pose.bones[\"upper_arm_fk.R\"].rotation_euler",
+   "index": 0,
+   "method": "ease_reshape",
+   "strength": 0.5,
+   "impact_frame": 653,
+   "retime_speed": 1.5,
+   "retime_split": 0.35,
+   "blend": 1,
+   "frame_range": [
+    649,
+    657
+   ]
+  },
+  "frames": [
+   649,
+   657
+  ],
+  "strip": "agent_accent_ease_reshape_649_657",
+  "track": "agent_accent_ease_reshape_649_657",
+  "status": "reverted",
+  "metrics": {
+   "peak_acc_before": 0.05056,
+   "peak_acc_after": 0.03547,
+   "peak_jerk_after": 0.0376
+  },
+  "ts": "2026-10-08 17:27:28",
+  "owner": "w4-accent"
+ },
+ {
+  "id": "restore_accent_451648946",
+  "tool": "restore_accent",
+  "params": {
+   "path": "pose.bones[\"upper_arm_fk.R\"].rotation_euler",
+   "index": 1,
+   "method": "ease_reshape",
+   "strength": 0.5,
+   "impact_frame": 653,
+   "retime_speed": 1.5,
+   "retime_split": 0.35,
+   "blend": 1,
+   "frame_range": [
+    649,
+    657
+   ]
+  },
+  "frames": [
+   649,
+   657
+  ],
+  "strip": "agent_accent_ease_reshape_649_657.001",
+  "track": "agent_accent_ease_reshape_649_657.001",
+  "status": "reverted",
+  "metrics": {
+   "peak_acc_before": 0.07903,
+   "peak_acc_after": 0.16007,
+   "peak_jerk_after": 0.2172
+  },
+  "ts": "2026-10-08 17:27:28",
+  "owner": "w4-accent"
+ },
+ {
+  "id": "restore_accent_451649145",
+  "tool": "restore_accent",
+  "params": {
+   "path": "pose.bones[\"upper_arm_fk.R\"].rotation_euler",
+   "index": 2,
+   "method": "ease_reshape",
+   "strength": 0.5,
+   "impact_frame": 653,
+   "retime_speed": 1.5,
+   "retime_split": 0.35,
+   "blend": 1,
+   "frame_range": [
+    649,
+    657
+   ]
+  },
+  "frames": [
+   649,
+   657
+  ],
+  "strip": "agent_accent_ease_reshape_649_657.002",
+  "track": "agent_accent_ease_reshape_649_657.002",
+  "status": "reverted",
+  "metrics": {
+   "peak_acc_before": 0.07813,
+   "peak_acc_after": 0.06057,
+   "peak_jerk_after": 0.0367
+  },
+  "ts": "2026-10-08 17:27:29",
+  "owner": "w4-accent"
+ },
+ {
+  "id": "restore_accent_451649332",
+  "tool": "restore_accent",
+  "params": {
+   "path": "pose.bones[\"upper_arm_fk.R\"].rotation_euler",
+   "index": 0,
+   "method": "ease_reshape",
+   "strength": 0.5,
+   "impact_frame": 675,
+   "retime_speed": 1.5,
+   "retime_split": 0.35,
+   "blend": 1,
+   "frame_range": [
+    671,
+    679
+   ]
+  },
+  "frames": [
+   671,
+   679
+  ],
+  "strip": "agent_accent_ease_reshape_671_679.004",
+  "track": "agent_accent_ease_reshape_671_679.004",
+  "status": "reverted",
+  "metrics": {
+   "peak_acc_before": 0.06937,
+   "peak_acc_after": 0.1038,
+   "peak_jerk_after": 0.0781
+  },
+  "ts": "2026-10-08 17:27:29",
+  "owner": "w4-accent"
+ },
+ {
+  "id": "restore_accent_451649540",
+  "tool": "restore_accent",
+  "params": {
+   "path": "pose.bones[\"upper_arm_fk.R\"].rotation_euler",
+   "index": 1,
+   "method": "ease_reshape",
+   "strength": 0.5,
+   "impact_frame": 675,
+   "retime_speed": 1.5,
+   "retime_split": 0.35,
+   "blend": 1,
+   "frame_range": [
+    671,
+    679
+   ]
+  },
+  "frames": [
+   671,
+   679
+  ],
+  "strip": "agent_accent_ease_reshape_671_679.005",
+  "track": "agent_accent_ease_reshape_671_679.005",
+  "status": "reverted",
+  "metrics": {
+   "peak_acc_before": 0.06385,
+   "peak_acc_after": 0.1403,
+   "peak_jerk_after": 0.19369
+  },
+  "ts": "2026-10-08 17:27:29",
+  "owner": "w4-accent"
+ },
+ {
+  "id": "restore_accent_451649742",
+  "tool": "restore_accent",
+  "params": {
+   "path": "pose.bones[\"upper_arm_fk.R\"].rotation_euler",
+   "index": 2,
+   "method": "ease_reshape",
+   "strength": 0.5,
+   "impact_frame": 675,
+   "retime_speed": 1.5,
+   "retime_split": 0.35,
+   "blend": 1,
+   "frame_range": [
+    671,
+    679
+   ]
+  },
+  "frames": [
+   671,
+   679
+  ],
+  "strip": "agent_accent_ease_reshape_671_679.006",
+  "track": "agent_accent_ease_reshape_671_679.006",
+  "status": "reverted",
+  "metrics": {
+   "peak_acc_before": 0.05254,
+   "peak_acc_after": 0.04345,
+   "peak_jerk_after": 0.06981
+  },
+  "ts": "2026-10-08 17:27:29",
+  "owner": "w4-accent"
+ },
+ {
+  "id": "swivel_464222744",
+  "tool": "swivel",
+  "params": {
+   "joint": "knee",
+   "side": "R",
+   "frame_range": [
+    927,
+    949
+   ],
+   "toward": "char_right",
+   "view": "camera",
+   "strength": 0.3171,
+   "blend": 11,
+   "keep_end": true,
+   "bones": [
+    "thigh_ik.R"
+   ]
+  },
+  "frames": [
+   927,
+   949
+  ],
+  "strip": "agent_swivel_kneeR_927_949",
+  "track": "agent_swivel_kneeR_927_949",
+  "status": "reverted",
+  "metrics": {
+   "joint": "knee",
+   "side": "R",
+   "limb": "IK",
+   "control": "thigh_ik.R",
+   "keep_end_bone": null,
+   "front_source": "marker",
+   "toward_how": "char_right(躯干)",
+   "err_before_inner_deg": 103.1,
+   "err_before_mean_deg": 97.2,
+   "degenerate_frames": 0,
+   "inner_frames": [
+    927,
+    949
+   ],
+   "bend_deg_range": [
+    30.1,
+    88.0
+   ],
+   "hinge_spread_p90_deg": 2.9,
+   "ik_gain_median": 0.999,
+   "err_after_inner_deg": 102.3,
+   "applied_max_deg": 30.1,
+   "applied_mean_deg": 14.6,
+   "end_drift_mm": 0.06,
+   "root_drift_mm": 0.0,
+   "joint_moved_max_mm": 86.8,
+   "end_rot_change_max_deg": 0.0,
+   "note": "复测：probe_anatomy part=knee_front side=R toward=<同一个目标> frame_range=<用户帧段> → err_inner_deg（swivel 平面）"
+  },
+  "ts": "2026-10-08 20:57:02",
+  "owner": "w5-swivel"
+ },
+ {
+  "id": "swivel_464223076",
+  "tool": "swivel",
+  "params": {
+   "joint": "knee",
+   "side": "R",
+   "frame_range": [
+    946,
+    952
+   ],
+   "toward": "char_left",
+   "view": "camera",
+   "strength": 0.3836,
+   "blend": 3,
+   "keep_end": true,
+   "bones": [
+    "thigh_ik.R"
+   ]
+  },
+  "frames": [
+   946,
+   952
+  ],
+  "strip": "agent_swivel_kneeR_946_952",
+  "track": "agent_swivel_kneeR_946_952",
+  "status": "reverted",
+  "metrics": {
+   "joint": "knee",
+   "side": "R",
+   "limb": "IK",
+   "control": "thigh_ik.R",
+   "keep_end_bone": null,
+   "front_source": "marker",
+   "toward_how": "char_left(躯干)",
+   "err_before_inner_deg": 84.7,
+   "err_before_mean_deg": 81.0,
+   "degenerate_frames": 0,
+   "inner_frames": [
+    946,
+    952
+   ],
+   "bend_deg_range": [
+    64.8,
+    87.9
+   ],
+   "hinge_spread_p90_deg": 2.9,
+   "ik_gain_median": 0.998,
+   "err_after_inner_deg": 84.7,
+   "applied_max_deg": 30.1,
+   "applied_mean_deg": 13.0,
+   "end_drift_mm": 0.0,
+   "root_drift_mm": 0.0,
+   "joint_moved_max_mm": 124.9,
+   "end_rot_change_max_deg": 0.0,
+   "note": "复测：probe_anatomy part=knee_front side=R toward=<同一个目标> frame_range=<用户帧段> → err_inner_deg（swivel 平面）"
+  },
+  "ts": "2026-10-08 20:57:03",
+  "owner": "w5-swivel"
+ },
+ {
+  "id": "swivel_464223380",
+  "tool": "swivel",
+  "params": {
+   "joint": "knee",
+   "side": "R",
+   "frame_range": [
+    949,
+    955
+   ],
+   "toward": "char_right",
+   "view": "camera",
+   "strength": 0.3119,
+   "blend": 3,
+   "keep_end": true,
+   "bones": [
+    "thigh_ik.R"
+   ]
+  },
+  "frames": [
+   949,
+   955
+  ],
+  "strip": "agent_swivel_kneeR_949_955",
+  "track": "agent_swivel_kneeR_949_955",
+  "status": "reverted",
+  "metrics": {
+   "joint": "knee",
+   "side": "R",
+   "limb": "IK",
+   "control": "thigh_ik.R",
+   "keep_end_bone": null,
+   "front_source": "marker",
+   "toward_how": "char_right(躯干)",
+   "err_before_inner_deg": 131.8,
+   "err_before_mean_deg": 106.3,
+   "degenerate_frames": 0,
+   "inner_frames": [
+    949,
+    955
+   ],
+   "bend_deg_range": [
+    63.4,
+    75.7
+   ],
+   "hinge_spread_p90_deg": 2.9,
+   "ik_gain_median": 1.0,
+   "err_after_inner_deg": 131.8,
+   "applied_max_deg": 30.0,
+   "applied_mean_deg": 13.5,
+   "end_drift_mm": 0.01,
+   "root_drift_mm": 0.0,
+   "joint_moved_max_mm": 109.1,
+   "end_rot_change_max_deg": 0.0,
+   "note": "复测：probe_anatomy part=knee_front side=R toward=<同一个目标> frame_range=<用户帧段> → err_inner_deg（swivel 平面）"
+  },
+  "ts": "2026-10-08 20:57:03",
+  "owner": "w5-swivel"
+ },
+ {
+  "id": "swivel_464223787",
+  "tool": "swivel",
+  "params": {
+   "joint": "knee",
+   "side": "R",
+   "frame_range": [
+    952,
+    964
+   ],
+   "toward": "char_left",
+   "view": "camera",
+   "strength": 0.3745,
+   "blend": 6,
+   "keep_end": true,
+   "bones": [
+    "thigh_ik.R"
+   ]
+  },
+  "frames": [
+   952,
+   964
+  ],
+  "strip": "agent_swivel_kneeR_952_964",
+  "track": "agent_swivel_kneeR_952_964",
+  "status": "reverted",
+  "metrics": {
+   "joint": "knee",
+   "side": "R",
+   "limb": "IK",
+   "control": "thigh_ik.R",
+   "keep_end_bone": null,
+   "front_source": "marker",
+   "toward_how": "char_left(躯干)",
+   "err_before_inner_deg": 113.8,
+   "err_before_mean_deg": 87.1,
+   "degenerate_frames": 0,
+   "inner_frames": [
+    952,
+    964
+   ],
+   "bend_deg_range": [
+    61.3,
+    71.8
+   ],
+   "hinge_spread_p90_deg": 2.9,
+   "ik_gain_median": 0.998,
+   "err_after_inner_deg": 113.8,
+   "applied_max_deg": 30.1,
+   "applied_mean_deg": 14.2,
+   "end_drift_mm": 0.01,
+   "root_drift_mm": 0.0,
+   "joint_moved_max_mm": 118.6,
+   "end_rot_change_max_deg": 0.0,
+   "note": "复测：probe_anatomy part=knee_front side=R toward=<同一个目标> frame_range=<用户帧段> → err_inner_deg（swivel 平面）"
+  },
+  "ts": "2026-10-08 20:57:03",
+  "owner": "w5-swivel"
+ },
+ {
+  "id": "swivel_464224187",
+  "tool": "swivel",
+  "params": {
+   "joint": "knee",
+   "side": "R",
+   "frame_range": [
+    960,
+    968
+   ],
+   "toward": "char_right",
+   "view": "camera",
+   "strength": 0.3106,
+   "blend": 4,
+   "keep_end": true,
+   "bones": [
+    "thigh_ik.R"
+   ]
+  },
+  "frames": [
+   960,
+   968
+  ],
+  "strip": "agent_swivel_kneeR_960_968",
+  "track": "agent_swivel_kneeR_960_968",
+  "status": "reverted",
+  "metrics": {
+   "joint": "knee",
+   "side": "R",
+   "limb": "IK",
+   "control": "thigh_ik.R",
+   "keep_end_bone": null,
+   "front_source": "marker",
+   "toward_how": "char_right(躯干)",
+   "err_before_inner_deg": 121.7,
+   "err_before_mean_deg": 104.1,
+   "degenerate_frames": 0,
+   "inner_frames": [
+    960,
+    968
+   ],
+   "bend_deg_range": [
+    56.0,
+    63.5
+   ],
+   "hinge_spread_p90_deg": 2.9,
+   "ik_gain_median": 0.999,
+   "err_after_inner_deg": 121.7,
+   "applied_max_deg": 30.0,
+   "applied_mean_deg": 13.8,
+   "end_drift_mm": 0.01,
+   "root_drift_mm": 0.0,
+   "joint_moved_max_mm": 104.2,
+   "end_rot_change_max_deg": 0.0,
+   "note": "复测：probe_anatomy part=knee_front side=R toward=<同一个目标> frame_range=<用户帧段> → err_inner_deg（swivel 平面）"
+  },
+  "ts": "2026-10-08 20:57:04",
+  "owner": "w5-swivel"
+ },
+ {
+  "id": "swivel_464224602",
+  "tool": "swivel",
+  "params": {
+   "joint": "knee",
+   "side": "R",
+   "frame_range": [
+    964,
+    972
+   ],
+   "toward": "char_left",
+   "view": "camera",
+   "strength": 0.3846,
+   "blend": 4,
+   "keep_end": true,
+   "bones": [
+    "thigh_ik.R"
+   ]
+  },
+  "frames": [
+   964,
+   972
+  ],
+  "strip": "agent_swivel_kneeR_964_972",
+  "track": "agent_swivel_kneeR_964_972",
+  "status": "reverted",
+  "metrics": {
+   "joint": "knee",
+   "side": "R",
+   "limb": "IK",
+   "control": "thigh_ik.R",
+   "keep_end_bone": null,
+   "front_source": "marker",
+   "toward_how": "char_left(躯干)",
+   "err_before_inner_deg": 113.4,
+   "err_before_mean_deg": 88.9,
+   "degenerate_frames": 0,
+   "inner_frames": [
+    964,
+    972
+   ],
+   "bend_deg_range": [
+    56.0,
+    61.2
+   ],
+   "hinge_spread_p90_deg": 2.9,
+   "ik_gain_median": 0.997,
+   "err_after_inner_deg": 113.4,
+   "applied_max_deg": 30.1,
+   "applied_mean_deg": 14.2,
+   "end_drift_mm": 0.0,
+   "root_drift_mm": 0.0,
+   "joint_moved_max_mm": 96.9,
+   "end_rot_change_max_deg": 0.0,
+   "note": "复测：probe_anatomy part=knee_front side=R toward=<同一个目标> frame_range=<用户帧段> → err_inner_deg（swivel 平面）"
+  },
+  "ts": "2026-10-08 20:57:04",
+  "owner": "w5-swivel"
+ },
+ {
+  "id": "swivel_464224940",
+  "tool": "swivel",
+  "params": {
+   "joint": "knee",
+   "side": "R",
+   "frame_range": [
+    968,
+    976
+   ],
+   "toward": "char_right",
+   "view": "camera",
+   "strength": 0.3086,
+   "blend": 4,
+   "keep_end": true,
+   "bones": [
+    "thigh_ik.R"
+   ]
+  },
+  "frames": [
+   968,
+   976
+  ],
+  "strip": "agent_swivel_kneeR_968_976",
+  "track": "agent_swivel_kneeR_968_976",
+  "status": "reverted",
+  "metrics": {
+   "joint": "knee",
+   "side": "R",
+   "limb": "IK",
+   "control": "thigh_ik.R",
+   "keep_end_bone": null,
+   "front_source": "marker",
+   "toward_how": "char_right(躯干)",
+   "err_before_inner_deg": 132.0,
+   "err_before_mean_deg": 107.4,
+   "degenerate_frames": 0,
+   "inner_frames": [
+    968,
+    976
+   ],
+   "bend_deg_range": [
+    55.2,
+    60.7
+   ],
+   "hinge_spread_p90_deg": 2.9,
+   "ik_gain_median": 0.999,
+   "err_after_inner_deg": 132.0,
+   "applied_max_deg": 30.0,
+   "applied_mean_deg": 14.0,
+   "end_drift_mm": 0.01,
+   "root_drift_mm": 0.0,
+   "joint_moved_max_mm": 102.6,
+   "end_rot_change_max_deg": 0.0,
+   "note": "复测：probe_anatomy part=knee_front side=R toward=<同一个目标> frame_range=<用户帧段> → err_inner_deg（swivel 平面）"
+  },
+  "ts": "2026-10-08 20:57:04",
+  "owner": "w5-swivel"
+ },
+ {
+  "id": "swivel_464225346",
+  "tool": "swivel",
+  "params": {
+   "joint": "knee",
+   "side": "R",
+   "frame_range": [
+    974,
+    982
+   ],
+   "toward": "char_left",
+   "view": "camera",
+   "strength": 0.3812,
+   "blend": 4,
+   "keep_end": true,
+   "bones": [
+    "thigh_ik.R"
+   ]
+  },
+  "frames": [
+   974,
+   982
+  ],
+  "strip": "agent_swivel_kneeR_974_982",
+  "track": "agent_swivel_kneeR_974_982",
+  "status": "reverted",
+  "metrics": {
+   "joint": "knee",
+   "side": "R",
+   "limb": "IK",
+   "control": "thigh_ik.R",
+   "keep_end_bone": null,
+   "front_source": "marker",
+   "toward_how": "char_left(躯干)",
+   "err_before_inner_deg": 97.9,
+   "err_before_mean_deg": 83.1,
+   "degenerate_frames": 0,
+   "inner_frames": [
+    974,
+    982
+   ],
+   "bend_deg_range": [
+    53.9,
+    67.1
+   ],
+   "hinge_spread_p90_deg": 2.9,
+   "ik_gain_median": 0.997,
+   "err_after_inner_deg": 97.9,
+   "applied_max_deg": 30.1,
+   "applied_mean_deg": 13.5,
+   "end_drift_mm": 0.0,
+   "root_drift_mm": 0.0,
+   "joint_moved_max_mm": 94.3,
+   "end_rot_change_max_deg": 0.0,
+   "note": "复测：probe_anatomy part=knee_front side=R toward=<同一个目标> frame_range=<用户帧段> → err_inner_deg（swivel 平面）"
+  },
+  "ts": "2026-10-08 20:57:05",
+  "owner": "w5-swivel"
+ },
+ {
+  "id": "swivel_464225679",
+  "tool": "swivel",
+  "params": {
+   "joint": "knee",
+   "side": "R",
+   "frame_range": [
+    978,
+    986
+   ],
+   "toward": "char_right",
+   "view": "camera",
+   "strength": 0.3106,
+   "blend": 4,
+   "keep_end": true,
+   "bones": [
+    "thigh_ik.R"
+   ]
+  },
+  "frames": [
+   978,
+   986
+  ],
+  "strip": "agent_swivel_kneeR_978_986",
+  "track": "agent_swivel_kneeR_978_986",
+  "status": "reverted",
+  "metrics": {
+   "joint": "knee",
+   "side": "R",
+   "limb": "IK",
+   "control": "thigh_ik.R",
+   "keep_end_bone": null,
+   "front_source": "marker",
+   "toward_how": "char_right(躯干)",
+   "err_before_inner_deg": 131.3,
+   "err_before_mean_deg": 106.2,
+   "degenerate_frames": 0,
+   "inner_frames": [
+    978,
+    986
+   ],
+   "bend_deg_range": [
+    54.5,
+    68.6
+   ],
+   "hinge_spread_p90_deg": 2.9,
+   "ik_gain_median": 1.0,
+   "err_after_inner_deg": 131.3,
+   "applied_max_deg": 30.0,
+   "applied_mean_deg": 13.9,
+   "end_drift_mm": 0.01,
+   "root_drift_mm": 0.0,
+   "joint_moved_max_mm": 112.3,
+   "end_rot_change_max_deg": 0.0,
+   "note": "复测：probe_anatomy part=knee_front side=R toward=<同一个目标> frame_range=<用户帧段> → err_inner_deg（swivel 平面）"
+  },
+  "ts": "2026-10-08 20:57:05",
+  "owner": "w5-swivel"
+ },
+ {
+  "id": "swivel_464226108",
+  "tool": "swivel",
+  "params": {
+   "joint": "knee",
+   "side": "R",
+   "frame_range": [
+    982,
+    1000
+   ],
+   "toward": "char_left",
+   "view": "camera",
+   "strength": 0.3778,
+   "blend": 9,
+   "keep_end": true,
+   "bones": [
+    "thigh_ik.R"
+   ]
+  },
+  "frames": [
+   982,
+   1000
+  ],
+  "strip": "agent_swivel_kneeR_982_1000",
+  "track": "agent_swivel_kneeR_982_1000",
+  "status": "reverted",
+  "metrics": {
+   "joint": "knee",
+   "side": "R",
+   "limb": "IK",
+   "control": "thigh_ik.R",
+   "keep_end_bone": null,
+   "front_source": "marker",
+   "toward_how": "char_left(躯干)",
+   "err_before_inner_deg": 113.4,
+   "err_before_mean_deg": 84.5,
+   "degenerate_frames": 0,
+   "inner_frames": [
+    982,
+    1000
+   ],
+   "bend_deg_range": [
+    41.9,
+    68.4
+   ],
+   "hinge_spread_p90_deg": 2.9,
+   "ik_gain_median": 0.997,
+   "err_after_inner_deg": 113.4,
+   "applied_max_deg": 30.1,
+   "applied_mean_deg": 14.4,
+   "end_drift_mm": 0.07,
+   "root_drift_mm": 0.0,
+   "joint_moved_max_mm": 85.9,
+   "end_rot_change_max_deg": 0.0,
+   "note": "复测：probe_anatomy part=knee_front side=R toward=<同一个目标> frame_range=<用户帧段> → err_inner_deg（swivel 平面）"
+  },
+  "ts": "2026-10-08 20:57:06",
+  "owner": "w5-swivel"
+ },
+ {
+  "id": "time_warp_464244311",
+  "tool": "time_warp",
+  "params": {
+   "bones": [
+    "upper_arm_fk.L",
+    "forearm_fk.L",
+    "hand_fk.L"
+   ],
+   "chain": null,
+   "frame_range": [
+    641,
+    679
+   ],
+   "map": [
+    [
+     641,
+     641
+    ],
+    [
+     644,
+     644
+    ],
+    [
+     647,
+     644.6
+    ],
+    [
+     650,
+     650
+    ],
+    [
+     653,
+     650.6
+    ],
+    [
+     656,
+     656
+    ],
+    [
+     658.5,
+     656.5
+    ],
+    [
+     661,
+     661
+    ],
+    [
+     664,
+     661.6
+    ],
+    [
+     667,
+     667
+    ],
+    [
+     671,
+     667.8
+    ],
+    [
+     675,
+     675
+    ],
+    [
+     679,
+     679
+    ]
+   ],
+   "speed": null,
+   "pivot": null,
+   "ease": "linear",
+   "strength": 1.0,
+   "blend": 4
+  },
+  "frames": [
+   641,
+   679
+  ],
+  "strip": "agent_timewarp_641_679",
+  "track": "agent_timewarp_641_679",
+  "status": "preview",
+  "metrics": {
+   "bones": {
+    "upper_arm_fk.L": {
+     "rot_mode": "XYZ",
+     "rot_change_max_deg": 42.66,
+     "rot_change_mean_deg": 10.46
+    },
+    "forearm_fk.L": {
+     "rot_mode": "XYZ",
+     "rot_change_max_deg": 58.61,
+     "rot_change_mean_deg": 10.62
+    },
+    "hand_fk.L": {
+     "rot_mode": "QUATERNION",
+     "rot_change_max_deg": 14.42,
+     "rot_change_mean_deg": 4.49
+    }
+   },
+   "skipped_bones": {},
+   "ease": "linear",
+   "mode": "map",
+   "map_used": [
+    [
+     641,
+     641
+    ],
+    [
+     644,
+     644
+    ],
+    [
+     647,
+     644.6
+    ],
+    [
+     650,
+     650
+    ],
+    [
+     653,
+     650.6
+    ],
+    [
+     656,
+     656
+    ],
+    [
+     658.5,
+     656.5
+    ],
+    [
+     661,
+     661
+    ],
+    [
+     664,
+     661.6
+    ],
+    [
+     667,
+     667
+    ],
+    [
+     671,
+     667.8
+    ],
+    [
+     675,
+     675
+    ],
+    [
+     679,
+     679
+    ]
+   ],
+   "time_map": [
+    [
+     641,
+     641.0
+    ],
+    [
+     644,
+     644.0
+    ],
+    [
+     647,
+     644.6
+    ],
+    [
+     650,
+     650.0
+    ],
+    [
+     653,
+     650.6
+    ],
+    [
+     656,
+     656.0
+    ],
+    [
+     659,
+     657.4
+    ],
+    [
+     662,
+     661.2
+    ],
+    [
+     665,
+     663.4
+    ],
+    [
+     668,
+     667.2
+    ],
+    [
+     671,
+     667.8
+    ],
+    [
+     674,
+     673.2
+    ],
+    [
+     677,
+     677.0
+    ],
+    [
+     679,
+     679.0
+    ]
+   ],
+   "shift_max_frames": 3.2,
+   "speed_min": 0.2,
+   "speed_max": 1.8,
+   "read_range": [
+    641,
+    679
+   ],
+   "inner_frames": [
+    645,
+    675
+   ],
+   "warnings": []
+  },
+  "ts": "2026-10-08 21:02:27",
+  "owner": "w4-accent"
+ },
+ {
+  "id": "time_warp_464244633",
+  "tool": "time_warp",
+  "params": {
+   "bones": [
+    "upper_arm_fk.R",
+    "forearm_fk.R",
+    "hand_fk.R"
+   ],
+   "chain": null,
+   "frame_range": [
+    641,
+    679
+   ],
+   "map": [
+    [
+     641,
+     641
+    ],
+    [
+     644,
+     644
+    ],
+    [
+     646.5,
+     644.5
+    ],
+    [
+     649,
+     649
+    ],
+    [
+     652.5,
+     649.7
+    ],
+    [
+     656,
+     656
+    ],
+    [
+     658.5,
+     656.5
+    ],
+    [
+     661,
+     661
+    ],
+    [
+     664.5,
+     661.7
+    ],
+    [
+     668,
+     668
+    ],
+    [
+     671.5,
+     668.7
+    ],
+    [
+     675,
+     675
+    ],
+    [
+     679,
+     679
+    ]
+   ],
+   "speed": null,
+   "pivot": null,
+   "ease": "linear",
+   "strength": 1.0,
+   "blend": 4
+  },
+  "frames": [
+   641,
+   679
+  ],
+  "strip": "agent_timewarp_641_679.001",
+  "track": "agent_timewarp_641_679.001",
+  "status": "preview",
+  "metrics": {
+   "bones": {
+    "upper_arm_fk.R": {
+     "rot_mode": "XYZ",
+     "rot_change_max_deg": 29.5,
+     "rot_change_mean_deg": 8.04
+    },
+    "forearm_fk.R": {
+     "rot_mode": "XYZ",
+     "rot_change_max_deg": 27.63,
+     "rot_change_mean_deg": 7.88
+    },
+    "hand_fk.R": {
+     "rot_mode": "QUATERNION",
+     "rot_change_max_deg": 16.68,
+     "rot_change_mean_deg": 4.03
+    }
+   },
+   "skipped_bones": {},
+   "ease": "linear",
+   "mode": "map",
+   "map_used": [
+    [
+     641,
+     641
+    ],
+    [
+     644,
+     644
+    ],
+    [
+     646.5,
+     644.5
+    ],
+    [
+     649,
+     649
+    ],
+    [
+     652.5,
+     649.7
+    ],
+    [
+     656,
+     656
+    ],
+    [
+     658.5,
+     656.5
+    ],
+    [
+     661,
+     661
+    ],
+    [
+     664.5,
+     661.7
+    ],
+    [
+     668,
+     668
+    ],
+    [
+     671.5,
+     668.7
+    ],
+    [
+     675,
+     675
+    ],
+    [
+     679,
+     679
+    ]
+   ],
+   "time_map": [
+    [
+     641,
+     641.0
+    ],
+    [
+     644,
+     644.0
+    ],
+    [
+     647,
+     645.4
+    ],
+    [
+     650,
+     649.2
+    ],
+    [
+     653,
+     650.6
+    ],
+    [
+     656,
+     656.0
+    ],
+    [
+     659,
+     657.4
+    ],
+    [
+     662,
+     661.2
+    ],
+    [
+     665,
+     662.6
+    ],
+    [
+     668,
+     668.0
+    ],
+    [
+     671,
+     668.6
+    ],
+    [
+     674,
+     673.2
+    ],
+    [
+     677,
+     677.0
+    ],
+    [
+     679,
+     679.0
+    ]
+   ],
+   "shift_max_frames": 2.4,
+   "speed_min": 0.2,
+   "speed_max": 1.8,
+   "read_range": [
+    641,
+    679
+   ],
+   "inner_frames": [
+    645,
+    675
+   ],
+   "warnings": []
+  },
+  "ts": "2026-10-08 21:02:27",
+  "owner": "w4-accent"
+ },
+ {
+  "id": "swivel_464554884",
+  "tool": "swivel",
+  "params": {
+   "joint": "knee",
+   "side": "R",
+   "frame_range": [
+    960,
+    968
+   ],
+   "toward": "char_right",
+   "view": "camera",
+   "strength": 0.3106,
+   "blend": 4,
+   "keep_end": true,
+   "bones": [
+    "thigh_ik.R"
+   ]
+  },
+  "frames": [
+   960,
+   968
+  ],
+  "strip": "agent_swivel_kneeR_960_968",
+  "track": "agent_swivel_kneeR_960_968",
+  "status": "reverted",
+  "metrics": {
+   "joint": "knee",
+   "side": "R",
+   "limb": "IK",
+   "control": "thigh_ik.R",
+   "keep_end_bone": null,
+   "front_source": "marker",
+   "toward_how": "char_right(躯干)",
+   "err_before_inner_deg": 121.7,
+   "err_before_mean_deg": 104.1,
+   "degenerate_frames": 0,
+   "inner_frames": [
+    960,
+    968
+   ],
+   "bend_deg_range": [
+    56.0,
+    63.5
+   ],
+   "hinge_spread_p90_deg": 2.9,
+   "ik_gain_median": 0.999,
+   "err_after_inner_deg": 121.7,
+   "applied_max_deg": 30.0,
+   "applied_mean_deg": 13.8,
+   "end_drift_mm": 0.01,
+   "root_drift_mm": 0.0,
+   "joint_moved_max_mm": 104.2,
+   "end_rot_change_max_deg": 0.0,
+   "note": "复测：probe_anatomy part=knee_front side=R toward=<同一个目标> frame_range=<用户帧段> → err_inner_deg（swivel 平面）"
+  },
+  "ts": "2026-10-08 21:02:34",
+  "owner": "w5-swivel"
+ },
+ {
+  "id": "motion_copy_467430127",
+  "tool": "motion_copy",
+  "params": {
+   "src_bones": [
+    "shoulder.L",
+    "upper_arm_fk.L",
+    "forearm_fk.L",
+    "hand_fk.L",
+    "f_index.01.L",
+    "f_index.02.L",
+    "f_index.03.L",
+    "f_middle.01.L",
+    "f_middle.02.L",
+    "f_middle.03.L",
+    "f_ring.01.L",
+    "f_ring.02.L",
+    "f_ring.03.L",
+    "f_pinky.01.L",
+    "f_pinky.02.L",
+    "f_pinky.03.L",
+    "thumb.01.L",
+    "thumb.02.L",
+    "thumb.03.L"
+   ],
+   "bones": [
+    "shoulder.R",
+    "upper_arm_fk.R",
+    "forearm_fk.R",
+    "hand_fk.R",
+    "f_index.01.R",
+    "f_index.02.R",
+    "f_index.03.R",
+    "f_middle.01.R",
+    "f_middle.02.R",
+    "f_middle.03.R",
+    "f_ring.01.R",
+    "f_ring.02.R",
+    "f_ring.03.R",
+    "f_pinky.01.R",
+    "f_pinky.02.R",
+    "f_pinky.03.R",
+    "thumb.01.R",
+    "thumb.02.R",
+    "thumb.03.R"
+   ],
+   "src_range": [
+    233,
+    279
+   ],
+   "dst_start": 233,
+   "dst_range": [
+    233,
+    279
+   ],
+   "time_scale": 1.0,
+   "frame_range": [
+    233,
+    279
+   ],
+   "mirror": false,
+   "bone_map": {
+    "shoulder.L": "shoulder.R",
+    "upper_arm_fk.L": "upper_arm_fk.R",
+    "forearm_fk.L": "forearm_fk.R",
+    "hand_fk.L": "hand_fk.R",
+    "f_index.01.L": "f_index.01.R",
+    "f_index.02.L": "f_index.02.R",
+    "f_index.03.L": "f_index.03.R",
+    "f_middle.01.L": "f_middle.01.R",
+    "f_middle.02.L": "f_middle.02.R",
+    "f_middle.03.L": "f_middle.03.R",
+    "f_ring.01.L": "f_ring.01.R",
+    "f_ring.02.L": "f_ring.02.R",
+    "f_ring.03.L": "f_ring.03.R",
+    "f_pinky.01.L": "f_pinky.01.R",
+    "f_pinky.02.L": "f_pinky.02.R",
+    "f_pinky.03.L": "f_pinky.03.R",
+    "thumb.01.L": "thumb.01.R",
+    "thumb.02.L": "thumb.02.R",
+    "thumb.03.L": "thumb.03.R"
+   },
+   "space": "local",
+   "channels": "rot",
+   "mode": "replace",
+   "strength": 1.0,
+   "blend": 4,
+   "_applied_window": [
+    233,
+    279
+   ]
+  },
+  "frames": [
+   233,
+   279
+  ],
+  "strip": "agent_copy_233_279",
+  "track": "agent_copy_233_279",
+  "status": "reverted",
+  "metrics": {
+   "bones": {
+    "shoulder.R": {
+     "rot_mode": "YXZ",
+     "rot_change_max_deg": 10.9,
+     "rot_change_mean_deg": 5.79
+    },
+    "upper_arm_fk.R": {
+     "rot_mode": "XYZ",
+     "rot_change_max_deg": 57.89,
+     "rot_change_mean_deg": 52.57
+    },
+    "forearm_fk.R": {
+     "rot_mode": "XYZ",
+     "rot_change_max_deg": 90.57,
+     "rot_change_mean_deg": 69.61
+    },
+    "hand_fk.R": {
+     "rot_mode": "QUATERNION",
+     "rot_change_max_deg": 164.94,
+     "rot_change_mean_deg": 153.54
+    },
+    "f_index.01.R": {
+     "rot_mode": "QUATERNION",
+     "rot_change_max_deg": 39.68,
+     "rot_change_mean_deg": 26.15
+    },
+    "f_index.02.R": {
+     "rot_mode": "QUATERNION",
+     "rot_change_max_deg": 47.78,
+     "rot_change_mean_deg": 29.81
+    },
+    "f_index.03.R": {
+     "rot_mode": "QUATERNION",
+     "rot_change_max_deg": 28.71,
+     "rot_change_mean_deg": 20.9
+    },
+    "f_middle.01.R": {
+     "rot_mode": "QUATERNION",
+     "rot_change_max_deg": 42.77,
+     "rot_change_mean_deg": 26.65
+    },
+    "f_middle.02.R": {
+     "rot_mode": "QUATERNION",
+     "rot_change_max_deg": 45.26,
+     "rot_change_mean_deg": 34.62
+    },
+    "f_middle.03.R": {
+     "rot_mode": "QUATERNION",
+     "rot_change_max_deg": 21.75,
+     "rot_change_mean_deg": 17.68
+    },
+    "f_ring.01.R": {
+     "rot_mode": "QUATERNION",
+     "rot_change_max_deg": 48.95,
+     "rot_change_mean_deg": 36.97
+    },
+    "f_ring.02.R": {
+     "rot_mode": "QUATERNION",
+     "rot_change_max_deg": 58.08,
+     "rot_change_mean_deg": 51.41
+    },
+    "f_ring.03.R": {
+     "rot_mode": "QUATERNION",
+     "rot_change_max_deg": 30.02,
+     "rot_change_mean_deg": 25.08
+    },
+    "f_pinky.01.R": {
+     "rot_mode": "QUATERNION",
+     "rot_change_max_deg": 48.84,
+     "rot_change_mean_deg": 31.08
+    },
+    "f_pinky.02.R": {
+     "rot_mode": "QUATERNION",
+     "rot_change_max_deg": 32.15,
+     "rot_change_mean_deg": 20.65
+    },
+    "f_pinky.03.R": {
+     "rot_mode": "QUATERNION",
+     "rot_change_max_deg": 48.37,
+     "rot_change_mean_deg": 36.78
+    },
+    "thumb.01.R": {
+     "rot_mode": "QUATERNION",
+     "rot_change_max_deg": 88.98,
+     "rot_change_mean_deg": 77.59
+    },
+    "thumb.02.R": {
+     "rot_mode": "QUATERNION",
+     "rot_change_max_deg": 89.81,
+     "rot_change_mean_deg": 82.46
+    },
+    "thumb.03.R": {
+     "rot_mode": "QUATERNION",
+     "rot_change_max_deg": 77.81,
+     "rot_change_mean_deg": 60.7
+    }
+   },
+   "mirror_map": {
+    "shoulder.L": "shoulder.R",
+    "upper_arm_fk.L": "upper_arm_fk.R",
+    "forearm_fk.L": "forearm_fk.R",
+    "hand_fk.L": "hand_fk.R",
+    "f_index.01.L": "f_index.01.R",
+    "f_index.02.L": "f_index.02.R",
+    "f_index.03.L": "f_index.03.R",
+    "f_middle.01.L": "f_middle.01.R",
+    "f_middle.02.L": "f_middle.02.R",
+    "f_middle.03.L": "f_middle.03.R",
+    "f_ring.01.L": "f_ring.01.R",
+    "f_ring.02.L": "f_ring.02.R",
+    "f_ring.03.L": "f_ring.03.R",
+    "f_pinky.01.L": "f_pinky.01.R",
+    "f_pinky.02.L": "f_pinky.02.R",
+    "f_pinky.03.L": "f_pinky.03.R",
+    "thumb.01.L": "thumb.01.R",
+    "thumb.02.L": "thumb.02.R",
+    "thumb.03.L": "thumb.03.R"
+   },
+   "time_scale": 1.0,
+   "src_range": [
+    233,
+    279
+   ],
+   "dst_range": [
+    233,
+    279
+   ],
+   "inner_range": [
+    237,
+    275
+   ],
+   "space": "local",
+   "channels": "rot",
+   "mode": "replace",
+   "mirror": false,
+   "rot_change_max_deg": 164.94,
+   "verify": {
+    "tool": "compare_motion",
+    "args": {
+     "a": {
+      "bones": [
+       "shoulder.R",
+       "upper_arm_fk.R",
+       "forearm_fk.R",
+       "hand_fk.R",
+       "f_index.01.R",
+       "f_index.02.R",
+       "f_index.03.R",
+       "f_middle.01.R",
+       "f_middle.02.R",
+       "f_middle.03.R",
+       "f_ring.01.R",
+       "f_ring.02.R",
+       "f_ring.03.R",
+       "f_pinky.01.R",
+       "f_pinky.02.R",
+       "f_pinky.03.R",
+       "thumb.01.R",
+       "thumb.02.R",
+       "thumb.03.R"
+      ],
+      "frame_range": [
+       233,
+       279
+      ]
+     },
+     "b": {
+      "bones": [
+       "shoulder.L",
+       "upper_arm_fk.L",
+       "forearm_fk.L",
+       "hand_fk.L",
+       "f_index.01.L",
+       "f_index.02.L",
+       "f_index.03.L",
+       "f_middle.01.L",
+       "f_middle.02.L",
+       "f_middle.03.L",
+       "f_ring.01.L",
+       "f_ring.02.L",
+       "f_ring.03.L",
+       "f_pinky.01.L",
+       "f_pinky.02.L",
+       "f_pinky.03.L",
+       "thumb.01.L",
+       "thumb.02.L",
+       "thumb.03.L"
+      ],
+      "frame_range": [
+       233,
+       279
+      ]
+     },
+     "mirror": false,
+     "space": "local",
+     "trim": 4
+    },
+    "pass": "err_inner_deg < 0.05"
+   }
+  },
+  "ts": "2026-10-08 21:52:17",
+  "owner": "w2-handcopy"
+ },
+ {
+  "id": "motion_copy_467801391",
+  "tool": "motion_copy",
+  "params": {
+   "src_bones": [
+    "shoulder.L",
+    "upper_arm_fk.L",
+    "forearm_fk.L",
+    "hand_fk.L",
+    "f_index.01.L",
+    "f_index.02.L",
+    "f_index.03.L",
+    "f_middle.01.L",
+    "f_middle.02.L",
+    "f_middle.03.L",
+    "f_ring.01.L",
+    "f_ring.02.L",
+    "f_ring.03.L",
+    "f_pinky.01.L",
+    "f_pinky.02.L",
+    "f_pinky.03.L",
+    "thumb.01.L",
+    "thumb.02.L",
+    "thumb.03.L"
+   ],
+   "bones": [
+    "shoulder.L",
+    "upper_arm_fk.L",
+    "forearm_fk.L",
+    "hand_fk.L",
+    "f_index.01.L",
+    "f_index.02.L",
+    "f_index.03.L",
+    "f_middle.01.L",
+    "f_middle.02.L",
+    "f_middle.03.L",
+    "f_ring.01.L",
+    "f_ring.02.L",
+    "f_ring.03.L",
+    "f_pinky.01.L",
+    "f_pinky.02.L",
+    "f_pinky.03.L",
+    "thumb.01.L",
+    "thumb.02.L",
+    "thumb.03.L"
+   ],
+   "src_range": [
+    235,
+    275
+   ],
+   "dst_start": 275,
+   "dst_range": [
+    275,
+    315
+   ],
+   "time_scale": 1.0,
+   "frame_range": [
+    275,
+    315
+   ],
+   "mirror": false,
+   "bone_map": null,
+   "space": "local",
+   "channels": "rot",
+   "mode": "replace",
+   "strength": 1.0,
+   "blend": 4,
+   "_applied_window": [
+    275,
+    315
+   ]
+  },
+  "frames": [
+   275,
+   315
+  ],
+  "strip": "agent_copy_275_315",
+  "track": "agent_copy_275_315",
+  "status": "preview",
+  "metrics": {
+   "bones": {
+    "shoulder.L": {
+     "rot_mode": "YXZ",
+     "rot_change_max_deg": 4.58,
+     "rot_change_mean_deg": 2.32
+    },
+    "upper_arm_fk.L": {
+     "rot_mode": "XYZ",
+     "rot_change_max_deg": 26.58,
+     "rot_change_mean_deg": 8.2
+    },
+    "forearm_fk.L": {
+     "rot_mode": "XYZ",
+     "rot_change_max_deg": 179.41,
+     "rot_change_mean_deg": 59.53
+    },
+    "hand_fk.L": {
+     "rot_mode": "QUATERNION",
+     "rot_change_max_deg": 133.11,
+     "rot_change_mean_deg": 42.77
+    },
+    "f_index.01.L": {
+     "rot_mode": "QUATERNION",
+     "rot_change_max_deg": 21.62,
+     "rot_change_mean_deg": 9.08
+    },
+    "f_index.02.L": {
+     "rot_mode": "QUATERNION",
+     "rot_change_max_deg": 20.47,
+     "rot_change_mean_deg": 8.16
+    },
+    "f_index.03.L": {
+     "rot_mode": "QUATERNION",
+     "rot_change_max_deg": 19.75,
+     "rot_change_mean_deg": 9.88
+    },
+    "f_middle.01.L": {
+     "rot_mode": "QUATERNION",
+     "rot_change_max_deg": 22.98,
+     "rot_change_mean_deg": 12.35
+    },
+    "f_middle.02.L": {
+     "rot_mode": "QUATERNION",
+     "rot_change_max_deg": 23.66,
+     "rot_change_mean_deg": 5.97
+    },
+    "f_middle.03.L": {
+     "rot_mode": "QUATERNION",
+     "rot_change_max_deg": 17.48,
+     "rot_change_mean_deg": 5.4
+    },
+    "f_ring.01.L": {
+     "rot_mode": "QUATERNION",
+     "rot_change_max_deg": 22.87,
+     "rot_change_mean_deg": 11.37
+    },
+    "f_ring.02.L": {
+     "rot_mode": "QUATERNION",
+     "rot_change_max_deg": 25.68,
+     "rot_change_mean_deg": 7.25
+    },
+    "f_ring.03.L": {
+     "rot_mode": "QUATERNION",
+     "rot_change_max_deg": 16.06,
+     "rot_change_mean_deg": 6.08
+    },
+    "f_pinky.01.L": {
+     "rot_mode": "QUATERNION",
+     "rot_change_max_deg": 18.91,
+     "rot_change_mean_deg": 10.88
+    },
+    "f_pinky.02.L": {
+     "rot_mode": "QUATERNION",
+     "rot_change_max_deg": 28.8,
+     "rot_change_mean_deg": 7.71
+    },
+    "f_pinky.03.L": {
+     "rot_mode": "QUATERNION",
+     "rot_change_max_deg": 27.55,
+     "rot_change_mean_deg": 9.32
+    },
+    "thumb.01.L": {
+     "rot_mode": "QUATERNION",
+     "rot_change_max_deg": 30.96,
+     "rot_change_mean_deg": 13.73
+    },
+    "thumb.02.L": {
+     "rot_mode": "QUATERNION",
+     "rot_change_max_deg": 19.67,
+     "rot_change_mean_deg": 8.89
+    },
+    "thumb.03.L": {
+     "rot_mode": "QUATERNION",
+     "rot_change_max_deg": 26.43,
+     "rot_change_mean_deg": 11.38
+    }
+   },
+   "mirror_map": {
+    "shoulder.L": "shoulder.L",
+    "upper_arm_fk.L": "upper_arm_fk.L",
+    "forearm_fk.L": "forearm_fk.L",
+    "hand_fk.L": "hand_fk.L",
+    "f_index.01.L": "f_index.01.L",
+    "f_index.02.L": "f_index.02.L",
+    "f_index.03.L": "f_index.03.L",
+    "f_middle.01.L": "f_middle.01.L",
+    "f_middle.02.L": "f_middle.02.L",
+    "f_middle.03.L": "f_middle.03.L",
+    "f_ring.01.L": "f_ring.01.L",
+    "f_ring.02.L": "f_ring.02.L",
+    "f_ring.03.L": "f_ring.03.L",
+    "f_pinky.01.L": "f_pinky.01.L",
+    "f_pinky.02.L": "f_pinky.02.L",
+    "f_pinky.03.L": "f_pinky.03.L",
+    "thumb.01.L": "thumb.01.L",
+    "thumb.02.L": "thumb.02.L",
+    "thumb.03.L": "thumb.03.L"
+   },
+   "time_scale": 1.0,
+   "src_range": [
+    235,
+    275
+   ],
+   "dst_range": [
+    275,
+    315
+   ],
+   "inner_range": [
+    279,
+    311
+   ],
+   "space": "local",
+   "channels": "rot",
+   "mode": "replace",
+   "mirror": false,
+   "rot_change_max_deg": 179.41,
+   "verify": {
+    "tool": "compare_motion",
+    "args": {
+     "a": {
+      "bones": [
+       "shoulder.L",
+       "upper_arm_fk.L",
+       "forearm_fk.L",
+       "hand_fk.L",
+       "f_index.01.L",
+       "f_index.02.L",
+       "f_index.03.L",
+       "f_middle.01.L",
+       "f_middle.02.L",
+       "f_middle.03.L",
+       "f_ring.01.L",
+       "f_ring.02.L",
+       "f_ring.03.L",
+       "f_pinky.01.L",
+       "f_pinky.02.L",
+       "f_pinky.03.L",
+       "thumb.01.L",
+       "thumb.02.L",
+       "thumb.03.L"
+      ],
+      "frame_range": [
+       275,
+       315
+      ]
+     },
+     "b": {
+      "bones": [
+       "shoulder.L",
+       "upper_arm_fk.L",
+       "forearm_fk.L",
+       "hand_fk.L",
+       "f_index.01.L",
+       "f_index.02.L",
+       "f_index.03.L",
+       "f_middle.01.L",
+       "f_middle.02.L",
+       "f_middle.03.L",
+       "f_ring.01.L",
+       "f_ring.02.L",
+       "f_ring.03.L",
+       "f_pinky.01.L",
+       "f_pinky.02.L",
+       "f_pinky.03.L",
+       "thumb.01.L",
+       "thumb.02.L",
+       "thumb.03.L"
+      ],
+      "frame_range": [
+       235,
+       275
+      ]
+     },
+     "mirror": false,
+     "space": "local",
+     "trim": 4
+    },
+    "pass": "err_inner_deg < 0.05"
+   },
+   "notes": [
+    "19 根骨源窗与目标窗重叠：已先采样后写入（结果正确），但写入后源窗的可见姿态也变了——复测请对比写入前的数据，或先 ab_toggle 关掉本修复再看源窗"
+   ]
+  },
+  "ts": "2026-10-08 21:56:41",
+  "owner": "w2-handcopy"
+ },
+ {
+  "id": "motion_copy_518985568",
+  "tool": "motion_copy",
+  "params": {
+   "src_bones": [
+    "shoulder.L",
+    "upper_arm_fk.L",
+    "forearm_fk.L",
+    "hand_fk.L"
+   ],
+   "bones": [
+    "shoulder.R",
+    "upper_arm_fk.R",
+    "forearm_fk.R",
+    "hand_fk.R"
+   ],
+   "src_range": [
+    229,
+    315
+   ],
+   "dst_start": 229,
+   "dst_range": [
+    229,
+    315
+   ],
+   "time_scale": 1.0,
+   "frame_range": [
+    229,
+    315
+   ],
+   "mirror": false,
+   "bone_map": {
+    "shoulder.L": "shoulder.R",
+    "upper_arm_fk.L": "upper_arm_fk.R",
+    "forearm_fk.L": "forearm_fk.R",
+    "hand_fk.L": "hand_fk.R"
+   },
+   "space": "world_abs",
+   "channels": "rot",
+   "mode": "replace",
+   "strength": 1.0,
+   "blend": 4,
+   "_applied_window": [
+    229,
+    315
+   ]
+  },
+  "frames": [
+   229,
+   315
+  ],
+  "strip": "agent_copy_229_315",
+  "track": "agent_copy_229_315",
+  "status": "preview",
+  "metrics": {
+   "bones": {
+    "shoulder.R": {
+     "rot_mode": "YXZ",
+     "rot_change_max_deg": 178.3,
+     "rot_change_mean_deg": 173.51
+    },
+    "upper_arm_fk.R": {
+     "rot_mode": "XYZ",
+     "rot_change_max_deg": 178.83,
+     "rot_change_mean_deg": 136.86
+    },
+    "forearm_fk.R": {
+     "rot_mode": "XYZ",
+     "rot_change_max_deg": 91.72,
+     "rot_change_mean_deg": 66.49
+    },
+    "hand_fk.R": {
+     "rot_mode": "QUATERNION",
+     "rot_change_max_deg": 165.68,
+     "rot_change_mean_deg": 138.9
+    }
+   },
+   "mirror_map": {
+    "shoulder.L": "shoulder.R",
+    "upper_arm_fk.L": "upper_arm_fk.R",
+    "forearm_fk.L": "forearm_fk.R",
+    "hand_fk.L": "hand_fk.R"
+   },
+   "time_scale": 1.0,
+   "src_range": [
+    229,
+    315
+   ],
+   "dst_range": [
+    229,
+    315
+   ],
+   "inner_range": [
+    233,
+    311
+   ],
+   "space": "world_abs",
+   "channels": "rot",
+   "mode": "replace",
+   "mirror": false,
+   "rot_change_max_deg": 178.83,
+   "world_parent_link": {
+    "shoulder.R": null,
+    "upper_arm_fk.R": "shoulder.R",
+    "forearm_fk.R": "upper_arm_fk.R",
+    "hand_fk.R": "forearm_fk.R"
+   },
+   "verify": {
+    "tool": "compare_motion",
+    "args": {
+     "a": {
+      "bones": [
+       "shoulder.R",
+       "upper_arm_fk.R",
+       "forearm_fk.R",
+       "hand_fk.R"
+      ],
+      "frame_range": [
+       229,
+       315
+      ]
+     },
+     "b": {
+      "bones": [
+       "shoulder.L",
+       "upper_arm_fk.L",
+       "forearm_fk.L",
+       "hand_fk.L"
+      ],
+      "frame_range": [
+       229,
+       315
+      ]
+     },
+     "mirror": false,
+     "space": "world_abs",
+     "trim": 4
+    },
+    "pass": "err_inner_deg < 0.05"
+   }
+  },
+  "ts": "2026-10-09 12:09:45",
+  "owner": "world-abs-preview"
+ },
+ {
+  "id": "motion_copy_518986788",
+  "tool": "motion_copy",
+  "params": {
+   "src_bones": [
+    "f_index.01.L",
+    "f_index.02.L",
+    "f_index.03.L",
+    "f_middle.01.L",
+    "f_middle.02.L",
+    "f_middle.03.L",
+    "f_ring.01.L",
+    "f_ring.02.L",
+    "f_ring.03.L",
+    "f_pinky.01.L",
+    "f_pinky.02.L",
+    "f_pinky.03.L",
+    "thumb.01.L",
+    "thumb.02.L",
+    "thumb.03.L"
+   ],
+   "bones": [
+    "f_index.01.R",
+    "f_index.02.R",
+    "f_index.03.R",
+    "f_middle.01.R",
+    "f_middle.02.R",
+    "f_middle.03.R",
+    "f_ring.01.R",
+    "f_ring.02.R",
+    "f_ring.03.R",
+    "f_pinky.01.R",
+    "f_pinky.02.R",
+    "f_pinky.03.R",
+    "thumb.01.R",
+    "thumb.02.R",
+    "thumb.03.R"
+   ],
+   "src_range": [
+    229,
+    315
+   ],
+   "dst_start": 229,
+   "dst_range": [
+    229,
+    315
+   ],
+   "time_scale": 1.0,
+   "frame_range": [
+    229,
+    315
+   ],
+   "mirror": true,
+   "bone_map": {
+    "f_index.01.L": "f_index.01.R",
+    "f_index.02.L": "f_index.02.R",
+    "f_index.03.L": "f_index.03.R",
+    "f_middle.01.L": "f_middle.01.R",
+    "f_middle.02.L": "f_middle.02.R",
+    "f_middle.03.L": "f_middle.03.R",
+    "f_ring.01.L": "f_ring.01.R",
+    "f_ring.02.L": "f_ring.02.R",
+    "f_ring.03.L": "f_ring.03.R",
+    "f_pinky.01.L": "f_pinky.01.R",
+    "f_pinky.02.L": "f_pinky.02.R",
+    "f_pinky.03.L": "f_pinky.03.R",
+    "thumb.01.L": "thumb.01.R",
+    "thumb.02.L": "thumb.02.R",
+    "thumb.03.L": "thumb.03.R"
+   },
+   "space": "local",
+   "channels": "rot",
+   "mode": "replace",
+   "strength": 1.0,
+   "blend": 4,
+   "_applied_window": [
+    229,
+    315
+   ]
+  },
+  "frames": [
+   229,
+   315
+  ],
+  "strip": "agent_copy_229_315.001",
+  "track": "agent_copy_229_315.001",
+  "status": "preview",
+  "metrics": {
+   "bones": {
+    "f_index.01.R": {
+     "rot_mode": "QUATERNION",
+     "rot_change_max_deg": 35.72,
+     "rot_change_mean_deg": 19.59
+    },
+    "f_index.02.R": {
+     "rot_mode": "QUATERNION",
+     "rot_change_max_deg": 38.43,
+     "rot_change_mean_deg": 17.83
+    },
+    "f_index.03.R": {
+     "rot_mode": "QUATERNION",
+     "rot_change_max_deg": 34.51,
+     "rot_change_mean_deg": 15.6
+    },
+    "f_middle.01.R": {
+     "rot_mode": "QUATERNION",
+     "rot_change_max_deg": 46.99,
+     "rot_change_mean_deg": 21.68
+    },
+    "f_middle.02.R": {
+     "rot_mode": "QUATERNION",
+     "rot_change_max_deg": 37.27,
+     "rot_change_mean_deg": 13.24
+    },
+    "f_middle.03.R": {
+     "rot_mode": "QUATERNION",
+     "rot_change_max_deg": 19.31,
+     "rot_change_mean_deg": 7.52
+    },
+    "f_ring.01.R": {
+     "rot_mode": "QUATERNION",
+     "rot_change_max_deg": 38.6,
+     "rot_change_mean_deg": 17.82
+    },
+    "f_ring.02.R": {
+     "rot_mode": "QUATERNION",
+     "rot_change_max_deg": 37.46,
+     "rot_change_mean_deg": 14.13
+    },
+    "f_ring.03.R": {
+     "rot_mode": "QUATERNION",
+     "rot_change_max_deg": 20.33,
+     "rot_change_mean_deg": 9.81
+    },
+    "f_pinky.01.R": {
+     "rot_mode": "QUATERNION",
+     "rot_change_max_deg": 37.46,
+     "rot_change_mean_deg": 18.53
+    },
+    "f_pinky.02.R": {
+     "rot_mode": "QUATERNION",
+     "rot_change_max_deg": 39.11,
+     "rot_change_mean_deg": 14.95
+    },
+    "f_pinky.03.R": {
+     "rot_mode": "QUATERNION",
+     "rot_change_max_deg": 26.48,
+     "rot_change_mean_deg": 15.23
+    },
+    "thumb.01.R": {
+     "rot_mode": "QUATERNION",
+     "rot_change_max_deg": 39.04,
+     "rot_change_mean_deg": 15.1
+    },
+    "thumb.02.R": {
+     "rot_mode": "QUATERNION",
+     "rot_change_max_deg": 27.17,
+     "rot_change_mean_deg": 12.74
+    },
+    "thumb.03.R": {
+     "rot_mode": "QUATERNION",
+     "rot_change_max_deg": 50.87,
+     "rot_change_mean_deg": 22.72
+    }
+   },
+   "mirror_map": {
+    "f_index.01.L": "f_index.01.R",
+    "f_index.02.L": "f_index.02.R",
+    "f_index.03.L": "f_index.03.R",
+    "f_middle.01.L": "f_middle.01.R",
+    "f_middle.02.L": "f_middle.02.R",
+    "f_middle.03.L": "f_middle.03.R",
+    "f_ring.01.L": "f_ring.01.R",
+    "f_ring.02.L": "f_ring.02.R",
+    "f_ring.03.L": "f_ring.03.R",
+    "f_pinky.01.L": "f_pinky.01.R",
+    "f_pinky.02.L": "f_pinky.02.R",
+    "f_pinky.03.L": "f_pinky.03.R",
+    "thumb.01.L": "thumb.01.R",
+    "thumb.02.L": "thumb.02.R",
+    "thumb.03.L": "thumb.03.R"
+   },
+   "time_scale": 1.0,
+   "src_range": [
+    229,
+    315
+   ],
+   "dst_range": [
+    229,
+    315
+   ],
+   "inner_range": [
+    233,
+    311
+   ],
+   "space": "local",
+   "channels": "rot",
+   "mode": "replace",
+   "mirror": true,
+   "rot_change_max_deg": 50.87,
+   "verify": {
+    "tool": "compare_motion",
+    "args": {
+     "a": {
+      "bones": [
+       "f_index.01.R",
+       "f_index.02.R",
+       "f_index.03.R",
+       "f_middle.01.R",
+       "f_middle.02.R",
+       "f_middle.03.R",
+       "f_ring.01.R",
+       "f_ring.02.R",
+       "f_ring.03.R",
+       "f_pinky.01.R",
+       "f_pinky.02.R",
+       "f_pinky.03.R",
+       "thumb.01.R",
+       "thumb.02.R",
+       "thumb.03.R"
+      ],
+      "frame_range": [
+       229,
+       315
+      ]
+     },
+     "b": {
+      "bones": [
+       "f_index.01.L",
+       "f_index.02.L",
+       "f_index.03.L",
+       "f_middle.01.L",
+       "f_middle.02.L",
+       "f_middle.03.L",
+       "f_ring.01.L",
+       "f_ring.02.L",
+       "f_ring.03.L",
+       "f_pinky.01.L",
+       "f_pinky.02.L",
+       "f_pinky.03.L",
+       "thumb.01.L",
+       "thumb.02.L",
+       "thumb.03.L"
+      ],
+      "frame_range": [
+       229,
+       315
+      ]
+     },
+     "mirror": true,
+     "space": "local",
+     "trim": 4
+    },
+    "pass": "err_inner_deg < 0.05"
+   }
+  },
+  "ts": "2026-10-09 12:09:46",
+  "owner": "world-abs-preview"
+ }
+]

@@ -1,0 +1,95 @@
+last turn/start indices: [11156, 11290, 11339]
+11339 11338 turn/start {"turn": 168}
+11340 11339 agent/inbox/spliced {"target": "next-turn", "start": 0, "removedCount": 1, "inserted": []}
+11341 11340 step/start {"turn": 168, "step": 1}
+11342 11341 user/message | source= {"kind": "user", "rpcId": "676fb121-b8ba-498c-947f-e5c54d49ba97", "clientTimeZon | text= 继续
+11343 11342 assistant/message | text= 
+11344 11343 tool/call {"turn": 168, "step": 1, "callId": "call_AQSuZZWaPWEzbFo7BVZU0UfO|fc_0ccc589d4fbe1c0d016ac3db754df087d1bc0aa43f8df7d644", "name": "pwsh", "arguments":
+11345 11344 tool/result {"turn": 168, "step": 1, "message": {"role": "tool", "source": {"kind": "tool", "callId": "call_AQSuZZWaPWEzbFo7BVZU0UfO|fc_0ccc589d4fbe1c0d016ac3db75
+11346 11345 tool/call {"turn": 168, "step": 1, "callId": "call_d5ErkT5QnABodoqi8ZsRTt9M|fc_0ccc589d4fbe1c0d016ac3db754e0087d1b07284b046592dce", "name": "pwsh", "arguments":
+11347 11346 tool/result {"turn": 168, "step": 1, "message": {"role": "tool", "source": {"kind": "tool", "callId": "call_d5ErkT5QnABodoqi8ZsRTt9M|fc_0ccc589d4fbe1c0d016ac3db75
+11348 11347 step/end {"turn": 168, "step": 1}
+11349 11348 step/start {"turn": 168, "step": 2}
+11350 11349 assistant/message | text= 
+11351 11350 tool/call {"turn": 168, "step": 2, "callId": "call_Zzn7r01NIVacFWAEOoRBNdyh|fc_0ccc589d4fbe1c0d016ac3dbec46c887d1869a2c13c1547861", "name": "read", "arguments":
+11352 11351 tool/call {"turn": 168, "step": 2, "callId": "call_SMSXnuacWQ9q393GKd2ED3p6|fc_0ccc589d4fbe1c0d016ac3dbec46dc87d19c7849203895883f", "name": "read", "arguments":
+11353 11352 tool/call {"turn": 168, "step": 2, "callId": "call_Fhpw0785Y6ihefxfvo6dBYZx|fc_0ccc589d4fbe1c0d016ac3dbec46e887d195bfb67777744ed9", "name": "read", "arguments":
+11354 11353 tool/call {"turn": 168, "step": 2, "callId": "call_MdUDK7KEkcIxvm4spYfUKqmJ|fc_0ccc589d4fbe1c0d016ac3dbec46f087d1a8dddabd1237b4d4", "name": "read", "arguments":
+11355 11354 tool/result {"turn": 168, "step": 2, "message": {"role": "tool", "source": {"kind": "tool", "callId": "call_Zzn7r01NIVacFWAEOoRBNdyh|fc_0ccc589d4fbe1c0d016ac3dbec
+11356 11355 tool/result {"turn": 168, "step": 2, "message": {"role": "tool", "source": {"kind": "tool", "callId": "call_SMSXnuacWQ9q393GKd2ED3p6|fc_0ccc589d4fbe1c0d016ac3dbec
+11357 11356 tool/result {"turn": 168, "step": 2, "message": {"role": "tool", "source": {"kind": "tool", "callId": "call_Fhpw0785Y6ihefxfvo6dBYZx|fc_0ccc589d4fbe1c0d016ac3dbec
+11358 11357 tool/result {"turn": 168, "step": 2, "message": {"role": "tool", "source": {"kind": "tool", "callId": "call_MdUDK7KEkcIxvm4spYfUKqmJ|fc_0ccc589d4fbe1c0d016ac3dbec
+11359 11358 tool/call {"turn": 168, "step": 2, "callId": "call_UckqIWKIoqGtcXyfH6IimDFe|fc_0ccc589d4fbe1c0d016ac3dbec46fc87d198e2453477d582fc", "name": "pwsh", "arguments":
+11360 11359 tool/result {"turn": 168, "step": 2, "message": {"role": "tool", "source": {"kind": "tool", "callId": "call_UckqIWKIoqGtcXyfH6IimDFe|fc_0ccc589d4fbe1c0d016ac3dbec
+11361 11360 step/end {"turn": 168, "step": 2}
+11362 11361 step/start {"turn": 168, "step": 3}
+11363 11362 assistant/message | text= 
+11364 11363 tool/call {"turn": 168, "step": 3, "callId": "call_8IzNtkf278rDxbm3acGR5gNG|fc_0ccc589d4fbe1c0d016ac3dc01b12087d1bddd22b26aea2d87", "name": "read", "arguments":
+11365 11364 tool/call {"turn": 168, "step": 3, "callId": "call_7Nlg0kYWV5UYhdx2TPOdqyRz|fc_0ccc589d4fbe1c0d016ac3dc01b13c87d1a6af8393dde62093", "name": "read", "arguments":
+11366 11365 tool/call {"turn": 168, "step": 3, "callId": "call_2FIQ1i9N5wgmDDj35WCscLzO|fc_0ccc589d4fbe1c0d016ac3dc01b14887d1a61ea64048e69ef0", "name": "read", "arguments":
+11367 11366 tool/call {"turn": 168, "step": 3, "callId": "call_6cXXQIn2NznbM7gKj2POpQ2Y|fc_0ccc589d4fbe1c0d016ac3dc01b15087d1bc75d81c8c390e71", "name": "read", "arguments":
+11368 11367 tool/result {"turn": 168, "step": 3, "message": {"role": "tool", "source": {"kind": "tool", "callId": "call_8IzNtkf278rDxbm3acGR5gNG|fc_0ccc589d4fbe1c0d016ac3dc01
+11369 11368 tool/result {"turn": 168, "step": 3, "message": {"role": "tool", "source": {"kind": "tool", "callId": "call_7Nlg0kYWV5UYhdx2TPOdqyRz|fc_0ccc589d4fbe1c0d016ac3dc01
+11370 11369 tool/result {"turn": 168, "step": 3, "message": {"role": "tool", "source": {"kind": "tool", "callId": "call_2FIQ1i9N5wgmDDj35WCscLzO|fc_0ccc589d4fbe1c0d016ac3dc01
+11371 11370 tool/result {"turn": 168, "step": 3, "message": {"role": "tool", "source": {"kind": "tool", "callId": "call_6cXXQIn2NznbM7gKj2POpQ2Y|fc_0ccc589d4fbe1c0d016ac3dc01
+11372 11371 step/end {"turn": 168, "step": 3}
+11373 11372 step/start {"turn": 168, "step": 4}
+11374 11373 assistant/message | text= 
+11375 11374 tool/call {"turn": 168, "step": 4, "callId": "call_amFPx3uWzjbDXYguyUEYQAlG|fc_0ccc589d4fbe1c0d016ac3dc19376c87d180c7143692aaa6d2", "name": "read", "arguments":
+11376 11375 tool/result {"turn": 168, "step": 4, "message": {"role": "tool", "source": {"kind": "tool", "callId": "call_amFPx3uWzjbDXYguyUEYQAlG|fc_0ccc589d4fbe1c0d016ac3dc19
+11377 11376 step/end {"turn": 168, "step": 4}
+11378 11377 step/start {"turn": 168, "step": 5}
+11379 11378 assistant/message | text= 
+11380 11379 tool/call {"turn": 168, "step": 5, "callId": "call_29qKrjITvvD8DcxEtmtAMPzb|fc_0ccc589d4fbe1c0d016ac3dc27fefc87d1a3101d03ee9345e8", "name": "pwsh", "arguments":
+11381 11380 tool/result {"turn": 168, "step": 5, "message": {"role": "tool", "source": {"kind": "tool", "callId": "call_29qKrjITvvD8DcxEtmtAMPzb|fc_0ccc589d4fbe1c0d016ac3dc27
+11382 11381 step/end {"turn": 168, "step": 5}
+11383 11382 step/start {"turn": 168, "step": 6}
+11384 11383 assistant/message | text= 
+11385 11384 tool/call {"turn": 168, "step": 6, "callId": "call_Rj3FyOQhNw3g3NMH3U3gKVYq|fc_0ccc589d4fbe1c0d016ac3dc4e717c87d1b25e9b51e3d87ea9", "name": "read", "arguments":
+11386 11385 tool/call {"turn": 168, "step": 6, "callId": "call_bP1d4GfDQxAxaafbLCfBmUY5|fc_0ccc589d4fbe1c0d016ac3dc4e719087d1b3c988ff10707486", "name": "read", "arguments":
+11387 11386 tool/call {"turn": 168, "step": 6, "callId": "call_mBAPdwZgyPp6Whko0FkckgbH|fc_0ccc589d4fbe1c0d016ac3dc4e719c87d1990df87cdbe49d01", "name": "read", "arguments":
+11388 11387 tool/result {"turn": 168, "step": 6, "message": {"role": "tool", "source": {"kind": "tool", "callId": "call_Rj3FyOQhNw3g3NMH3U3gKVYq|fc_0ccc589d4fbe1c0d016ac3dc4e
+11389 11388 tool/result {"turn": 168, "step": 6, "message": {"role": "tool", "source": {"kind": "tool", "callId": "call_bP1d4GfDQxAxaafbLCfBmUY5|fc_0ccc589d4fbe1c0d016ac3dc4e
+11390 11389 tool/result {"turn": 168, "step": 6, "message": {"role": "tool", "source": {"kind": "tool", "callId": "call_mBAPdwZgyPp6Whko0FkckgbH|fc_0ccc589d4fbe1c0d016ac3dc4e
+11391 11390 tool/call {"turn": 168, "step": 6, "callId": "call_nLlu7huQm6wsh1Sg3Bax1HSU|fc_0ccc589d4fbe1c0d016ac3dc4e71a487d183eaf8045f8533f3", "name": "grep", "arguments":
+11392 11391 tool/result {"turn": 168, "step": 6, "message": {"role": "tool", "source": {"kind": "tool", "callId": "call_nLlu7huQm6wsh1Sg3Bax1HSU|fc_0ccc589d4fbe1c0d016ac3dc4e
+11393 11392 step/end {"turn": 168, "step": 6}
+11394 11393 step/start {"turn": 168, "step": 7}
+11395 11394 assistant/message | text= 
+11396 11395 tool/call {"turn": 168, "step": 7, "callId": "call_r7xxDbMxMVOTEzIytx0lSWIk|fc_0ccc589d4fbe1c0d016ac3dc6e077887d19909ab7ff3ad27c3", "name": "pwsh", "arguments":
+11397 11396 tool/result {"turn": 168, "step": 7, "message": {"role": "tool", "source": {"kind": "tool", "callId": "call_r7xxDbMxMVOTEzIytx0lSWIk|fc_0ccc589d4fbe1c0d016ac3dc6e
+11398 11397 step/end {"turn": 168, "step": 7}
+11399 11398 step/start {"turn": 168, "step": 8}
+11400 11399 assistant/message | text= 
+11401 11400 tool/call {"turn": 168, "step": 8, "callId": "call_BmIGMxTyjkaN33QODFGdcGxi|fc_0ccc589d4fbe1c0d016ac3dc9fb6dc87d1a0488a59454fb8e9", "name": "pwsh", "arguments":
+11402 11401 tool/result {"turn": 168, "step": 8, "message": {"role": "tool", "source": {"kind": "tool", "callId": "call_BmIGMxTyjkaN33QODFGdcGxi|fc_0ccc589d4fbe1c0d016ac3dc9f
+11403 11402 tool/call {"turn": 168, "step": 8, "callId": "call_yonavyWKT0Zq7ooOnx2pmK1J|fc_0ccc589d4fbe1c0d016ac3dc9fb6f087d1a7d767f59396a61a", "name": "pwsh", "arguments":
+11404 11403 tool/result {"turn": 168, "step": 8, "message": {"role": "tool", "source": {"kind": "tool", "callId": "call_yonavyWKT0Zq7ooOnx2pmK1J|fc_0ccc589d4fbe1c0d016ac3dc9f
+11405 11404 step/end {"turn": 168, "step": 8}
+11406 11405 step/start {"turn": 168, "step": 9}
+11407 11406 assistant/message | text= 
+11408 11407 tool/call {"turn": 168, "step": 9, "callId": "call_CECklMURDFGy4UZj27ojLCSM|fc_0ccc589d4fbe1c0d016ac3dcb9dcd487d194f3d30aea788a26", "name": "read", "arguments":
+11409 11408 tool/result {"turn": 168, "step": 9, "message": {"role": "tool", "source": {"kind": "tool", "callId": "call_CECklMURDFGy4UZj27ojLCSM|fc_0ccc589d4fbe1c0d016ac3dcb9
+11410 11409 step/end {"turn": 168, "step": 9}
+11411 11410 step/start {"turn": 168, "step": 10}
+11412 11411 assistant/message | text= 
+11413 11412 tool/call {"turn": 168, "step": 10, "callId": "call_s6DIyVDSATbnwu5diE1MFENf|fc_0ccc589d4fbe1c0d016ac3dcc95ce087d187dbe2871130996c", "name": "read", "arguments"
+11414 11413 tool/result {"turn": 168, "step": 10, "message": {"role": "tool", "source": {"kind": "tool", "callId": "call_s6DIyVDSATbnwu5diE1MFENf|fc_0ccc589d4fbe1c0d016ac3dcc
+11415 11414 step/end {"turn": 168, "step": 10}
+11416 11415 step/start {"turn": 168, "step": 11}
+11417 11416 assistant/message | text= 
+11418 11417 tool/call {"turn": 168, "step": 11, "callId": "call_NssHdWXwiUnVESFtEMqCKD17|fc_0ccc589d4fbe1c0d016ac3dcdcb2fc87d1be2f4027df274ab3", "name": "read", "arguments"
+11419 11418 tool/result {"turn": 168, "step": 11, "message": {"role": "tool", "source": {"kind": "tool", "callId": "call_NssHdWXwiUnVESFtEMqCKD17|fc_0ccc589d4fbe1c0d016ac3dcd
+11420 11419 step/end {"turn": 168, "step": 11}
+11421 11420 step/start {"turn": 168, "step": 12}
+11422 11421 assistant/attempt {"turn": 168, "step": 12, "stream": [{"type": "chunk", "time": 1791220962785, "chunk": {"type": "usage", "usage": {"inputTokens": 0, "outputTokens": 0
+11423 11422 step/end {"turn": 168, "step": 12}
+11424 11423 turn/end {"turn": 168, "reason": {"kind": "error", "error": {"message": "gpt2 API error (403): {\"message\":\"预扣积分失败, 用户剩余积分: 0.856086 🍑, 需要预扣积分: 0.92947 🍑 (re
+11425 11424 model/selection {"provider": "deepseek-official", "model": "deepseek-flash", "reasoningEffort": "high"}
+11426 11425 model/selection {"provider": "deepseek-official", "model": "deepseek-flash", "reasoningEffort": "max"}
+11427 11426 command/run {"commandId": "cmd-3c1a5668-1", "name": "compact", "args": "", "source": {"kind": "user"}}
+11428 11427 compaction/start {"compactionId": "fb64744c-6fc6-4073-9368-7a4673c86afa", "sourceCommandId": "cmd-3c1a5668-1", "turn": null}
+11429 11428 compaction/summary {"compactionId": "fb64744c-6fc6-4073-9368-7a4673c86afa", "sourceCommandId": "cmd-3c1a5668-1", "summary": [{"type": "text", "text": " "}, {"type": "tex
+11430 11429 user/message | source= {"kind": "compact-checkpoint", "compactionId": "fb64744c-6fc6-4073-9368-7a4673c8 | text= This is an automatically generated checkpoint condensing an earlier span of the conversation to free up context. Treat the captured context as established background and build on it without restating 
+11431 11430 compaction/end {"compactionId": "fb64744c-6fc6-4073-9368-7a4673c86afa", "sourceCommandId": "cmd-3c1a5668-1", "turn": null}
+11432 11431 command/done {"commandId": "cmd-3c1a5668-1", "kind": "success", "text": "Compacted 593 history items (~424522 tokens).", "sourceEventSeq": 11428}

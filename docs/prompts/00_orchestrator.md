@@ -78,6 +78,16 @@ scope：<骨/链> × [A,B]。只许写这里。写之前 claim（读、dry_run �
 
 - 有修前/修后**数字**，且数字来自实时类读工具（probe_anatomy / analyze_motion / compare_motion /
   chain_lag / slide_report / ground_report）。"应该没问题" = 没做完。
+- **抖动闸门（硬性收单条件；缺了按"未完成"退回）**——每个写工具都要过这道：
+  报告里必须附 `analyze_motion`（`brief:true`）的**每骨 `jitter_deg` / `peak_speed` 修前修后对照**，并自己判一次：
+  1. 修后 `jitter_deg` > 修前 **2 倍** → 不通过；
+  2. 非"加速类"任务（不是 ③ 更干脆 / ⑤ 力量感这种），修后 `peak_speed` > 修前 **2 倍** → 不通过；
+  3. **孤立尖峰**：`peak_speed` 所在帧的前后两帧速度平均不到它的 **1/2** → 不通过。
+  加速类任务只查第 1、3 条（峰速上升是预期）。
+  2026-10-06 实例：`motion_copy` 把左臂一段复制成重复段，`compare_motion err_inner = 0.001°` 完美通过，
+  但 `forearm_fk.L` 的 `jitter_deg` **1.75 → 8.94**、`peak_speed` **19.09 → 57.06 @288**，
+  288/290 帧手腕世界位移 **57 / 55 mm**（邻帧 15–24 mm）——用户一眼看出来的"跳变"，
+  而报告里没有一个字提它。**这个尖峰用很高阈值也能挡住**，所以别再让它靠人眼发现。
 - `list_claims` 里该 agent 已 release；`list_ops` 里它的 op 都是 `preview`、`alive=true`、owner 正确。
 - 报告里说"层级相关"的，安排对应子骨任务的 agent 复测。改了**父骨**（上臂、脊柱）的任务即使没有租约冲突，也要看一眼
   这段帧上子骨（前臂、手、手指、头）已有的**朝向类**修复——父骨一动它们的世界朝向就变了，需要的话 reapply。

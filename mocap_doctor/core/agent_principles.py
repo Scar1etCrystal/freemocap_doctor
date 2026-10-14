@@ -640,6 +640,20 @@ def _series(frames, sp, max_points: int):
     return out, True
 
 
+# 抖动闸门阈值（tools_io.md §8.1）。2026-10-06：用户要求 analyze_motion 自己报警，
+# 并把 peak 阈值从 1.5 放宽到 2.0（"更干脆/力量感"这类任务峰速上升是预期的）。
+_GATE_SPIKE_RATIO = 2.0      # 某帧速度 / 前后两帧均值 > 此值 = 孤峰（不需要修前数据）
+_GATE_JITTER_RATIO = 2.0     # 修后 jitter / 修前 jitter > 此值 = 不通过
+_GATE_PEAK_RATIO = 2.0       # 修后 peak_speed / 修前 > 此值 = 不通过（原 1.5，已放宽）
+
+
+def _jitter_mean(q) -> float:
+    """每帧偏离"前后两帧 slerp 中点"的平均角度（度）——和 _bone_report 同口径。"""
+    if q is None or len(q) < 3:
+        return 0.0
+    return float(P.qangle_deg(q[1:-1], P.slerp(q[:-2], q[2:], 0.5)).mean())
+
+
 def _bone_report(q, sp, a, *, o, p, s, onset_frac, stop_frac, axis_frames,
                  lookback):
     """Per-bone numbers: own events + measurements on the MAIN timeline."""
@@ -828,6 +842,36 @@ def analyze_motion(scene, armature, *, bones, frame_range, main_bone=None,
         "speed_ranking": [[bn, _r(v)] for bn, v in ranking],
         "bones": rows, "suggest": sug,
     }
+    # ── 抖动闸门（2026-10-06 用户要求：让 analyze_motion 自己报警，别靠人眼）──────
+    # 一半是"孤峰"：某帧速度 > 前后两帧均值 ×2 = 这一帧突然抽了一下（不需要修前数据）。
+    # 另一半是"修前修后比值"：有 baseline_op 时才算（jitter / peak_speed 比值）。
+    gate = {"pass": True, "failed_bones": [], "bones": {},
+            "thresholds": {"spike_ratio": _GATE_SPIKE_RATIO,
+                           "jitter_ratio": _GATE_JITTER_RATIO,
+                           "peak_ratio": _GATE_PEAK_RATIO}}
+    for bn in names:
+        sp = np.asarray(speeds[bn], dtype=np.float64)
+        row = {}
+        if len(sp) >= 5:
+            nb = (np.concatenate(([sp[0]], sp[:-1])) + np.concatenate((sp[1:], [sp[-1]]))) / 2.0
+            sl = slice(1, len(sp) - 1)
+            with np.errstate(divide="ignore", invalid="ignore"):
+                ratio = np.where(nb[sl] > 1e-9, sp[sl] / nb[sl], 0.0)
+            k = int(np.argmax(ratio)) if ratio.size else 0
+            if ratio.size and float(ratio[k]) > _GATE_SPIKE_RATIO:
+                row["spike_frame"] = int(a + 1 + k)
+                row["spike_ratio"] = _r(float(ratio[k]), 2)
+        if row:
+            gate["bones"][bn] = row
+            gate["failed_bones"].append(bn)
+    if gate["failed_bones"]:
+        bn = gate["failed_bones"][0]
+        g = gate["bones"][bn]
+        warnings.append(
+            f"抖动闸门：{bn} 在 {g['spike_frame']} 帧出现孤峰（该帧速度是前后两帧均值的 "
+            f"{g['spike_ratio']}×，阈值 {_GATE_SPIKE_RATIO}×）——这一帧突然抽了一下。"
+            f"别交报告，先调参或 revert（见 tools_io.md §8.1）")
+
     if baseline_tracks:
         # mask_tracks：该 op 之后叠在同骨同帧上层的修复。"当前 − 该 op 之前"两边都不能
         # 含它们，否则差值里混进别人的修复（四元数骨上还会被共轭搅乱）
@@ -863,6 +907,37 @@ def analyze_motion(scene, armature, *, bones, frame_range, main_bone=None,
                                            axis_frames=int(axis_frames))
                       for bn in names},
         }
+        # 闸门另一半：修后 vs 修前（同一骨、同一窗口）。修前 = 该 op 生效之前。
+        ratio_fail = []
+        for bn in names:
+            bj = _jitter_mean(base["quat"][bn])
+            cj = _jitter_mean(cur["quat"][bn])
+            bp = float(np.max(_speed(base["quat"][bn], smooth)))
+            cp = float(np.max(speeds[bn]))
+            row = gate["bones"].setdefault(bn, {})
+            row.update({"jitter_before": _r(bj), "jitter_after": _r(cj),
+                        "peak_before": _r(bp), "peak_after": _r(cp)})
+            if bj > 1e-6:
+                row["jitter_ratio"] = _r(cj / bj, 2)
+                row["jitter_fail"] = bool(cj > bj * _GATE_JITTER_RATIO)
+            if bp > 1e-6:
+                row["peak_ratio"] = _r(cp / bp, 2)
+                row["peak_fail"] = bool(cp > bp * _GATE_PEAK_RATIO and cp > 3.0)
+            if row.get("jitter_fail") or row.get("peak_fail"):
+                ratio_fail.append(bn)
+                if bn not in gate["failed_bones"]:
+                    gate["failed_bones"].append(bn)
+        if ratio_fail:
+            bn = max(ratio_fail, key=lambda b: gate["bones"][b].get("jitter_ratio") or 0)
+            g = gate["bones"][bn]
+            warnings.append(
+                f"抖动闸门不通过：{', '.join(ratio_fail)}。最差 {bn}：jitter "
+                f"{g['jitter_before']}→{g['jitter_after']}°（×{g.get('jitter_ratio')}，"
+                f"阈值 ×{_GATE_JITTER_RATIO}）、peak_speed {g['peak_before']}→"
+                f"{g['peak_after']}°/帧（×{g.get('peak_ratio')}，阈值 ×{_GATE_PEAK_RATIO}）——"
+                f"指标好看不等于画面好看，先调参或 revert（见 tools_io.md §8.1）")
+        gate["pass"] = not gate["failed_bones"]
+    res["gate"] = gate
     if _ignored(extra):
         warnings.append(f"忽略了未知参数：{_ignored(extra)}")
     return res, warnings, trunc

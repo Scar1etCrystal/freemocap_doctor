@@ -279,8 +279,8 @@ def _part_direction(armature: Any, scene: Any, part: str, side: str | None) -> V
     return Vector(v).normalized()
 
 
-def resolve_direction(spec: Any, *, scene: Any, armature: Any, origin: Vector | None = None,
-                      view: str = "camera", mmd: Any = None, side: str | None = None) -> tuple[Vector, str]:
+def _resolve_raw(spec: Any, *, scene: Any, armature: Any, origin: Vector | None = None,
+                 view: str = "camera", mmd: Any = None, side: str | None = None) -> tuple[Vector, str]:
     """方向说法 → (世界单位向量, 解析说明)。每帧 frame_set 之后调用（角色/相机都可能在动）。
 
     spec：[x,y,z] / 方向词（见 WORD_TABLE）/ 物体名（SINGLE_ARROW 空物体 = +Z；其它物体 = 从 origin 指向它）。
@@ -355,6 +355,41 @@ def resolve_direction(spec: Any, *, scene: Any, armature: Any, origin: Vector | 
             return d, f"object:{raw}(pos)"
     words = ", ".join(sorted(set(list(CHAR_WORDS) + list(VIEW_WORDS) + list(WORLD_WORDS))))
     raise RuntimeError(f"无法解析方向 {raw!r}：不是方向词，也不是物体名。方向词：{words}；或 [x,y,z]")
+
+
+# axis → 保留哪两个分量（投影到 ⊥ 该轴的平面）。用户 2026-10-06："膝盖朝空物体，
+# 注意是 Z 方向的旋转，就是膝盖和空物体可以有高低差"——只转 Z 时把瞄准方向投影到
+# 水平面，空物体比膝盖高/低都不会把膝盖带得仰起来。
+_AXIS_KEEP = {"z": (0, 1), "x": (1, 2), "y": (0, 2)}
+
+
+def resolve_direction(spec: Any, *, scene: Any, armature: Any, origin: Vector | None = None,
+                      view: str = "camera", mmd: Any = None, side: str | None = None,
+                      axis: str | None = None) -> tuple[Vector, str]:
+    """`_resolve_raw` + 可选的"只转某个轴"投影。
+
+    axis="z"：把瞄准方向投影到 ⊥Z 的平面（只用水平方向，忽略高低差）；
+    axis="x" / "y" 同理（⊥X = YZ 平面，⊥Y = XZ 平面）。
+    axis=None（默认）= 原样三维瞄准，行为和以前逐位一致。
+    """
+    vec, why = _resolve_raw(spec, scene=scene, armature=armature, origin=origin,
+                            view=view, mmd=mmd, side=side)
+    if axis is None or axis == "":
+        return vec, why
+    key = str(axis).strip().lower()
+    keep = _AXIS_KEEP.get(key)
+    if keep is None:
+        raise RuntimeError(
+            f'axis 只能是 "x" / "y" / "z"（只转该轴、忽略其余分量），收到 {axis!r}；'
+            "不给 axis = 原样三维瞄准")
+    comps = [0.0, 0.0, 0.0]
+    comps[keep[0]], comps[keep[1]] = float(vec[keep[0]]), float(vec[keep[1]])
+    proj = _norm(Vector(comps))
+    if proj is None:
+        raise RuntimeError(
+            f"方向「{why}」投影到『只转 {key.upper()}』的平面上长度为零"
+            f"（目标和部位正好差在该轴上，比如空物体在正上方）——挪一下空物体或换 axis")
+    return proj, f"{why}｜只转{key.upper()}"
 
 
 # ---------------------------------------------------------------------------

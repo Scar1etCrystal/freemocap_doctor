@@ -1,0 +1,3 @@
+title records: [(14, {'title': '阅读 HANDOFF.md ，准备好接手我', 'messageSeqs': [9], 'source': {'kind': 'fallback'}}), (16, {'title': '阅读 HANDOFF.md 准备接手工作', 'messageSeqs': [9], 'source': {'kind': 'provider', 'provider': 'session-title-first-prompt-llm', 'model': {'provider': 'swe', 'model': 'swe-2-max'}}})]
+last 3 records: [(11421, 'assistant/attempt'), (11422, 'step/end'), (11423, 'turn/end')]
+total lines now: 11425

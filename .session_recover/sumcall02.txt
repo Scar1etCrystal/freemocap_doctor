@@ -1,0 +1,38 @@
+ng that makes the replacement user message established context. */
+const CHECKPOINT_PREAMBLE = "This is an automatically generated checkpoint condensing an earlier span of the conversation to free up context. Treat the captured context as established background and build on it without restating it. Continue the task directly from the messages that follow, without acknowledging this checkpoint.";
+/**
+* Run the default cache-reusing `ctx.llm.stream()` summarization call: replay
+* the conversation prefix, then append the compaction instruction as the final
+* user message so the provider's warm prefix cache is reused.
+* @param ctx - context providing the LLM service.
+* @param config - resolved backend configuration.
+* @param input - replayed conversation prefix (system, tools, and leading messages) to condense.
+* @param agent - supplies routed-model history, fallback model, and session id.
+* @param signal - optional cancellation forwarded to the adapter.
+* @returns safe text-only summary blocks and the exact call envelope and output.
+*/
+async function summarizeWithLlm(ctx, config, input, agent, signal) {
+	const latest = agent.session.requestHeader()?.config;
+	const configured = config.summarizationProvider.length === 0 ? void 0 : {
+		provider: config.summarizationProvider,
+		model: config.summarizationModel
+	};
+	const agentTarget = agent.options.provider !== void 0 && agent.options.provider.length > 0 && agent.options.model !== void 0 && agent.options.model.length > 0 ? {
+		provider: agent.options.provider,
+		model: agent.options.model
+	} : void 0;
+	const target = configured ?? latest ?? agentTarget;
+	if (target === void 0) throw new Error("no provider/model available for summarization: set both BasicCompactionConfig summarization fields, route one request, or set both AgentOptions fields");
+	const assembler = new BlockAssembler();
+	const messages = [...input.messages, deepFreeze({
+		role: "user",
+		content: [{
+			type: "text",
+			text: COMPACTION_INSTRUCTION
+		}]
+	})];
+	const options = {
+		provider: target.provider,
+		model: target.model,
+		messages,
+		toolHistory: a

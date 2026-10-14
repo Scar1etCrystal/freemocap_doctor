@@ -1,0 +1,74 @@
+... ides. */ | const POLICY_CONFIG_KEYS = [ | 	"thresholdRatio", | 	"headroomTokens", | 	"retainRatio", | 	"retainTokens", | 	"summarizationProvider", | 	"summarizationModel", | 	"maxTokens", | 	"compactionRetries", | 	"maxOverflowRetries" | ]; | /** Complete public top-level configuration key set. */ | const BASIC_COMPACT_CONFIG_KEYS = new Set([ | 	
+---
+... eof config.auto !== "boolean") throw new Error("BasicCompactionConfig: auto must be a boolean"); | 	const headroomTokens = config.headroomTokens ?? 65536; | 	const maxTokens = config.maxTokens ?? headroomTokens; | 	assertPositiveInteger("BasicCompactionConfig.maxTokens (explicit or from headroomTokens)", maxTokens); | 	const t
+---
+...  "boolean") throw new Error("BasicCompactionConfig: auto must be a boolean"); | 	const headroomTokens = config.headroomTokens ?? 65536; | 	const maxTokens = config.maxTokens ?? headroomTokens; | 	assertPositiveInteger("BasicCompactionConfig.maxTokens (explicit or from headroomTokens)", maxTokens); | 	const thresholdRatio = con
+---
+... ); | 	const headroomTokens = config.headroomTokens ?? 65536; | 	const maxTokens = config.maxTokens ?? headroomTokens; | 	assertPositiveInteger("BasicCompactionConfig.maxTokens (explicit or from headroomTokens)", maxTokens); | 	const thresholdRatio = config.thresholdRatio ?? DEFAULT_THRESHOLD_RATIO; | 	const retention = resolveRe
+---
+... ns ?? 65536; | 	const maxTokens = config.maxTokens ?? headroomTokens; | 	assertPositiveInteger("BasicCompactionConfig.maxTokens (explicit or from headroomTokens)", maxTokens); | 	const thresholdRatio = config.thresholdRatio ?? DEFAULT_THRESHOLD_RATIO; | 	const retention = resolveRetention(config, { retainRatio: DEFAULT_RETAIN_
+---
+... icCompactionConfig"); | 	const modelPolicies = resolveModelPolicies(config.modelPolicies); | 	for (const [index, policy] of modelPolicies.entries()) { | 		if (policy.maxTokens === void 0 && config.maxTokens === void 0 && policy.headroomTokens !== void 0) policy.maxTokens = policy.headroomTokens; | 		assertPositiveInteger(`Basi
+---
+... delPolicies = resolveModelPolicies(config.modelPolicies); | 	for (const [index, policy] of modelPolicies.entries()) { | 		if (policy.maxTokens === void 0 && config.maxTokens === void 0 && policy.headroomTokens !== void 0) policy.maxTokens = policy.headroomTokens; | 		assertPositiveInteger(`BasicCompactionConfig: modelPolicie
+---
+... onst [index, policy] of modelPolicies.entries()) { | 		if (policy.maxTokens === void 0 && config.maxTokens === void 0 && policy.headroomTokens !== void 0) policy.maxTokens = policy.headroomTokens; | 		assertPositiveInteger(`BasicCompactionConfig: modelPolicies[${index}].maxTokens (explicit or from headroomTokens)`, policy.
+---
+... = void 0 && policy.headroomTokens !== void 0) policy.maxTokens = policy.headroomTokens; | 		assertPositiveInteger(`BasicCompactionConfig: modelPolicies[${index}].maxTokens (explicit or from headroomTokens)`, policy.maxTokens ?? maxTokens); | 		validateRatioRetention(policy.thresholdRatio ?? thresholdRatio, resolveRetention
+---
+... maxTokens = policy.headroomTokens; | 		assertPositiveInteger(`BasicCompactionConfig: modelPolicies[${index}].maxTokens (explicit or from headroomTokens)`, policy.maxTokens ?? maxTokens); | 		validateRatioRetention(policy.thresholdRatio ?? thresholdRatio, resolveRetention(policy, retention), `BasicCompactionConfig: modelPol
+---
+... olicy.headroomTokens; | 		assertPositiveInteger(`BasicCompactionConfig: modelPolicies[${index}].maxTokens (explicit or from headroomTokens)`, policy.maxTokens ?? maxTokens); | 		validateRatioRetention(policy.thresholdRatio ?? thresholdRatio, resolveRetention(policy, retention), `BasicCompactionConfig: modelPolicies[${index
+---
+... dRatio, | 		headroomTokens, | 		...retention, | 		summarizationProvider: config.summarizationProvider ?? "", | 		summarizationModel: config.summarizationModel ?? "", | 		maxTokens, | 		compactionRetries: config.compactionRetries ?? 1, | 		maxOverflowRetries: config.maxOverflowRetries ?? 1, | 		modelPolicies, | 		auto: config.auto ?? tru
+---
+... onProvider: override?.summarizationProvider ?? config.summarizationProvider, | 		summarizationModel: override?.summarizationModel ?? config.summarizationModel, | 		maxTokens: override?.maxTokens ?? config.maxTokens, | 		compactionRetries: override?.compactionRetries ?? config.compactionRetries, | 		maxOverflowRetries: override
+---
+... .summarizationProvider ?? config.summarizationProvider, | 		summarizationModel: override?.summarizationModel ?? config.summarizationModel, | 		maxTokens: override?.maxTokens ?? config.maxTokens, | 		compactionRetries: override?.compactionRetries ?? config.compactionRetries, | 		maxOverflowRetries: override?.maxOverflowRetries 
+---
+... er ?? config.summarizationProvider, | 		summarizationModel: override?.summarizationModel ?? config.summarizationModel, | 		maxTokens: override?.maxTokens ?? config.maxTokens, | 		compactionRetries: override?.compactionRetries ?? config.compactionRetries, | 		maxOverflowRetries: override?.maxOverflowRetries ?? config.maxOverflo
+---
+... pletion tokens of its ${contextWindow}-token context window, leaving no message budget; configure the adapter model's contextWindow above the effective request maxTokens`); | 	const pressureBudgetTokens = messageBudgetTokens - policy.headroomTokens; | 	if (pressureBudgetTokens <= 0) throw new TargetPressureConfigError(targ
+---
+... tion tokens and ${policy.headroomTokens} headroom tokens of its ${contextWindow}-token context window, leaving no pressure budget; reduce the effective request maxTokens or compaction headroomTokens, or configure a larger adapter model contextWindow`); | 	const thresholdTokens = Math.floor(Math.min(contextWindow * policy
+---
+... cy.thresholdRatio, | 		thresholdTokens, | 		retainTokens, | 		summarizationProvider: policy.summarizationProvider, | 		summarizationModel: policy.summarizationModel, | 		maxTokens: policy.maxTokens, | 		compactionRetries: policy.compactionRetries, | 		maxOverflowRetries: policy.maxOverflowRetries | 	}); | } | /** Choose an explicit retent
+---
+...  | 		thresholdTokens, | 		retainTokens, | 		summarizationProvider: policy.summarizationProvider, | 		summarizationModel: policy.summarizationModel, | 		maxTokens: policy.maxTokens, | 		compactionRetries: policy.compactionRetries, | 		maxOverflowRetries: policy.maxOverflowRetries | 	}); | } | /** Choose an explicit retention form or inheri
+---
+... onfig.thresholdRatio; | 	const headroomTokens = config.headroomTokens; | 	const retainRatio = config.retainRatio; | 	const retainTokens = config.retainTokens; | 	const maxTokens = config.maxTokens; | 	const compactionRetries = config.compactionRetries; | 	const maxOverflowRetries = config.maxOverflowRetries; | 	if (thresholdRatio !=
+---
+... o; | 	const headroomTokens = config.headroomTokens; | 	const retainRatio = config.retainRatio; | 	const retainTokens = config.retainTokens; | 	const maxTokens = config.maxTokens; | 	const compactionRetries = config.compactionRetries; | 	const maxOverflowRetries = config.maxOverflowRetries; | 	if (thresholdRatio !== void 0) assertRat
+---
+... `, retainTokens); | 	if (retainRatio !== void 0 && retainTokens !== void 0) throw new Error(`${name}: retainRatio and retainTokens are mutually exclusive`); | 	if (maxTokens !== void 0) assertPositiveInteger(`${name}.maxTokens`, maxTokens); | 	if (compactionRetries !== void 0) assertNonNegativeInteger(`${name}.compactionRetr
+---
+... inTokens !== void 0) throw new Error(`${name}: retainRatio and retainTokens are mutually exclusive`); | 	if (maxTokens !== void 0) assertPositiveInteger(`${name}.maxTokens`, maxTokens); | 	if (compactionRetries !== void 0) assertNonNegativeInteger(`${name}.compactionRetries`, compactionRetries); | 	if (maxOverflowRetries !==
+---
+...  void 0) throw new Error(`${name}: retainRatio and retainTokens are mutually exclusive`); | 	if (maxTokens !== void 0) assertPositiveInteger(`${name}.maxTokens`, maxTokens); | 	if (compactionRetries !== void 0) assertNonNegativeInteger(`${name}.compactionRetries`, compactionRetries); | 	if (maxOverflowRetries !== void 0) ass
+---
+... rget.provider, | 		model: target.model, | 		messages, | 		toolHistory: agent.session.toolHistory(), | 		...input.tools === void 0 ? {} : { tools: [...input.tools] }, | 		maxTokens: config.maxTokens, | 		sessionId: agent.session.id, | 		purpose: "compaction", | 		...signal === void 0 ? {} : { signal } | 	}; | 	for await (const chunk of ctx
+---
+... odel: target.model, | 		messages, | 		toolHistory: agent.session.toolHistory(), | 		...input.tools === void 0 ? {} : { tools: [...input.tools] }, | 		maxTokens: config.maxTokens, | 		sessionId: agent.session.id, | 		purpose: "compaction", | 		...signal === void 0 ? {} : { signal } | 	}; | 	for await (const chunk of ctx.llm.stream(option
+---
+... marization produced no text summary content"); | 	return { | 		summary, | 		rawOutput, | 		llmStreamCall: true, | 		provider: options.provider, | 		model: options.model, | 		maxTokens: config.maxTokens, | 		...assembler.usage === void 0 ? {} : { usage: assembler.usage } | 	}; | } | /** | * Wrap raw summary blocks in the durable checkpoint fra
+---
+... d no text summary content"); | 	return { | 		summary, | 		rawOutput, | 		llmStreamCall: true, | 		provider: options.provider, | 		model: options.model, | 		maxTokens: config.maxTokens, | 		...assembler.usage === void 0 ? {} : { usage: assembler.usage } | 	}; | } | /** | * Wrap raw summary blocks in the durable checkpoint framing. | * @param sum
+---
+...  yielding. */ | function commitCompactionBody(session, startEvent, summarized) { | 	const { start, end, shadowedSeqs, shadowedTokenCount, summary, provider, model, maxTokens, usage, checkpointMessage } = summarized; | 	const callRecord = summarized.llmStreamCall === true ? { | 		rawOutput: summarized.rawOutput, | 		llmStreamCall
+---
+... ndId }, | 		summary, | 		...callRecord, | 		shadowedRange: { | 			start, | 			end | 		}, | 		shadowedSeqs: [...shadowedSeqs], | 		shadowedTokenCount, | 		provider, | 		model, | 		...maxTokens === void 0 ? {} : { maxTokens }, | 		...usage === void 0 ? {} : { usage } | 	}); | 	session.append("user/message", checkpointMessage, { | 		surfaceOp: { | 			op
+---
+... cord, | 		shadowedRange: { | 			start, | 			end | 		}, | 		shadowedSeqs: [...shadowedSeqs], | 		shadowedTokenCount, | 		provider, | 		model, | 		...maxTokens === void 0 ? {} : { maxTokens }, | 		...usage === void 0 ? {} : { usage } | 	}); | 	session.append("user/message", checkpointMessage, { | 		surfaceOp: { | 			op: "replace", | 			startSeq: star
+---
+...  omits one. No declared cap means no reservation. | */ | function reservedCompletionTokens(agent, defaultMaxTokens) { | 	return agent.session.requestHeader()?.config.maxTokens ?? defaultMaxTokens ?? 0; | } | /** Resolve the conversation target used to select an optional policy override. */ | function conversationTarget(agent) { | 	c
+---
+... ber(); | const retainTokensSchema = z.number().step(1).min(0); | const summarizationProviderSchema = z.string(); | const summarizationModelSchema = z.string(); | const maxTokensSchema = z.number().step(1).min(1); | const compactionRetriesSchema = z.number().step(1).min(0); | const maxOverflowRetriesSchema = z.number().step(1).min(
+---
+... tio: retainRatioSchema, | 	retainTokens: retainTokensSchema, | 	summarizationProvider: summarizationProviderSchema, | 	summarizationModel: summarizationModelSchema, | 	maxTokens: maxTokensSchema, | 	compactionRetries: compactionRetriesSchema, | 	maxOverflowRetries: maxOverflowRetriesSchema | }); | /** | * Dependency-light compaction bac
+---
+... RatioSchema, | 	retainTokens: retainTokensSchema, | 	summarizationProvider: summarizationProviderSchema, | 	summarizationModel: summarizationModelSchema, | 	maxTokens: maxTokensSchema, | 	compactionRetries: compactionRetriesSchema, | 	maxOverflowRetries: maxOverflowRetriesSchema | }); | /** | * Dependency-light compaction backend using 
+---
+...  retainRatioSchema, | 		retainTokens: retainTokensSchema, | 		summarizationProvider: summarizationProviderSchema, | 		summarizationModel: summarizationModelSchema, | 		maxTokens: maxTokensSchema, | 		compactionRetries: compactionRetriesSchema, | 		maxOverflowRetries: maxOverflowRetriesSchema, | 		modelPolicies: z.array(modelPolicy),
+---
+... oSchema, | 		retainTokens: retainTokensSchema, | 		summarizationProvider: summarizationProviderSchema, | 		summarizationModel: summarizationModelSchema, | 		maxTokens: maxTokensSchema, | 		compactionRetries: compactionRetriesSchema, | 		maxOverflowRetries: maxOverflowRetriesSchema, | 		modelPolicies: z.array(modelPolicy), | 		auto: z.
+---

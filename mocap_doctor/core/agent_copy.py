@@ -25,6 +25,10 @@ motion_copy 的数学（全在"可见姿态"上：先把源窗、目标窗都采
             只换算旋转（3×3）。各骨 R_des 先全部算好，换算互不依赖，所以
             结果与处理顺序无关（等价于 sort_parent_first 逐骨处理）。
             不继承旋转的 hinge 骨：P_new = Rest_parent。
+  world_abs 复制绝对骨架空间朝向：不镜像 R_des = R_src(τ)，镜像 R_des = S·R_src(τ)·S。
+             同一骨架内，两骨实际朝向相同；各自位置仍由骨骼层级决定，不复制世界位置。
+             与 world 的区别：不再带 Rest_s⁻¹·Rest_d（各骨保留自己的 rest 的转换）。
+             世界镜像需左右各乘 S，保证结果 det=+1，是旋转而不是反射矩阵。
   rot+loc   位置一律按局部通道复制（镜像 t' = Fᵀt；add 加 src(τ)−src(a)）。
 
 写入走 agent_pose.pose_deltas + write_pose（Euler 骨写 Euler 通道）。
@@ -41,15 +45,15 @@ import bpy
 from . import agent_ops, agent_pose as P
 
 _S = np.diag([-1.0, 1.0, 1.0])       # 骨架空间 X 反射（前方 −Y，镜像面 X=0）
-_SPACES = ("local", "world")
+_SPACES = ("local", "world", "world_abs")
 _CHANNELS = ("rot", "rot+loc")
 _MODES = ("replace", "add")
 # 基础设施可能塞进 args 的键（并发租约 / 归属）：不算拼写错误
 _INFRA_KEYS = frozenset({"agent_id", "owner", "lease", "lease_id",
                          "request_id", "expect_version"})
 _COPY_ARGS = ("bones|chain", "src_range", "dst_start|dst_range", "time_scale",
-              "mirror", "bone_map", "space", "channels", "mode", "strength",
-              "blend", "dry_run")
+              "repeat", "mirror", "bone_map", "space", "channels", "mode",
+              "strength", "blend", "dry_run")
 
 
 # ---------------------------------------------------------------------------
@@ -189,7 +193,20 @@ def _frame_map(armature: Any, s: str, d: str, mirror: bool) -> np.ndarray:
     return P.rest_rot(armature, s).T @ P.rest_rot(armature, d)
 
 
-def _solve_world(armature, pairs, smp_s, smp_d, parents, mirror, tau, a, mode):
+def _orientation_map(armature: Any, s: str, d: str, mirror: bool,
+                     space: str) -> np.ndarray:
+    """Frame mapping shared by writing and verification.
+
+    world keeps each target's rest frame. world_abs copies absolute armature
+    orientation; reflecting an orientation uses S @ R @ S (det +1), not S @ R.
+    """
+    if space == "world_abs":
+        return _S if mirror else np.eye(3)
+    return _frame_map(armature, s, d, mirror)
+
+
+def _solve_world(armature, pairs, smp_s, smp_d, parents, mirror, tau, a, mode,
+                 space="world"):
     """骨架空间目标朝向 → 目标骨局部旋转（见模块文档）。"""
     T = len(tau)
     members = {d for _s, d in pairs}
@@ -198,7 +215,7 @@ def _solve_world(armature, pairs, smp_s, smp_d, parents, mirror, tau, a, mode):
     for s, d in pairs:
         r_src = _rot3(smp_s["mat"][s])
         rt = _resample_rot(r_src, a, tau)
-        fm = _frame_map(armature, s, d, mirror)
+        fm = _orientation_map(armature, s, d, mirror, space)
         if mirror:
             m, m0 = _S @ rt @ fm, _S @ r_src[0] @ fm
         else:
@@ -236,6 +253,7 @@ def motion_copy(scene: Any, armature: Any, *, bones: Sequence[str] | None = None
                 dst_start: int | None = None,
                 dst_range: Sequence[int] | None = None,
                 time_scale: float | None = None,
+                repeat: bool = False,
                 frame_range: Sequence[int] | None = None,
                 mirror: bool = False,
                 bone_map: Mapping[str, str] | None = None,
@@ -268,11 +286,22 @@ def motion_copy(scene: Any, armature: Any, *, bones: Sequence[str] | None = None
         P.resolve_pose_bones(armature, list(bone_map.values()))
     pairs = _pairs(armature, src, mirror, bone_map)
     a, b, c, d, ts = _window(src_range, dst_start, dst_range, time_scale)
+    repeat = bool(repeat)
+    if repeat and time_scale is not None:
+        raise RuntimeError("repeat 与 time_scale 二选一：重复平铺不做线性缩放")
     blend = max(0, int(blend))
     strength = float(strength)
     dst = [dn for _s, dn in pairs]
-    tau = a + (np.arange(c, d + 1, dtype=np.float64) - c) * (b - a) / float(d - c)
-    world = space == "world"
+    if repeat:
+        # 把源段 [a,b] 按**原速**循环铺满 [c,d]。最后一轮铺不满就停在 d（截断），
+        # 窗口外一帧不写 → 后面仍是原动画。段内不加 taper：taper 会在每一轮接缝
+        # 处淡回原姿态、把循环打断（所以 repeat 建议 blend=0）。
+        seg = b - a + 1
+        tau = a + np.mod(np.arange(d - c + 1, dtype=np.float64), float(seg))
+        ts = 1.0
+    else:
+        tau = a + (np.arange(c, d + 1, dtype=np.float64) - c) * (b - a) / float(d - c)
+    world = space in ("world", "world_abs")
 
     # ---- 先采样（源窗 + 目标窗），后面才写 ----
     smp_s = P.sample_visible(scene, armature, src, list(range(a, b + 1)),
@@ -291,7 +320,7 @@ def motion_copy(scene: Any, armature: Any, *, bones: Sequence[str] | None = None
     anc_of: dict = {}
     if world:
         des_q, anc_of = _solve_world(armature, pairs, smp_s, smp_d, parents,
-                                     mirror, tau, a, mode)
+                                     mirror, tau, a, mode, space=space)
     else:
         for s, dn in pairs:
             q = smp_s["quat"][s]
@@ -333,6 +362,19 @@ def motion_copy(scene: Any, armature: Any, *, bones: Sequence[str] | None = None
     if hidden:
         notes.append(f"{hidden} 所在肢体是 IK 模式（IK_FK<0.5），FK 骨写了也看不见；"
                      "腿请复制 foot_ik.L/R（bones=['left_foot']）")
+    if space == "world_abs":
+        notes.append("world_abs 复制绝对朝向，不复制世界位置；不镜像跨侧必须给 bone_map。"
+                     "验收只看有效区 err_inner_deg，渐入/渐出保留原姿态，err_max 大不等于失败。"
+                     "转角大小本身不是失败判据，请检查实际骨轴方向和网格姿态。")
+    if repeat:
+        seg = b - a + 1
+        n_full, tail = divmod(d - c + 1, seg)
+        notes.append(
+            f"repeat：把源段 [{a},{b}]（{seg} 帧）按原速循环铺 [{c},{d}]"
+            f"＝{n_full} 整轮" + (f"＋{tail} 帧（最后一轮被截断）" if tail else "")
+            + "；窗口外一帧不写，后面仍是原动画。"
+            + ("blend>0 会在**每一轮接缝**处淡回原姿态、把循环打断——"
+               "要真正循环请用 blend=0。" if blend > 0 else ""))
     if world and strength != 1.0:
         notes.append("world 模式 strength≠1：子骨按父骨完全到位解算，结果是近似")
     metrics = {
@@ -350,13 +392,19 @@ def motion_copy(scene: Any, armature: Any, *, bones: Sequence[str] | None = None
         # a = 目标窗、b = 源窗：compare_motion 把 b 重采样到 a 的帧上，用的
         # 正是复制时的 τ 和 slerp → 时间缩放的复制也能精确验收；trim 也就
         # 按目标帧数掐掉 blend taper。（反过来放会二次插值，缩放时差 ~1°。）
+        # repeat：线性重采样表达不了取模映射，所以只验**第一轮**（[c, c+seg-1]
+        # 与源段等长 → 重采样退化成恒等，正是第一轮真正的映射）；后面几轮是同一轮
+        # 的复制品，由 e2e 逐帧比较各轮之间是否一致来兜。
         metrics["verify"] = {
             "tool": "compare_motion",
-            "args": {"a": {"bones": list(dst), "frame_range": [c, d]},
+            "args": {"a": {"bones": list(dst),
+                           "frame_range": [c, (c + (b - a)) if repeat else d]},
                      "b": {"bones": list(src), "frame_range": [a, b]},
                      "mirror": mirror, "space": space, "trim": blend},
             "pass": "err_inner_deg < 0.05",
         }
+        if repeat:
+            metrics["verify"]["first_tile_only"] = True
     if notes:
         metrics["notes"] = notes
 
@@ -370,7 +418,8 @@ def motion_copy(scene: Any, armature: Any, *, bones: Sequence[str] | None = None
         "frame_range": [c, d], "mirror": mirror,
         "bone_map": dict(bone_map) if bone_map else None,
         "space": space, "channels": channels, "mode": mode,
-        "strength": strength, "blend": blend, "_applied_window": [c, d],
+        "strength": strength, "blend": blend, "repeat": repeat,
+        "_applied_window": [c, d],
     }
     if dry_run:
         if "verify" in metrics:
@@ -419,6 +468,7 @@ def compare_motion(scene: Any, armature: Any, *, a_bones: Sequence[str],
     是二次插值，会有 ~1° 的假误差）——motion_copy 的 metrics.verify 就是这样给的。
     local：比较局部 basis（mirror：b vs mirror_local(a)）；
     world：比较骨架空间朝向（mirror：b vs S·R_a·F；不镜像 b vs R_a·Rest_a⁻¹·Rest_b）。
+    world_abs：直接比较实际朝向（不镜像 b vs R_a；镜像 b vs S·R_a·S）。
     err_inner = 掐掉两端各 trim 帧后的最大误差（复制有 blend taper，验收看它）。
     """
     space = _choice("space", space or "local", _SPACES)
@@ -443,7 +493,7 @@ def compare_motion(scene: Any, armature: Any, *, a_bones: Sequence[str],
     else:
         pairs = _pairs(armature, A, mirror, None)
     Bset = list(dict.fromkeys(bn for _x, bn in pairs))
-    world = space == "world"
+    world = space in ("world", "world_abs")
     na, nb = a1 - a0 + 1, b1 - b0 + 1
     tb = b0 + np.arange(na, dtype=np.float64) * (nb - 1) / float(na - 1)
     if _samples is not None:
@@ -460,7 +510,7 @@ def compare_motion(scene: Any, armature: Any, *, a_bones: Sequence[str],
     for x, y in pairs:
         if world:
             ra = _rot3(smp_a["mat"][x])
-            fm = _frame_map(armature, x, y, mirror)
+            fm = _orientation_map(armature, x, y, mirror, space)
             ea = (_S @ ra @ fm) if mirror else (ra @ fm)
             rb = _resample_rot(_rot3(smp_b["mat"][y]), b0, tb)
             err = P.qangle_deg(P.mat_to_quat(ea), P.mat_to_quat(rb))
@@ -707,7 +757,8 @@ def _reapply_motion_copy(armature, base_action, *, params, frame_range, status,
                       channels=p.get("channels", "rot"),
                       mode=p.get("mode", "replace"),
                       strength=float(p.get("strength", 1.0)),
-                      blend=int(p.get("blend", 4)), op_mode=status,
+                      blend=int(p.get("blend", 4)),
+                      repeat=bool(p.get("repeat")), op_mode=status,
                       data_dir=None, track_name=track_name, record=False)
     params.update(res["params"])              # 就地规范化（见 docstring）
     if isinstance(frame_range, list):

@@ -1,0 +1,143 @@
+# Your patch layer for this dsh profile, applied after every bundle layer:
+# a top-level YAML array of loader patch entries (id-targeted config
+# overrides, disables, and insert lists; `!!js` expressions allowed).
+- id: ui-chat
+  name: "@deepseek-ai/dsh-client-ui-chat"
+  config:
+    transcriptView: standard
+    performanceUsage: detailed
+- id: ui-settings
+  name: "@deepseek-ai/dsh-client-ui-settings"
+  config:
+    enabled: true
+- id: ui-settings-account
+  name: "@deepseek-ai/dsh-client-ui-settings-account"
+  config:
+    version: 1
+    step: done
+    usage: detailed
+    developerTools: true
+    purpose: null
+    process: standard
+    completion: api-key
+- id: agent-default-model
+  name: "@deepseek-ai/dsh-agent-default-model"
+  config:
+    provider: zai-coding-cn
+    model: glm-5.3
+    reasoningEffort: max
+- id: llm-pi-ai
+  name: "@deepseek-ai/dsh-llm-pi-ai"
+  config:
+    providers:
+      swe:
+        apiKeyEnv: SWE_API_KEY
+        api: openai-responses
+        baseURL: https://fast.xpeach.codes/v1
+        models:
+          - id: swe-2-max
+            name: swe-2-max
+            maxTokens: 100000000
+            input:
+              - text
+              - image
+      kimik3:
+        apiKeyEnv: KIMIK3_API_KEY
+        api: openai-completions
+        baseURL: https://fast.xpeach.codes/v1
+        reasoning: max
+        models:
+          - id: kimi-k3
+            name: kimi-k3
+            input:
+              - text
+              - image
+            contextWindow: 780000
+            reasoningEfforts:
+              low: low
+              high: high
+              max: max
+      zai-coding-cn:
+        models:
+          - id: glm-5.3
+            name: GLM-5.3
+            contextWindow: 1000000
+            maxTokens: 131072
+            input:
+              - text
+          - id: glm-5.3-flash
+            name: GLM-5.3-Flash
+            contextWindow: 1000000
+            maxTokens: 131072
+            input:
+              - text
+              - image
+          - id: glm-5.3-highspeed
+            name: GLM-5.3 Highspeed
+            contextWindow: 1000000
+            maxTokens: 131072
+            input:
+              - text
+        apiKeyEnv: ZAI_CODING_CN_API_KEY
+      gpt2:
+        apiKeyEnv: GPT2_API_KEY
+        api: openai-responses
+        baseURL: https://fast.xpeach.codes/v1
+        # Route-wide default thinking strength. The Harness sets a default
+        # effort per route, not per model, so every model below declares this
+        # level (and the rest of the set) to stay dispatchable: an undeclared
+        # level is unsupported, and the route default would then be refused
+        # for that model instead of merely ignored.
+        reasoning: high
+        models:
+          # Shared level set for every model on this route, measured against
+          # this gateway: off/low/medium/high/xhigh/max answer 200, "minimal"
+          # fails with 500, so "minimal" stays undeclared (unsupported).
+          - id: codex-auto-review
+            name: codex-auto-review
+            reasoningEfforts: { off: none, low: low, medium: medium, high: high, xhigh: xhigh, max: max }
+          - id: gpt-5.6-sol
+            name: gpt-5.6-sol
+            contextWindow: 1000000
+            input:
+              - text
+              - image
+            reasoningEfforts: { off: none, low: low, medium: medium, high: high, xhigh: xhigh, max: max }
+          - id: gpt-6-astra
+            name: gpt-6-astra
+            contextWindow: 1000000
+            maxTokens: 256000
+            input:
+              - text
+              - image
+            reasoningEfforts: { off: none, low: low, medium: medium, high: high, xhigh: xhigh, max: max }
+          - id: gpt-6-sol
+            name: gpt-6-sol
+            reasoningEfforts: { off: none, low: low, medium: medium, high: high, xhigh: xhigh, max: max }
+          - id: gpt-6.1-sol
+            name: gpt-6.1-sol
+            contextWindow: 1000000
+            maxTokens: 256000
+            input:
+              - text
+              - image
+            reasoningEfforts: { off: none, low: low, medium: medium, high: high, xhigh: xhigh, max: max }
+          - id: deepseek-flash
+            name: deepseek-flash
+            contextWindow: 1000000
+            input:
+              - text
+              - image
+            maxTokens: 256000
+            reasoningEfforts: { off: none, low: low, medium: medium, high: high, xhigh: xhigh, max: max }
+- id: subagent-model-selection-settings
+  name: "@deepseek-ai/dsh-tool-subagent/model-selection-settings"
+  config:
+    enabled: true
+    allowedModels:
+      - provider: deepseek-official
+        model: deepseek-flash
+      - provider: swe
+        model: swe-2-max
+      - provider: zai-coding-cn
+        model: glm-5.3-flash

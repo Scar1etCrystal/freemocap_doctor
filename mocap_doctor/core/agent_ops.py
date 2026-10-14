@@ -1092,6 +1092,54 @@ def _unit_delta(action: Any, curves: list, sig: str) -> tuple[list, bool]:
     return current, recoverable
 
 
+_EULER_ORDERS = ("XYZ", "XZY", "YXZ", "YZX", "ZXY", "ZYX")
+_EULER_ORDER_CACHE: dict = {}
+# delta 转角超过这个值，力度缩放就不安全了（R^t 在 π 处不连续）——170° 留 10° 余量
+_EXP_NEAR_PI = 170.0 * 3.141592653589793 / 180.0
+
+
+def _euler_order_for(data_path: str) -> str:
+    """这根骨的 Euler 旋转顺序。通道本身不存顺序，只能从骨的 rotation_mode 拿；
+    取不到退回 'XYZ'（本 rig 的 Euler 骨都是 XYZ，且同 order 往返自洽）。"""
+    import re as _re
+    m = _re.search(r'pose\.bones\["([^"]+)"\]', str(data_path))
+    if not m:
+        return "XYZ"
+    name = m.group(1)
+    if name in _EULER_ORDER_CACHE:
+        return _EULER_ORDER_CACHE[name]
+    order = "XYZ"
+    for ob in bpy.data.objects:
+        if getattr(ob, "type", None) != "ARMATURE":
+            continue
+        pose = getattr(ob, "pose", None)
+        bone = pose.bones.get(name) if pose is not None else None
+        if bone is not None:
+            mode = str(getattr(bone, "rotation_mode", "XYZ"))
+            if mode in _EULER_ORDERS:
+                order = mode
+            break
+    _EULER_ORDER_CACHE[name] = order
+    return order
+
+
+def _scale_euler_delta(unit_xyz, exponent: float, order: str = "XYZ"):
+    """Euler 增量按**旋转**缩放：Euler → 四元数 → 轴角 × exponent → 回到 Euler。
+
+    逐分量乘 exponent 不是合法的部分旋转：delta 大时（实测 179.41°）乘 0.137 会落进
+    近 Euler 奇异的构型，逐帧乱摆并冒出手腕 57/55 mm 的位置尖峰（2026-10-06）。
+    euler_compat 传原值，保证结果留在原来的分支上（不跳 ±180°）。
+    """
+    from mathutils import Euler as _E, Quaternion as _Q
+    base = _E((float(unit_xyz[0]), float(unit_xyz[1]), float(unit_xyz[2])), order)
+    q = base.to_quaternion()
+    if abs(q.w) >= 1.0 - 1e-12:            # 单位四元数：没有旋转可缩
+        return (base.x, base.y, base.z)
+    axis, ang = q.to_axis_angle()
+    out = _Q(axis, ang * float(exponent)).to_euler(order, base)
+    return (out.x, out.y, out.z)
+
+
 def set_strip_exponent(strip: Any, exponent: float) -> dict:
     """力度旋钮：把 strip delta 写成 delta^exponent（>1 = 超量修正，0 = 静音）。
 
@@ -1149,13 +1197,56 @@ def set_strip_exponent(strip: Any, exponent: float) -> dict:
         for i in cols:
             curves[i].update()      # 重算贝塞尔手柄，保持原插值类型
         touched += 1
+    # 标量通道（位置等）：线性缩放本来就正确。
+    # Euler 旋转通道**不能**逐分量线性缩放——那不是合法的部分旋转。2026-10-06：
+    # 一条 motion_copy 的 forearm_fk.L delta 达 179.41°，力度拖到 0.137 后落进近
+    # Euler 奇异的构型，逐帧 ±20° 乱摆、手腕两帧冒出 57/55 mm 尖峰。改成和四元数
+    # 分支一样在旋转空间缩放（轴角 × exponent），再用原值当 euler_compat 保证连续。
+    from mathutils import Euler as _MEuler
+    by_euler: dict = {}
     for i, fc in enumerate(curves):
-        if str(fc.data_path).endswith(".rotation_quaternion"):
+        path = str(fc.data_path)
+        if path.endswith(".rotation_quaternion"):
+            continue
+        if path.endswith(".rotation_euler"):
+            by_euler.setdefault(path, {})[fc.array_index] = i
             continue
         for k, kp in enumerate(fc.keyframe_points):
             kp.co = (kp.co[0], units[i][k] * exponent)
         fc.update()
         scalar_touched += 1
+    angle_warns: list = []
+    for path, comp in by_euler.items():
+        if len(comp) != 3:
+            continue
+        cols = [comp[c] for c in range(3)]
+        if exponent == 1.0:                # 恒等：原样写回，避免往返浮点误差
+            touched += 1
+            continue
+        order = _euler_order_for(path)
+        nkeys = len(curves[cols[0]].keyframe_points)
+        # 护栏：R^t 在转角 π 处不连续（+179.9° 与 −179.9° 作为旋转只差 0.2°，
+        # 但各自按角度缩放会得到 ±24.7°、相差 49°）。凡 delta 接近 180°，任何
+        # "按角度缩放"的实现都会把逐帧小抖动放大成乱摆——报警，别静默毁动画。
+        big = max(abs(_MEuler((units[cols[0]][k], units[cols[1]][k],
+                               units[cols[2]][k]), order).to_quaternion().angle)
+                  for k in range(nkeys)) if nkeys else 0.0
+        if big > _EXP_NEAR_PI:
+            angle_warns.append(round(float(np.degrees(big)), 1))
+        new = [_scale_euler_delta([units[j][k] for j in cols], exponent, order)
+               for k in range(nkeys)]
+        for c, i in enumerate(cols):
+            fc = curves[i]
+            for k, kp in enumerate(fc.keyframe_points):
+                kp.co = (kp.co[0], float(new[k][c]))
+            fc.update()
+        touched += 1
+    if angle_warns:
+        extra = (f"力度缩放在 {len(angle_warns)} 根 Euler 骨上不安全：delta 转角最大 "
+                 f"{max(angle_warns)}°（接近 180°）。R^t 在 π 处不连续——逐帧的小抖动会被"
+                 f"放大成乱摆（2026-10-06 实测：179.41° 的 delta ×0.137 让手腕冒出 57/55 mm"
+                 f"尖峰）。建议保持力度 1.0，或让写入方给出不翻面的 delta。")
+        warning = f"{warning} {extra}" if warning else extra
 
     action["applied_exp"] = exponent
     if action.get(EXP_MUTED_KEY):          # 只解开力度 0 自己静音的 strip

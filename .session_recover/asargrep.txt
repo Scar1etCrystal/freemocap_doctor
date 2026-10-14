@@ -1,0 +1,5 @@
+size 121348951
+b'system/message' occurrences 209 [14388027, 14395125, 14401088, 14410593, 14417196]
+b'cannot carry surfaceOp' occurrences 4 [16066654, 56102747, 57353659, 57532892]
+first user/message at 14301434
+b'### Design concept\n\nThe plugin is built on one principle: workspace instructions are durable conversation content, owned per agent and per session. Baseline and refresh messages are ordinary sourced `user/message` events, so they replay, compact, and resume exactly like other history, and model-visible state is always reconstructable from the session log. The plugin owns the complete `<system-remi'
